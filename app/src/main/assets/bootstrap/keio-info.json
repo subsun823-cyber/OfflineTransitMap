@@ -1,0 +1,22 @@
+{
+  "stations": 76,
+  "stationGroups": 69,
+  "railways": 7,
+  "receivedTrains": 1000,
+  "importedTrains": 834,
+  "specialCalendarTrainsExcluded": 166,
+  "receivedFares": 1000,
+  "calendarStart": "2025-03-15",
+  "calendarEnd": "2027-12-31",
+  "sourceTimetableDate": "2026-07-03T14:00:00+09:00",
+  "note": "京王は部分データです（通常日 834便、競馬開催日 166便は日程未提供のため対象外）。高尾線・相模原線等の時刻表と一部運賃が未収録です。適用終了日の記載はありません。祝日対応は2027年まで。年末年始の特別ダイヤ・直通便の接続は未対応です。",
+  "sources": {
+    "33908a8c-73e8-4196-afd6-bd9f0dc94fef-odptRailway_1_.json": "ac711f019fcd731305472773738861604cfacab06ae6e1ee3684106d08eb01a5",
+    "aa41f5b4-61fd-4e20-a398-436e27b48c8a-odptStation_1_.json": "165f804435f1704f15de52c996ea6faedc85b526dd66e9c4639995c49b08f830",
+    "666d1bc7-c2af-435d-a9cb-806c7db0d9af-odptTrainTimetable_keio_.json": "9a477ce0a329d612c58c6df13c7a42b99f76ea82e47ee22dad421019f75666e8",
+    "53356375-d373-4612-a9ab-807b37ec14b5-odptRailwayFare.json": "2d4521f20bd893d7ef92348643c4d9fb9df9356b4e200b551f3679d6cf3b6a63",
+    "offlinetransitmap-holidays.csv": "cec37a743c96995cdb9cb52b685c9003634682a9b0e1a640a6b9b96881fe964a"
+  },
+  "sha256": "bc8a7f91f08cb059938f2e7dc74110fb1c6d224d8e2dd30eb18bb1b949236201",
+  "size": 3276800
+}

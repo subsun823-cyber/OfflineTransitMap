@@ -271,7 +271,7 @@ fun RouteSearchScreen(
                 )
             } else if (all.isEmpty()) {
                 Text(
-                    "経路が見つかりませんでした。\n(バスとJR東日本の首都圏の路線を対象に、徒歩300m以内の乗換・出発から6時間以内で検索しています。時刻や日付を変えると見つかることがあります)",
+                    "経路が見つかりませんでした。\n(保存された時刻表の範囲で、徒歩300m以内の乗換・出発から6時間以内で検索しています。時刻や日付を変えると見つかることがあります)",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(8.dp)
                 )
