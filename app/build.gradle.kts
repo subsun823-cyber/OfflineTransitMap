@@ -15,8 +15,8 @@ android {
         applicationId = "com.example.offlinetransitmap"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -37,7 +37,9 @@ android {
     }
 }
 
-dependencies {implementation("org.maplibre.gl:android-sdk:13.4.1")
+dependencies {
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
+    implementation("org.maplibre.gl:android-sdk:13.4.1")
     implementation("androidx.compose.material:material-icons-core")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)

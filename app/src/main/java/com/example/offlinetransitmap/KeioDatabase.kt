@@ -29,6 +29,13 @@ internal object KeioDatabase {
         }
     }
 
+    fun feedEnd(db: SQLiteDatabase, prefix: String): Int {
+        val names=mutableSetOf<String>()
+        db.rawQuery("PRAGMA table_info(feeds)",null).use { c -> while(c.moveToNext()) names.add(c.getString(1)) }
+        val key=if("prefix" in names) "prefix" else "feed_id"
+        return db.rawQuery("SELECT COALESCE(MAX(end_date),0) FROM feeds WHERE $key=?",arrayOf(prefix)).use { c -> c.moveToFirst();c.getInt(0) }
+    }
+
     fun version(file: File, versionKey: String = "keio.version"): String? = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
         val exists = db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_data'", null).use { it.moveToFirst() }
         if (!exists) null else db.rawQuery("SELECT value FROM app_data WHERE key=?", arrayOf(versionKey)).use { if (it.moveToFirst()) it.getString(0) else null }
@@ -48,7 +55,7 @@ internal object KeioDatabase {
 
     // 呼び出し元が既存DBのコピーを渡す。ライブのDBを書き換えない。
     fun merge(target: File, seed: File, version: String, prefix: String = PREFIX, versionKey: String = "keio.version") {
-        require(prefix == PREFIX || prefix == BUS_PREFIX)
+        require(prefix == PREFIX || prefix == BUS_PREFIX || prefix == "NT_")
         SQLiteDatabase.openDatabase(target.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
             db.execSQL("ATTACH DATABASE ? AS keio", arrayOf(seed.path))
             try {
@@ -98,7 +105,7 @@ internal object KeioDatabase {
                             val values = ContentValues().apply {
                                 put(feedKey, feeds.getString(0))
                                 put("start_date", feeds.getInt(1)); put("end_date", feeds.getInt(2))
-                                if ("name" in feedColumns) put("name", "京王バス")
+                                if ("name" in feedColumns) put("name", if (prefix == "NT_") "西東京バス等" else "京王バス")
                             }
                             check(db.insertWithOnConflict("feeds", null, values, SQLiteDatabase.CONFLICT_REPLACE) != -1L)
                         }

@@ -1,0 +1,12 @@
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE feeds (feed_id TEXT PRIMARY KEY, start_date INTEGER, end_date INTEGER);
+CREATE TABLE stations (station_id TEXT PRIMARY KEY, name TEXT, lat REAL, lon REAL, kana TEXT, grp TEXT, kind TEXT);
+CREATE TABLE stops (stop_id TEXT PRIMARY KEY, station_id TEXT, name TEXT, platform TEXT, zone TEXT);
+CREATE TABLE routes (route_id TEXT PRIMARY KEY, operator TEXT, name TEXT, long_name TEXT, color INTEGER, route_type INTEGER);
+CREATE TABLE trips (trip_no INTEGER PRIMARY KEY, trip_id TEXT UNIQUE, route_id TEXT, service_id TEXT, headsign TEXT, train_type TEXT);
+CREATE TABLE stop_times (trip INTEGER, seq INTEGER, stop_id TEXT, station_id TEXT, arr_sec INTEGER, dep_sec INTEGER, headsign TEXT, can_board INTEGER, can_alight INTEGER);
+CREATE TABLE calendar (service_id TEXT PRIMARY KEY, start_date INTEGER, end_date INTEGER, mon INTEGER, tue INTEGER, wed INTEGER, thu INTEGER, fri INTEGER, sat INTEGER, sun INTEGER);
+CREATE TABLE calendar_dates (service_id TEXT, date INTEGER, exception_type INTEGER);
+CREATE TABLE fares (route_id TEXT, from_zone TEXT, to_zone TEXT, price INTEGER);
+CREATE TABLE station_operators (station_id TEXT, operator TEXT, PRIMARY KEY (station_id, operator));
+CREATE TABLE app_data (key TEXT PRIMARY KEY, value TEXT);

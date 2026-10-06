@@ -91,7 +91,7 @@ internal object OfflineDataSetup {
             for ((assetName, prefix) in listOf("keio" to "ODPT_KEIO:", "keio-bus" to KeioDatabase.BUS_PREFIX)) {
                 val info = JSONObject(context.assets.open("bootstrap/$assetName-info.json").bufferedReader().use { it.readText() })
                 val version = info.getString("sha256")
-                if (!target.exists() || target.length() == 0L || KeioDatabase.version(target, "$assetName.version") != version) {
+                if (!target.exists() || target.length() == 0L || (KeioDatabase.version(target, "$assetName.version") != version && KeioDatabase.version(target, "update.$assetName") == null)) {
                     // 未チェックポイントのDBをファイルコピーすると内容を失うため停止する。
                     checkNoWal(target)
                     val seedName = File(dbDir, "$assetName-seed.db")
@@ -112,6 +112,26 @@ internal object OfflineDataSetup {
                     }
                 }
                 warnings.add(info.getString("note"))
+            }
+            progress("取得済みの時刻表更新を確認中…")
+            warnings.addAll(BusUpdates.applyPending(context, target))
+            // Show the active feed note, not an older note baked into the APK.
+            android.database.sqlite.SQLiteDatabase.openDatabase(target.path,null,android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery("SELECT key,value FROM app_data WHERE key IN ('ntbus.note','keio-bus.note')",null).use { c ->
+                    while(c.moveToNext()) {
+                        if(c.getString(0)=="keio-bus.note") warnings.removeAll { it.startsWith("京王バスの有効期間:") }
+                        warnings.add(c.getString(1))
+                    }
+                }
+                for(feed in BusUpdates.feeds(context)) {
+                    db.rawQuery("SELECT value FROM app_data WHERE key=?",arrayOf("update.${feed.id}")).use { c ->
+                        val edit=BusUpdates.storage(context).edit()
+                        if(c.moveToFirst()) edit.putString("${feed.id}.appliedHash",c.getString(0))
+                        else edit.remove("${feed.id}.appliedHash").remove("${feed.id}.etag").remove("${feed.id}.modified")
+                        edit.apply()
+                    }
+                    BusUpdates.storage(context).edit().putInt("${feed.id}.end",KeioDatabase.feedEnd(db,feed.prefix)).apply()
+                }
             }
             val map = targets.getValue("map")
             if (map.isFile) validateMap(map) else warnings.add("地図データが未準備です。配布元が設定されるまで、背景地図なしで駅を表示します。")

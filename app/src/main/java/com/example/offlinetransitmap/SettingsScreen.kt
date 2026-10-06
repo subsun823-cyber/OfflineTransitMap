@@ -109,6 +109,7 @@ fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Un
                     }
                 }
             }
+            item { SettingsGroup("時刻表の更新") { BusUpdateSettings() } }
             item { Spacer(Modifier.height(16.dp)) }
         }
     }

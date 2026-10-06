@@ -64,6 +64,7 @@ import java.time.LocalDateTime
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        BusUpdates.schedule(applicationContext)
         setContent {
             val settings = remember {
                 AppSettings(applicationContext.getSharedPreferences("app_settings", Context.MODE_PRIVATE))
