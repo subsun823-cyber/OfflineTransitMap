@@ -14,6 +14,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +47,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
+import com.example.offlinetransitmap.ui.theme.OfflineTransitMapTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -53,8 +62,21 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                MapScreen()
+            val settings = remember {
+                AppSettings(applicationContext.getSharedPreferences("app_settings", Context.MODE_PRIVATE))
+            }
+            val dark = settings.value.theme.isDark(isSystemInDarkTheme())
+            OfflineTransitMapTheme(darkTheme = dark) {
+                val surface = MaterialTheme.colorScheme.surface.toArgb()
+                SideEffect {
+                    window.statusBarColor = surface
+                    window.navigationBarColor = surface
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !dark
+                        isAppearanceLightNavigationBars = !dark
+                    }
+                }
+                MapScreen(settings, dark)
             }
         }
     }
@@ -102,8 +124,10 @@ private fun MyLocationIcon(color: Color, modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MapScreen() {
+fun MapScreen(settings: AppSettings, darkTheme: Boolean) {
     val context = LocalContext.current
+    val preferences = settings.value
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     // 時刻表DB。無ければ null(従来どおりサンプル表示)
     val timetable = remember { TimetableDb.open(context) }
     val stationsGeoJson = remember { timetable?.stationsGeoJson() ?: demoStationsGeoJson() }
@@ -123,6 +147,12 @@ fun MapScreen() {
     // ナビ中の経路・案内・地図の向き
     val navItin = if (NavigationState.active) NavigationState.itinerary else null
     val navMode = navItin != null
+    val view = LocalView.current
+    DisposableEffect(view, navMode, preferences.keepScreenOnDuringNavigation) {
+        val previous = view.keepScreenOn
+        view.keepScreenOn = navMode && preferences.keepScreenOnDuringNavigation
+        onDispose { view.keepScreenOn = previous }
+    }
     val overlayItin = navItin ?: selectedItinerary
     val routeOverlay = remember(overlayItin) { overlayItin?.toOverlay() }
     val navLine = if (navMode) navLineGeoJson(NavigationState.location, NavigationState.guidance) else null
@@ -133,10 +163,12 @@ fun MapScreen() {
     var recenterRequest by remember { mutableIntStateOf(0) }
 
     // 経路の詳細パネルで「戻る」操作をしたら、検索結果の画面に戻る
-    BackHandler(enabled = selectedItinerary != null && !navMode) {
+    BackHandler(enabled = selectedItinerary != null && !navMode && !showSettings) {
         selectedItinerary = null
         showSearch = true
     }
+
+    BackHandler(enabled = showSettings) { showSettings = false }
 
     // 位置情報の許可(正確・おおよそのどちらかが許可されていれば true)
     var hasLocationPermission by remember {
@@ -197,12 +229,20 @@ fun MapScreen() {
 
     Scaffold(
         topBar = {
-            if (!navMode) {
-                CenterAlignedTopAppBar(title = { Text("オフライン乗換マップ") })
+            if (showSettings) {
+                CenterAlignedTopAppBar(
+                    title = { Text("設定") },
+                    navigationIcon = { TextButton(onClick = { showSettings = false }) { Text("戻る") } }
+                )
+            } else if (!navMode) {
+                CenterAlignedTopAppBar(
+                    title = { Text("オフライン乗換マップ") },
+                    actions = { TextButton(onClick = { showSettings = true }) { Text("設定") } }
+                )
             }
         },
         floatingActionButton = {
-            if (!showSearch && selectedItinerary == null && !navMode) {
+            if (!showSettings && !showSearch && selectedItinerary == null && !navMode) {
                 Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -248,6 +288,8 @@ fun MapScreen() {
             MapLibreMapView(
                 modifier = Modifier.fillMaxSize(),
                 stationsGeoJson = stationsGeoJson,
+                preferences = preferences,
+                darkTheme = darkTheme,
                 stationMinZoom = if (timetable != null) 12.0 else 0.0,
                 locationGranted = hasLocationPermission,
                 recenterRequest = recenterRequest,
@@ -258,7 +300,7 @@ fun MapScreen() {
                 onBearingChange = { mapBearing = it },
                 onStationClick = { id, name -> selectedStation = SelectedStation(id, name) }
             )
-            if (showSearch && searcher != null && !navMode) {
+            if (showSearch && searcher != null && !navMode && !showSettings) {
                 RouteSearchScreen(
                     state = searchState,
                     searcher = searcher,
@@ -271,7 +313,7 @@ fun MapScreen() {
                 )
             }
             selectedItinerary?.let { itin ->
-                if (!navMode) {
+                if (!navMode && !showSettings) {
                     RouteDetailPanel(
                         itin = itin,
                         onBackToResults = {
@@ -286,7 +328,7 @@ fun MapScreen() {
                     )
                 }
             }
-            if (navMode) {
+            if (navMode && !showSettings) {
                 NavigationOverlay(
                     guidance = NavigationState.guidance,
                     location = NavigationState.location,
@@ -295,6 +337,9 @@ fun MapScreen() {
                     onRecenter = { recenterRequest++ },
                     onStop = { NavigationController.stop(context) }
                 )
+            }
+            if (showSettings) {
+                SettingsScreen(preferences = preferences, onChange = settings::update)
             }
         }
     }

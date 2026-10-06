@@ -116,6 +116,8 @@ private fun enableLocationMarker(context: Context, map: MapLibreMap, style: Styl
 fun MapLibreMapView(
     modifier: Modifier = Modifier,
     stationsGeoJson: String,
+    preferences: AppPreferences = AppPreferences(),
+    darkTheme: Boolean = false,
     stationMinZoom: Double = 0.0,
     locationGranted: Boolean = false,
     recenterRequest: Int = 0,
@@ -172,6 +174,11 @@ fun MapLibreMapView(
                 }
             }
         }
+    }
+
+    val appearance = remember(loadedStyle) { loadedStyle?.let { MapAppearance(it) } }
+    LaunchedEffect(appearance, darkTheme, preferences.showPoiNames, preferences.showPoiIcons) {
+        appearance?.apply(darkTheme, preferences)
     }
 
     // 位置情報が許可され、地図のスタイルも読み込まれたら、現在地マークを出して現在地へ寄る
