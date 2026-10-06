@@ -47,7 +47,7 @@ private fun offlineStyleJson(
 ): String = """
 {
   "version": 8,
-  "glyphs": "asset://fonts/{fontstack}/{range}.pbf",
+  "glyphs": "asset://{fontstack}/{range}.pbf",
   "sources": {
     "protomaps": { "type": "vector", "url": "pmtiles://file://PMTILES_PATH", "attribution": "© OpenStreetMap contributors" },
     "stations": { "type": "geojson", "data": STATIONS_DATA },
