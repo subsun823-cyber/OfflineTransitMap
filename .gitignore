@@ -20,3 +20,4 @@ Thumbs.db
 /app/src/main/assets/bootstrap/timetable.db
 /app/src/main/assets/bootstrap/tokyo.pmtiles
 __pycache__/
+/app/src/main/assets/bootstrap/keio-bus.bundle

@@ -1,3 +1,5 @@
+import groovy.json.JsonSlurper
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -13,8 +15,8 @@ android {
         applicationId = "com.example.offlinetransitmap"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -53,3 +55,28 @@ dependencies {implementation("org.maplibre.gl:android-sdk:13.4.1")
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+
+// Large assets are deliberately kept outside Git. Fail before producing an APK
+// that would get stuck at first-run preparation on a clean checkout.
+val verifyOfflineAssets = tasks.register("verifyOfflineAssets") {
+    val assetRoot = layout.projectDirectory.dir("src/main/assets")
+    inputs.dir(assetRoot.dir("bootstrap"))
+    doLast {
+        val root = assetRoot.asFile
+        val config = JsonSlurper().parse(root.resolve("bootstrap/data-files.json")) as Map<*, *>
+        val required = mutableListOf("bootstrap/keio.bundle", "bootstrap/keio-bus.bundle",
+            "bootstrap/keio-info.json", "bootstrap/keio-bus-info.json")
+        for (entry in config["files"] as List<*>) {
+            val spec = entry as Map<*, *>
+            val asset = spec["asset"] as? String ?: continue
+            required.add(asset)
+            check(root.resolve(asset).length() == (spec["size"] as Number).toLong()) {
+                "Offline asset missing/wrong size: $asset. Follow docs/DATA_DISTRIBUTION.md."
+            }
+        }
+        for (asset in required) check(root.resolve(asset).isFile) {
+            "Offline asset missing: $asset. Follow docs/DATA_DISTRIBUTION.md."
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(verifyOfflineAssets) }

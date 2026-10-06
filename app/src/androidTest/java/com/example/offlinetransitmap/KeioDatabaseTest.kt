@@ -57,14 +57,20 @@ class KeioDatabaseTest {
             val first = OfflineDataSetup.prepare(wrapper) {}
             val file = File(directory,"timetable/timetable.db")
             assertTrue(file.isFile)
-            assertTrue(KeioDatabase.isBootstrapOnly(file))
+            assertFalse(KeioDatabase.isBootstrapOnly(file))
+            assertTrue(File(directory,"maps/tokyo.pmtiles").isFile)
+            assertNotNull(KeioDatabase.version(file, "keio-bus.version"))
             val version = KeioDatabase.version(file)
             val modified = file.lastModified()
             val second = OfflineDataSetup.prepare(wrapper) {}
             assertEquals(first,second)
             assertEquals(version,KeioDatabase.version(file))
             assertEquals(modified,file.lastModified())
-            assertTrue(first.any { it.contains("地図データが未準備") })
+            assertFalse(first.any { it.contains("地図データが未準備") })
+            SQLiteDatabase.openDatabase(file.path,null,SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery("SELECT COUNT(*) FROM trips", null).use { it.moveToFirst(); assertEquals(60866,it.getInt(0)) }
+                db.rawQuery("SELECT COUNT(*) FROM routes WHERE operator='京王バス'", null).use { it.moveToFirst(); assertEquals(254,it.getInt(0)) }
+            }
         } finally { directory.deleteRecursively() }
     }
 }

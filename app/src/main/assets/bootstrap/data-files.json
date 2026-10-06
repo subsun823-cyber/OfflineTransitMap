@@ -1,3 +1,16 @@
 {
-  "files": []
+  "files": [
+    {
+      "id": "timetable",
+      "size": 50499584,
+      "sha256": "3868270281d72407073b99f647373d201001bad6793edfc932f440b151562e3e",
+      "asset": "bootstrap/timetable.db"
+    },
+    {
+      "id": "map",
+      "size": 172501520,
+      "sha256": "ed298316220ba857db3cf64cb8577f2bb0449ffeefb47f97fbad880aaecb20a3",
+      "asset": "bootstrap/tokyo.pmtiles"
+    }
+  ]
 }
