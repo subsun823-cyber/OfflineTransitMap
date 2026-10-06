@@ -33,6 +33,7 @@ import java.io.File
 
 // 起動時に現在地へ寄る倍率(大きいほど拡大)
 private const val START_ZOOM = 13.0
+private const val BUS_MIN_ZOOM = 13.0
 
 // tokyo.pmtiles が対応している範囲。範囲外では地図が空白になるため、現在地へは移動しない
 private const val MAP_WEST = 138.94
@@ -86,7 +87,7 @@ private fun offlineStyleJson(
     {"id": "pois-dot", "type": "circle", "source": "protomaps", "source-layer": "pois", "minzoom": 15, "filter": ["all", ["==", "${'$'}type", "Point"], ["has", "name"], ["all", ["!in", "kind", "bus_stop", "bus_station"], ["!in", "pmap:kind", "bus_stop", "bus_station"]]], "paint": {"circle-radius": 3.5, "circle-color": "#1a73e8", "circle-stroke-color": "#ffffff", "circle-stroke-width": 1}},
     {"id": "pois-name", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 15.5, "filter": ["all", ["==", ["geometry-type"], "Point"], ["has", "name"], ["!=", ["get", "kind"], "bus_stop"], ["!=", ["get", "kind"], "bus_station"], ["!=", ["get", "pmap:kind"], "bus_stop"], ["!=", ["get", "pmap:kind"], "bus_station"], ["==", $POI_ICON_EXPRESSION, ""]], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.6], "text-optional": true}, "paint": {"text-color": "#1a5fb4", "text-halo-color": "#ffffff", "text-halo-width": 1.3}},
     {"id": "pois-symbols", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 15.5, "filter": ["all", ["==", ["geometry-type"], "Point"], ["!=", $POI_ICON_EXPRESSION, ""]], "layout": {"icon-image": $POI_ICON_EXPRESSION, "icon-size": 1, "icon-padding": 2, "text-field": ["coalesce", ["get", "name"], ""], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.6], "text-optional": true}, "paint": {"text-color": "#1a5fb4", "text-halo-color": "#ffffff", "text-halo-width": 1.3}},
-        {"id": "stations", "type": "circle", "source": "stations", "minzoom": STATION_MIN_ZOOM, "filter": ["!=", "kind", "rail"], "paint": {"circle-radius": 6.5, "circle-color": "#d32f2f", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2}},
+        {"id": "stations", "type": "symbol", "source": "stations", "minzoom": STATION_MIN_ZOOM, "filter": ["!=", "kind", "rail"], "layout": {"icon-image": "bus-stop", "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true}},
         {"id": "stations-rail", "type": "circle", "source": "stations", "minzoom": RAIL_MIN_ZOOM, "filter": ["==", "kind", "rail"], "paint": {"circle-radius": 9.5, "circle-color": "#00796b", "circle-stroke-color": "#ffffff", "circle-stroke-width": 3}},
         {"id": "station-name", "type": "symbol", "source": "stations", "minzoom": 14.5, "filter": ["!=", "kind", "rail"], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 12, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.9], "text-optional": true}, "paint": {"text-color": "#b71c1c", "text-halo-color": "#ffffff", "text-halo-width": 1.5}},
         {"id": "station-name-rail", "type": "symbol", "source": "stations", "minzoom": 12, "filter": ["==", "kind", "rail"], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 13, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 1.2], "text-optional": true}, "paint": {"text-color": "#004d40", "text-halo-color": "#ffffff", "text-halo-width": 1.8}}
@@ -94,7 +95,7 @@ private fun offlineStyleJson(
 }
 """.trimIndent()
     .replace("PMTILES_PATH", pmtilesPath)
-    .replace("STATION_MIN_ZOOM", stationMinZoom.toString())
+    .replace("STATION_MIN_ZOOM", maxOf(stationMinZoom, BUS_MIN_ZOOM).toString())
     .replace("RAIL_MIN_ZOOM", maxOf(stationMinZoom - 2.0, 0.0).toString())
     .replace("STATIONS_DATA", stationsGeoJson)
 
@@ -149,7 +150,7 @@ fun MapLibreMapView(
                         .zoom(9.5)
                         .build()
 
-                    // 駅の点をタップしたときの処理
+                    // 駅・バス停のマークをタップしたときの処理
                     map.addOnMapClickListener { latLng ->
                         val p = map.projection.toScreenLocation(latLng)
                         val area = RectF(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
