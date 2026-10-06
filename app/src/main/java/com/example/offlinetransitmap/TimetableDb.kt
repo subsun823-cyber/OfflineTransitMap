@@ -188,7 +188,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         val sql = """
             SELECT st.dep_sec, r.operator, r.name, r.color, r.route_type,
                    COALESCE(st.headsign, t.headsign), s.platform,
-                                      st.trip, st.seq, ${'$'}trainTypeColumn
+                   st.trip, st.seq, $trainTypeColumn
             FROM stop_times st
             JOIN trips t ON t.trip_no = st.trip
             JOIN routes r ON r.route_id = t.route_id
