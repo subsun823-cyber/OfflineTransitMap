@@ -38,6 +38,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -46,6 +47,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
@@ -130,7 +133,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     // 時刻表DB。無ければ null(従来どおりサンプル表示)
     val timetable = remember { TimetableDb.open(context) }
-    val stationsGeoJson = remember { timetable?.stationsGeoJson() ?: demoStationsGeoJson() }
+    val stationsGeoJson by produceState(
+        initialValue = if (timetable == null) demoStationsGeoJson() else """{"type":"FeatureCollection","features":[]}""",
+        key1 = timetable
+    ) {
+        if (timetable != null) value = withContext(Dispatchers.IO) { timetable.stationsGeoJson() }
+    }
     // 経路検索(DBが新しい形式のときだけ使える)
     val searcher = remember {
         timetable?.let { RouteSearcher(it.db) }?.takeIf { it.isSupported() }

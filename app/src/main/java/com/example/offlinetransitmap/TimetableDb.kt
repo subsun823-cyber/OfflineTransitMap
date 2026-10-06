@@ -2,6 +2,8 @@ package com.example.offlinetransitmap
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteException
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -33,9 +35,10 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
     // 地図に出す駅の点(GeoJSON)。同じ名前の駅は1点にまとめ、kind は rail(電車)か bus(バス停)
     fun stationsGeoJson(): String {
         val kindExpr = if (hasStationKind) "MAX(CASE WHEN kind = 'rail' THEN 1 ELSE 0 END)" else "0"
+        val railOperators = railOperatorsByGroup()
         val features = JSONArray()
         db.rawQuery(
-            "SELECT MIN(station_id), MIN(name), AVG(lat), AVG(lon), $kindExpr FROM stations " +
+            "SELECT MIN(station_id), MIN(name), AVG(lat), AVG(lon), $kindExpr, COALESCE(grp, station_id) FROM stations " +
                     "GROUP BY COALESCE(grp, station_id)",
             null
         ).use { c ->
@@ -44,6 +47,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
                     .put("id", c.getString(0))
                     .put("name", c.getString(1))
                     .put("kind", if (c.getInt(4) == 1) "rail" else "bus")
+                    .put("rail_icon", railStationIcon(railOperators[c.getString(5)].orEmpty()))
                 val geometry = JSONObject()
                     .put("type", "Point")
                     .put("coordinates", JSONArray().put(c.getDouble(3)).put(c.getDouble(2)))
@@ -59,6 +63,32 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
             .put("type", "FeatureCollection")
             .put("features", features)
             .toString()
+    }
+
+    private fun railOperatorsByGroup(): Map<String, Set<String>> {
+        if (!hasStationKind) return emptyMap()
+        val operators = mutableMapOf<String, MutableSet<String>>()
+        try {
+            // 終点・降車専用駅も含める。便数で駅の代表座標が偏らないよう、座標集計とは分ける。
+            db.rawQuery(
+                """
+                SELECT DISTINCT COALESCE(s.grp, s.station_id), r.operator
+                FROM stations s
+                JOIN stop_times st ON st.station_id = s.station_id
+                JOIN trips t ON t.trip_no = st.trip
+                JOIN routes r ON r.route_id = t.route_id
+                WHERE s.kind = 'rail' AND r.route_type IN (0, 1, 2)
+                """.trimIndent(), null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    operators.getOrPut(c.getString(0)) { mutableSetOf() }.add(c.getString(1) ?: "")
+                }
+            }
+        } catch (e: SQLiteException) {
+            // 会社情報が読めない旧DBでも、駅は共通の列車アイコンで表示する。
+            Log.w("TimetableDb", "Station operators unavailable; using generic rail icons", e)
+        }
+        return operators
     }
 
     // 時刻表の有効期間(例: 2026/10/1〜2026/12/31)

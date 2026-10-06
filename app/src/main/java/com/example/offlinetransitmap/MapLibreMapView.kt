@@ -34,6 +34,7 @@ import java.io.File
 // 起動時に現在地へ寄る倍率(大きいほど拡大)
 private const val START_ZOOM = 13.0
 private const val BUS_MIN_ZOOM = 13.0
+private const val RAIL_MIN_ZOOM = 11.0
 
 // tokyo.pmtiles が対応している範囲。範囲外では地図が空白になるため、現在地へは移動しない
 private const val MAP_WEST = 138.94
@@ -88,7 +89,7 @@ private fun offlineStyleJson(
     {"id": "pois-name", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 15.5, "filter": ["all", ["==", ["geometry-type"], "Point"], ["has", "name"], ["!=", ["get", "kind"], "bus_stop"], ["!=", ["get", "kind"], "bus_station"], ["!=", ["get", "pmap:kind"], "bus_stop"], ["!=", ["get", "pmap:kind"], "bus_station"], ["==", $POI_ICON_EXPRESSION, ""]], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.6], "text-optional": true}, "paint": {"text-color": "#1a5fb4", "text-halo-color": "#ffffff", "text-halo-width": 1.3}},
     {"id": "pois-symbols", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 15.5, "filter": ["all", ["==", ["geometry-type"], "Point"], ["!=", $POI_ICON_EXPRESSION, ""]], "layout": {"icon-image": $POI_ICON_EXPRESSION, "icon-size": 1, "icon-padding": 2, "text-field": ["coalesce", ["get", "name"], ""], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.6], "text-optional": true}, "paint": {"text-color": "#1a5fb4", "text-halo-color": "#ffffff", "text-halo-width": 1.3}},
         {"id": "stations", "type": "symbol", "source": "stations", "minzoom": STATION_MIN_ZOOM, "filter": ["!=", "kind", "rail"], "layout": {"icon-image": "bus-stop", "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true}},
-        {"id": "stations-rail", "type": "circle", "source": "stations", "minzoom": RAIL_MIN_ZOOM, "filter": ["==", "kind", "rail"], "paint": {"circle-radius": 9.5, "circle-color": "#00796b", "circle-stroke-color": "#ffffff", "circle-stroke-width": 3}},
+        {"id": "stations-rail", "type": "symbol", "source": "stations", "minzoom": RAIL_MIN_ZOOM, "filter": ["==", "kind", "rail"], "layout": {"icon-image": ["match", ["get", "rail_icon"], "station-jr-east", "station-jr-east", "station-rail-both", "station-rail-both", "station-rail"], "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true}},
         {"id": "station-name", "type": "symbol", "source": "stations", "minzoom": 14.5, "filter": ["!=", "kind", "rail"], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 12, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.9], "text-optional": true}, "paint": {"text-color": "#b71c1c", "text-halo-color": "#ffffff", "text-halo-width": 1.5}},
         {"id": "station-name-rail", "type": "symbol", "source": "stations", "minzoom": 12, "filter": ["==", "kind", "rail"], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 13, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 1.2], "text-optional": true}, "paint": {"text-color": "#004d40", "text-halo-color": "#ffffff", "text-halo-width": 1.8}}
   ]
@@ -96,7 +97,7 @@ private fun offlineStyleJson(
 """.trimIndent()
     .replace("PMTILES_PATH", pmtilesPath)
     .replace("STATION_MIN_ZOOM", maxOf(stationMinZoom, BUS_MIN_ZOOM).toString())
-    .replace("RAIL_MIN_ZOOM", maxOf(stationMinZoom - 2.0, 0.0).toString())
+    .replace("RAIL_MIN_ZOOM", maxOf(stationMinZoom - 2.0, RAIL_MIN_ZOOM).toString())
     .replace("STATIONS_DATA", stationsGeoJson)
 
 // 現在地マーク(青い点)を有効にする。位置情報の許可を得てから呼ぶこと
@@ -178,6 +179,9 @@ fun MapLibreMapView(
     }
 
     val appearance = remember(loadedStyle) { loadedStyle?.let { MapAppearance(it) } }
+    LaunchedEffect(loadedStyle, stationsGeoJson) {
+        loadedStyle?.getSourceAs<GeoJsonSource>("stations")?.setGeoJson(stationsGeoJson)
+    }
     LaunchedEffect(appearance, darkTheme, preferences.showPoiNames, preferences.showPoiIcons) {
         appearance?.apply(darkTheme, preferences)
     }
