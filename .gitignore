@@ -1,0 +1,18 @@
+*.iml
+.gradle/
+/local.properties
+
+# Android Studio
+.idea/
+
+# Build files
+/build/
+/*/build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Native bulid
+.externalNativeBulid/
+.cxx/

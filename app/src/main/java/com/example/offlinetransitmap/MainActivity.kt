@@ -1,0 +1,321 @@
+package com.example.offlinetransitmap
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationManager
+import android.os.Build
+import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import java.time.LocalDateTime
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme {
+                MapScreen()
+            }
+        }
+    }
+}
+
+private data class SelectedStation(val id: String, val name: String)
+
+// 端末が最後に取得した現在地(緯度, 経度)。無ければ null
+@SuppressLint("MissingPermission")
+private fun lastKnownLatLon(context: Context): Pair<Double, Double>? {
+    val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+    var best: Location? = null
+    for (p in listOf(
+        LocationManager.GPS_PROVIDER,
+        LocationManager.NETWORK_PROVIDER,
+        LocationManager.PASSIVE_PROVIDER
+    )) {
+        val l = try {
+            lm.getLastKnownLocation(p)
+        } catch (e: Exception) {
+            null
+        }
+        if (l != null && (best == null || l.time > best.time)) best = l
+    }
+    return best?.let { Pair(it.latitude, it.longitude) }
+}
+
+// 現在地アイコン(円と十字の目盛り)。アイコンの追加ライブラリなしで描く
+@Composable
+private fun MyLocationIcon(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(24.dp)) {
+        val c = center
+        val unit = size.minDimension
+        val stroke = unit * 0.09f
+        drawCircle(color = color, radius = unit * 0.27f, center = c, style = Stroke(width = stroke))
+        drawCircle(color = color, radius = unit * 0.12f, center = c)
+        val outer = unit * 0.48f
+        val inner = unit * 0.36f
+        drawLine(color, Offset(c.x, c.y - outer), Offset(c.x, c.y - inner), strokeWidth = stroke)
+        drawLine(color, Offset(c.x, c.y + outer), Offset(c.x, c.y + inner), strokeWidth = stroke)
+        drawLine(color, Offset(c.x - outer, c.y), Offset(c.x - inner, c.y), strokeWidth = stroke)
+        drawLine(color, Offset(c.x + outer, c.y), Offset(c.x + inner, c.y), strokeWidth = stroke)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MapScreen() {
+    val context = LocalContext.current
+    // 時刻表DB。無ければ null(従来どおりサンプル表示)
+    val timetable = remember { TimetableDb.open(context) }
+    val stationsGeoJson = remember { timetable?.stationsGeoJson() ?: demoStationsGeoJson() }
+    // 経路検索(DBが新しい形式のときだけ使える)
+    val searcher = remember {
+        timetable?.let { RouteSearcher(it.db) }?.takeIf { it.isSupported() }
+    }
+    var selectedStation by remember { mutableStateOf<SelectedStation?>(null) }
+
+    // 経路検索の状態(検索画面を閉じても、入力と結果を残す)
+    val searchState = remember { RouteSearchState() }
+    var showSearch by remember { mutableStateOf(false) }
+    var searchLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    // 結果から選ばれた経路(地図に線を出し、詳細パネルを表示する)
+    var selectedItinerary by remember { mutableStateOf<Itinerary?>(null) }
+
+    // ナビ中の経路・案内・地図の向き
+    val navItin = if (NavigationState.active) NavigationState.itinerary else null
+    val navMode = navItin != null
+    val overlayItin = navItin ?: selectedItinerary
+    val routeOverlay = remember(overlayItin) { overlayItin?.toOverlay() }
+    val navLine = if (navMode) navLineGeoJson(NavigationState.location, NavigationState.guidance) else null
+    var mapBearing by remember { mutableDoubleStateOf(0.0) }
+    var followLost by remember { mutableStateOf(false) }
+
+    // 「現在地に戻る」が押された回数(増えるたびに地図側が現在地へ移動する)
+    var recenterRequest by remember { mutableIntStateOf(0) }
+
+    // 経路の詳細パネルで「戻る」操作をしたら、検索結果の画面に戻る
+    BackHandler(enabled = selectedItinerary != null && !navMode) {
+        selectedItinerary = null
+        showSearch = true
+    }
+
+    // 位置情報の許可(正確・おおよそのどちらかが許可されていれば true)
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.ACCESS_COARSE_LOCATION
+                    ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        hasLocationPermission = result.values.any { it }
+    }
+    val locationPermissions = arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    )
+
+    // ナビの開始。Android 13以降は、通知の許可が必要
+    var pendingNavItinerary by remember { mutableStateOf<Itinerary?>(null) }
+    val notificationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val itin = pendingNavItinerary
+        pendingNavItinerary = null
+        if (granted && itin != null) {
+            NavigationController.start(context, itin)
+        } else {
+            Toast.makeText(context, "通知が許可されていないため、ナビを開始できません", Toast.LENGTH_LONG).show()
+        }
+    }
+    val startNavigation: (Itinerary) -> Unit = { itin ->
+        if (!hasLocationPermission) {
+            permissionLauncher.launch(locationPermissions)
+            Toast.makeText(context, "位置情報を許可してから、もう一度「ナビ開始」を押してください", Toast.LENGTH_LONG).show()
+        } else if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingNavItinerary = itin
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            NavigationController.start(context, itin)
+        }
+    }
+
+    // 起動時に、まだ許可がなければ確認ダイアログを出す
+    LaunchedEffect(Unit) {
+        if (!hasLocationPermission) {
+            permissionLauncher.launch(locationPermissions)
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            if (!navMode) {
+                CenterAlignedTopAppBar(title = { Text("オフライン乗換マップ") })
+            }
+        },
+        floatingActionButton = {
+            if (!showSearch && selectedItinerary == null && !navMode) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // 現在地に戻る
+                    SmallFloatingActionButton(
+                        onClick = {
+                            if (hasLocationPermission) {
+                                recenterRequest++
+                            } else {
+                                permissionLauncher.launch(locationPermissions)
+                            }
+                        }
+                    ) {
+                        MyLocationIcon(color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                    // 経路検索
+                    FloatingActionButton(
+                        onClick = {
+                            if (searcher == null) {
+                                Toast.makeText(
+                                    context,
+                                    "経路検索には、新しい timetable.db が必要です",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                searchLocation = if (hasLocationPermission) lastKnownLatLon(context) else null
+                                showSearch = true
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = "検索")
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            MapLibreMapView(
+                modifier = Modifier.fillMaxSize(),
+                stationsGeoJson = stationsGeoJson,
+                stationMinZoom = if (timetable != null) 12.0 else 0.0,
+                locationGranted = hasLocationPermission,
+                recenterRequest = recenterRequest,
+                routeOverlay = routeOverlay,
+                followMode = navMode,
+                navLineJson = navLine,
+                onFollowLostChange = { followLost = it },
+                onBearingChange = { mapBearing = it },
+                onStationClick = { id, name -> selectedStation = SelectedStation(id, name) }
+            )
+            if (showSearch && searcher != null && !navMode) {
+                RouteSearchScreen(
+                    state = searchState,
+                    searcher = searcher,
+                    currentLocation = searchLocation,
+                    onSelect = { itin ->
+                        selectedItinerary = itin
+                        showSearch = false
+                    },
+                    onClose = { showSearch = false }
+                )
+            }
+            selectedItinerary?.let { itin ->
+                if (!navMode) {
+                    RouteDetailPanel(
+                        itin = itin,
+                        onBackToResults = {
+                            selectedItinerary = null
+                            showSearch = true
+                        },
+                        onClose = { selectedItinerary = null },
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                        navigating = NavigationState.active && NavigationState.itinerary === itin,
+                        onStartNavigation = { startNavigation(itin) },
+                        onStopNavigation = { NavigationController.stop(context) }
+                    )
+                }
+            }
+            if (navMode) {
+                NavigationOverlay(
+                    guidance = NavigationState.guidance,
+                    location = NavigationState.location,
+                    mapBearing = mapBearing,
+                    followLost = followLost,
+                    onRecenter = { recenterRequest++ },
+                    onStop = { NavigationController.stop(context) }
+                )
+            }
+        }
+    }
+
+    selectedStation?.let { station ->
+        val departures = remember(station) {
+            timetable?.departures(station.id, LocalDateTime.now()) ?: sampleDepartures()
+        }
+        val note = remember(station) {
+            if (timetable != null) {
+                timetable.validityText()?.let { "時刻表の有効期間: $it" }
+            } else {
+                "※サンプルデータです"
+            }
+        }
+        DepartureSheet(
+            stationName = station.name,
+            departures = departures,
+            note = note,
+            loadTripStops = { d -> timetable?.tripStops(d) ?: emptyList() },
+            onDismiss = { selectedStation = null }
+        )
+    }
+}
