@@ -52,7 +52,7 @@ internal class MapAppearance(private val style: Style) {
     private data class PaintColor(val layer: String, val property: String, val light: String)
 
     private val colors: List<PaintColor> = buildList {
-        if (style.getSource("protomaps") != null) {
+        if (style.getSource("stations") != null) {
             val layers = JSONObject(style.json).getJSONArray("layers")
             for (i in 0 until layers.length()) {
                 val layer = layers.getJSONObject(i)

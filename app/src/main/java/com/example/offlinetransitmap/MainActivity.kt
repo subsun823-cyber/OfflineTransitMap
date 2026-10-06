@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
                         isAppearanceLightNavigationBars = !dark
                     }
                 }
-                MapScreen(settings, dark)
+                PreparedOfflineApp { dataNote -> MapScreen(settings, dark, dataNote) }
             }
         }
     }
@@ -127,7 +127,7 @@ private fun MyLocationIcon(color: Color, modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MapScreen(settings: AppSettings, darkTheme: Boolean) {
+fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val context = LocalContext.current
     val preferences = settings.value
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -347,7 +347,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean) {
                 )
             }
             if (showSettings) {
-                SettingsScreen(preferences = preferences, onChange = settings::update)
+                SettingsScreen(preferences = preferences, onChange = settings::update, dataNote = dataNote)
             }
         }
     }
@@ -358,7 +358,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean) {
         }
         val note = remember(station) {
             if (timetable != null) {
-                timetable.validityText()?.let { "時刻表の有効期間: $it" }
+                listOfNotNull(timetable.validityText()?.let { "時刻表の有効期間: $it" }, timetable.stationDataNote(station.id)).joinToString("\n").ifBlank { null }
             } else {
                 "※サンプルデータです"
             }

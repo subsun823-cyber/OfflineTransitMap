@@ -35,7 +35,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
-fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Unit) {
+fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Unit, dataNote: String = "") {
     val context = LocalContext.current
     var savedData by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     LaunchedEffect(Unit) {
@@ -103,6 +103,10 @@ fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Un
                         Spacer(Modifier.height(12.dp))
                     }
                     SettingNote("端末に保存されたファイルの状態です。収録範囲や時刻表の有効期間は別途ご確認ください。")
+                    if (dataNote.isNotBlank()) {
+                        Spacer(Modifier.height(12.dp))
+                        SettingNote(dataNote)
+                    }
                 }
             }
             item { Spacer(Modifier.height(16.dp)) }

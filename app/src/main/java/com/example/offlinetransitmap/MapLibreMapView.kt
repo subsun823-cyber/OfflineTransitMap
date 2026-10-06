@@ -30,6 +30,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.sources.GeoJsonSource
 import java.io.File
+import org.json.JSONObject
 
 // 起動時に現在地へ寄る倍率(大きいほど拡大)
 private const val START_ZOOM = 13.0
@@ -100,6 +101,17 @@ private fun offlineStyleJson(
     .replace("RAIL_MIN_ZOOM", maxOf(stationMinZoom - 2.0, RAIL_MIN_ZOOM).toString())
     .replace("STATIONS_DATA", stationsGeoJson)
 
+// 地図ファイルが未配布でも同梱駅・経路をオフラインで表示する。
+private fun stationsOnlyStyleJson(stationsGeoJson: String, stationMinZoom: Double): String {
+    val style = JSONObject(offlineStyleJson("", stationsGeoJson, stationMinZoom))
+    style.getJSONObject("sources").remove("protomaps")
+    val layers = style.getJSONArray("layers")
+    for (i in layers.length() - 1 downTo 0) {
+        if (layers.getJSONObject(i).optString("source") == "protomaps") layers.remove(i)
+    }
+    return style.toString()
+}
+
 // 現在地マーク(青い点)を有効にする。位置情報の許可を得てから呼ぶこと
 @SuppressLint("MissingPermission")
 private fun enableLocationMarker(context: Context, map: MapLibreMap, style: Style) {
@@ -140,39 +152,26 @@ fun MapLibreMapView(
             view.getMapAsync { map ->
                 mapState = map
                 val file = File(context.getExternalFilesDir("maps"), "tokyo.pmtiles")
-                if (file.exists()) {
-                    map.setStyle(
-                        Style.Builder().fromJson(
-                            offlineStyleJson(file.absolutePath, stationsGeoJson, stationMinZoom)
-                        ).withPoiIcons(context)
-                    ) { style -> loadedStyle = style }
-                    map.cameraPosition = CameraPosition.Builder()
-                        .target(LatLng(35.67, 139.45))
-                        .zoom(9.5)
-                        .build()
+                val styleJson = if (file.exists()) {
+                    offlineStyleJson(file.absolutePath, stationsGeoJson, stationMinZoom)
+                } else stationsOnlyStyleJson(stationsGeoJson, stationMinZoom)
+                map.setStyle(Style.Builder().fromJson(styleJson).withPoiIcons(context)) { style -> loadedStyle = style }
+                map.cameraPosition = CameraPosition.Builder()
+                    .target(LatLng(35.67, 139.45))
+                    .zoom(if (file.exists()) 9.5 else 11.0)
+                    .build()
 
-                    // 駅・バス停のマークをタップしたときの処理
-                    map.addOnMapClickListener { latLng ->
-                        val p = map.projection.toScreenLocation(latLng)
-                        val area = RectF(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
-                        val feature = map.queryRenderedFeatures(area, "stations-rail", "stations").firstOrNull()
-                        val id = feature?.getStringProperty("id") ?: ""
-                        val name = feature?.getStringProperty("name")
-                        if (name != null) {
-                            onStationClick(id, name)
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                } else {
-                    map.setStyle("https://demotiles.maplibre.org/style.json") { style ->
-                        loadedStyle = style
-                    }
-                    map.cameraPosition = CameraPosition.Builder()
-                        .target(LatLng(36.0, 138.0))
-                        .zoom(4.0)
-                        .build()
+                // 駅・バス停のマークをタップしたときの処理
+                map.addOnMapClickListener { latLng ->
+                    val p = map.projection.toScreenLocation(latLng)
+                    val area = RectF(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
+                    val feature = map.queryRenderedFeatures(area, "stations-rail", "stations").firstOrNull()
+                    val id = feature?.getStringProperty("id") ?: ""
+                    val name = feature?.getStringProperty("name")
+                    if (name != null) {
+                        onStationClick(id, name)
+                        true
+                    } else false
                 }
             }
         }

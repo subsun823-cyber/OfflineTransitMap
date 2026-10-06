@@ -68,6 +68,11 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
     private fun railOperatorsByGroup(): Map<String, Set<String>> {
         if (!hasStationKind) return emptyMap()
         val operators = mutableMapOf<String, MutableSet<String>>()
+        if (hasTable("station_operators")) {
+            db.rawQuery("SELECT DISTINCT COALESCE(s.grp,s.station_id),o.operator FROM stations s JOIN station_operators o ON o.station_id=s.station_id WHERE s.kind='rail'", null).use { c ->
+                while (c.moveToNext()) operators.getOrPut(c.getString(0)) { mutableSetOf() }.add(c.getString(1) ?: "")
+            }
+        }
         try {
             // 終点・降車専用駅も含める。便数で駅の代表座標が偏らないよう、座標集計とは分ける。
             db.rawQuery(
@@ -89,6 +94,18 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
             Log.w("TimetableDb", "Station operators unavailable; using generic rail icons", e)
         }
         return operators
+    }
+
+    private fun hasTable(name: String): Boolean = db.rawQuery(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", arrayOf(name)
+    ).use { it.moveToFirst() }
+
+    fun stationDataNote(stationId: String): String? {
+        if (!hasTable("station_operators")) return null
+        val ids = groupStationIds(stationId)
+        val placeholders = ids.joinToString(",") { "?" }
+        val keio = db.rawQuery("SELECT 1 FROM station_operators WHERE station_id IN ($placeholders) AND operator='京王電鉄' LIMIT 1", ids.toTypedArray()).use { it.moveToFirst() }
+        return if (keio) "京王：一部の便のみ収録・適用終了日未確認。未収録の時刻表・運賃は設定画面をご確認ください。" else null
     }
 
     // 時刻表の有効期間(例: 2026/10/1〜2026/12/31)
