@@ -68,16 +68,21 @@ val verifyOfflineAssets = tasks.register("verifyOfflineAssets") {
         val config = JsonSlurper().parse(root.resolve("bootstrap/data-files.json")) as Map<*, *>
         val required = mutableListOf("bootstrap/keio.bundle", "bootstrap/keio-bus.bundle",
             "bootstrap/keio-info.json", "bootstrap/keio-bus-info.json")
+        val problems = mutableListOf<String>()
         for (entry in config["files"] as List<*>) {
             val spec = entry as Map<*, *>
             val asset = spec["asset"] as? String ?: continue
-            required.add(asset)
-            check(root.resolve(asset).length() == (spec["size"] as Number).toLong()) {
-                "Offline asset missing/wrong size: $asset. Follow docs/DATA_DISTRIBUTION.md."
-            }
+            val file = root.resolve(asset)
+            val expected = (spec["size"] as Number).toLong()
+            if (!file.isFile) problems.add("$asset: missing (expected $expected bytes)")
+            else if (file.length() != expected) problems.add("$asset: ${file.length()} bytes (expected $expected)")
         }
-        for (asset in required) check(root.resolve(asset).isFile) {
-            "Offline asset missing: $asset. Follow docs/DATA_DISTRIBUTION.md."
+        for (asset in required) if (!root.resolve(asset).isFile) problems.add("$asset: missing")
+        check(problems.isEmpty()) {
+            "Offline build data is not ready:\n" + problems.joinToString("\n") +
+                "\nThese large files are not stored in Git. On Windows, run tools/prepare_offline_data.cmd" +
+                " (or the data-setup ZIP), select the original DB/map, then rebuild." +
+                "\nSee docs/DATA_DISTRIBUTION.md. This prepares the build PC once; phones need no manual file copy."
         }
     }
 }

@@ -1,5 +1,29 @@
 # 初回データ準備と複数端末への配布
 
+## `verifyOfflineAssets` で止まる場合（Windows）
+
+`Offline asset missing/wrong size: bootstrap/timetable.db` は、ビルドPCの同梱ファイル不足／不一致を示します。大容量ファイルはGitに入っていないため、ソースコードの取得だけでは揃いません。必要なのは `timetable.db`・`tokyo.pmtiles`・生成済み `keio-bus.bundle` の3点です。検査を削除すると初回起動で失敗するAPKになるため、まず実ファイルを準備します。
+
+**配布した `offline-build-data-setup.zip` を使う場合（Python不要）:**
+
+1. ZIPを「すべて展開」し、`prepare_offline_data.cmd` をダブルクリックします。
+2. プロジェクトフォルダーを選び、保存してある元のDBとPMTilesファイルを選びます。京王バスの変換済みデータはZIPに含まれています。
+3. `Ready` と表示されたらAndroid Studioで再ビルドします。
+
+ツールはサイズ／SHA-256と京王バスseedの展開後内容を照合して、`app/src/main/assets/bootstrap/` の正しいファイル名へコピーします。全入力を検証してから配置し、既存の異なる同梱ファイルは `%LOCALAPPDATA%/OfflineTransitMap/data-backups/` にバックアップします。配布設定・元ファイルは変更しません。準備済みならコピーを省略します。
+
+リポジトリ内の `tools/prepare_offline_data.cmd` も同じツールです。この場合、変換済み `keio-bus.bundle` が見つからなければ選択を求めます。コマンドラインの場合はPowerShellで以下のように実行できます。
+
+```powershell
+.\tools\prepare_offline_data.ps1 -ProjectRoot 'C:\OfflineTransitMap' `
+  -Timetable 'D:\data\timetable.db' -Map 'D:\data\tokyo.pmtiles' `
+  -BusBundle 'D:\data\keio-bus.bundle' -NonInteractive
+```
+
+意図的に別バージョンのDB・地図を同梱する場合は、下記の `configure_data_files.py` で配布設定を生成し直します。元データが変わったのに期待ハッシュだけを手で書き換えないでください。
+
+準備ZIPの再作成: `python3 tools/package_offline_setup.py /path/to/offline-build-data-setup.zip`。生成済みの京王バスseedが必要です。大容量ファイルをGitへ追加する操作はありません。
+
 ## 現在の配布構成（2026-10-06）
 
 受領した実ファイルを使用し、**地図・JR／西東京バスの本体DB・京王電鉄・京王バスをAPKに同梱する設定**にしました。インストール後、**初回起動時**にアプリ自身が展開・統合します。各端末への手動ファイル配置や初回の通信は不要です。通常の既存DB・地図は保持して京王部分だけを追加します。

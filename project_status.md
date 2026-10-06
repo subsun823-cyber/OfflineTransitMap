@@ -15,6 +15,15 @@
 - このタスクの反映先は `coderabbit/review-offline-transit-project/895e6977`。実行環境でpushを許可されたタスク用ブランチを使い、完了報告に反映先とコミットを示す。
 - pushが失敗した場合は未反映と明記し、原因を報告する。実機未確認などの検証上の制約も維持して記録する。
 
+## ビルド用同梱ファイル不足への対応（2026-10-06、最新）
+
+- ユーザーのスクリーンショットは `:app:verifyOfflineAssets` の `bootstrap/timetable.db` 不足／サイズ不一致。Git対象外のDB・地図・京王バスseedをビルドの必須条件にした一方、Windowsですぐ使える準備用データ一式を渡せていなかったことが原因。
+- Windows用 `tools/prepare_offline_data.cmd`／`.ps1` を追加。元のDB・PMTilesと生成済み京王バスseedを検証し、所定のassetsへコピーする。配布設定と元ファイルは保持、既存の異なる同梱ファイルはLocalAppDataへバックアップ。準備済みファイルは再コピーしない。
+- Python不要の準備ZIP（約10MB）をOutputsに作成。京王バスseedとWindowsツールを収録し、ユーザーは保存済みDB・地図を選ぶだけで準備できる。`tools/package_offline_setup.py` で再生成可能。Gitへ大容量データは追加しない。
+- Gradleの検査は維持し、不足ファイルをまとめて列挙してWindowsでの準備方法を案内するよう改善。アプリのKotlin・UI・データ形式の変更なし。
+- 検証: 3ファイル不足の再現、PowerShell 7.4.6による実ファイル準備、日本語／空白を含むパス、不正入力・破損seedの事前拒否、既存ファイルのバックアップ、再実行時の無変更を確認。Windows GUI自体は未確認。
+- 端末ごとではなくビルドPCで一度だけ必要な作業。[手順](docs/DATA_DISTRIBUTION.md)を参照。GTFS更新元URL・Android実機確認・前回GitHub403の課題は別途継続。
+
 ## バスGTFSのバックグラウンド更新（2026-10-06、最新）
 
 - WorkManager 2.12.0で約24時間ごとに確認する機能を追加。設定に自動更新ON/OFF、従量制でない接続のみ、今すぐ確認、事業者別更新元URL、最終確認・期限切れ・結果を追加した。
