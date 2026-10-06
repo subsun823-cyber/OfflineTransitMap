@@ -1,0 +1,31 @@
+{
+  "prefix": "GTFS_KEIO_BUS:",
+  "sourceSha256": "c239a64207e04a6c8ce19adce35126b999df4daa687c9a544bc0370dada072f1",
+  "feedVersion": "20260915133014",
+  "startDate": 20261001,
+  "endDate": 20261231,
+  "note": "京王バスの有効期間: 2026/10/1〜2026/12/31。経由地条件のある3系統の運賃は未対応です。",
+  "excludedFareRoutes": [
+    "1171",
+    "1828",
+    "609"
+  ],
+  "ambiguousFarePairs": 0,
+  "counts": {
+    "meta": 1,
+    "feeds": 1,
+    "stations": 2927,
+    "stops": 2927,
+    "routes": 254,
+    "trips": 29550,
+    "stop_times": 447000,
+    "calendar": 33,
+    "calendar_dates": 171,
+    "fares": 106189,
+    "station_operators": 0,
+    "app_data": 1
+  },
+  "stationGroups": 1529,
+  "size": 79134720,
+  "sha256": "2becc426568025c96d341f4cc3ec92db5520cf3d7635e89df8404544cab0a2dc"
+}

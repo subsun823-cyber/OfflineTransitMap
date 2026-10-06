@@ -85,39 +85,38 @@ internal object OfflineDataSetup {
                     DataFileIO.commit(part, target)
                 } finally { part.delete() }
             }
-            progress("京王の駅・時刻表を準備中…")
+            progress("京王の駅・バス停・時刻表を準備中…")
             val target = targets.getValue("timetable")
             if (target.exists() && target.length() > 0) KeioDatabase.validate(target)
-            val info = JSONObject(context.assets.open("bootstrap/keio-info.json").bufferedReader().use { it.readText() })
-            val version = info.getString("sha256")
-            if (!target.exists() || target.length() == 0L || KeioDatabase.version(target) != version) {
-                // 未チェックポイントのDBをファイルコピーすると内容を失うため停止する。
-                checkNoWal(target)
-                val seedName = File(dbDir, "keio-seed.db")
-                val seed = DataFileIO.stage(GZIPInputStream(context.assets.open("bootstrap/keio.bundle")), seedName, info.getLong("size"), version)
-                val staged = File(dbDir, "timetable.new.db")
-                try {
-                    clearStaging(staged)
-                    KeioDatabase.validate(seed)
-                    val fresh = !target.exists() || target.length() == 0L
-                    if (!fresh) target.copyTo(staged, overwrite = true) else seed.copyTo(staged, overwrite = true)
-                    KeioDatabase.merge(staged, seed, version)
-                    if (fresh) KeioDatabase.markBootstrapOnly(staged)
-                    task.ensureActive()
-                    DataFileIO.commit(staged, target)
-                } finally {
-                    seed.delete()
-                    clearStaging(staged)
+            for ((assetName, prefix) in listOf("keio" to "ODPT_KEIO:", "keio-bus" to KeioDatabase.BUS_PREFIX)) {
+                val info = JSONObject(context.assets.open("bootstrap/$assetName-info.json").bufferedReader().use { it.readText() })
+                val version = info.getString("sha256")
+                if (!target.exists() || target.length() == 0L || KeioDatabase.version(target, "$assetName.version") != version) {
+                    // 未チェックポイントのDBをファイルコピーすると内容を失うため停止する。
+                    checkNoWal(target)
+                    val seedName = File(dbDir, "$assetName-seed.db")
+                    val seed = DataFileIO.stage(GZIPInputStream(context.assets.open("bootstrap/$assetName.bundle")), seedName, info.getLong("size"), version)
+                    val staged = File(dbDir, "timetable.new.db")
+                    try {
+                        clearStaging(staged)
+                        KeioDatabase.validate(seed)
+                        val fresh = !target.exists() || target.length() == 0L
+                        if (!fresh) target.copyTo(staged, overwrite = true) else seed.copyTo(staged, overwrite = true)
+                        KeioDatabase.merge(staged, seed, version, prefix, "$assetName.version")
+                        if (fresh) KeioDatabase.markBootstrapOnly(staged)
+                        task.ensureActive()
+                        DataFileIO.commit(staged, target)
+                    } finally {
+                        seed.delete()
+                        clearStaging(staged)
+                    }
                 }
+                warnings.add(info.getString("note"))
             }
             val map = targets.getValue("map")
             if (map.isFile) validateMap(map) else warnings.add("地図データが未準備です。配布元が設定されるまで、背景地図なしで駅を表示します。")
-            warnings.add(info.getString("note"))
             // データの範囲を端末ごとに確認可能にする。
-            android.database.sqlite.SQLiteDatabase.openDatabase(target.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY).use { db ->
-                val hasOther = db.rawQuery("SELECT 1 FROM routes WHERE operator != '京王電鉄' LIMIT 1", null).use { it.moveToFirst() }
-                if (!hasOther) warnings.add("この端末には京王のみ収録されています。JR・バス入り時刻表の配布設定が必要です。")
-            }
+            if (KeioDatabase.isBootstrapOnly(target)) warnings.add("この端末には京王電鉄・京王バスのみ収録されています。JR・西東京バス入り時刻表の配布設定が必要です。")
             warnings
         }
     }
