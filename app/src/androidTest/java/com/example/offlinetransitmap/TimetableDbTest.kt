@@ -11,6 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONObject
 import java.io.File
 import java.nio.file.Files
 import java.time.LocalDateTime
@@ -97,5 +98,75 @@ class TimetableDbTest {
         assertEquals(listOf(1L), bus.map { it.tripNo })
         assertEquals(listOf(2L, 3L), rail.map { it.tripNo })
         assertTrue((bus + rail).all { it.trainType.isEmpty() })
+    }
+
+    private fun executeMapSql(sql: String) {
+        SQLiteDatabase.openOrCreateDatabase(File(directory, "timetable.db"), null).use { it.execSQL(sql) }
+    }
+
+    private fun openMapFixture(withKind: Boolean = true): TimetableDb {
+        val timetable = openFixture()
+        executeMapSql("ALTER TABLE stations ADD COLUMN name TEXT DEFAULT '駅名'")
+        executeMapSql("ALTER TABLE stations ADD COLUMN lat REAL DEFAULT 35")
+        executeMapSql("ALTER TABLE stations ADD COLUMN lon REAL DEFAULT 139")
+        if (withKind) {
+            executeMapSql("ALTER TABLE stations ADD COLUMN kind TEXT DEFAULT 'bus'")
+            executeMapSql("UPDATE stations SET kind = 'rail' WHERE grp = 'rail'")
+        }
+        return timetable
+    }
+
+    private fun mapProperties(timetable: TimetableDb): Map<String, JSONObject> {
+        val features = JSONObject(timetable.stationsGeoJson()).getJSONArray("features")
+        return (0 until features.length()).associate { i ->
+            val props = features.getJSONObject(i).getJSONObject("properties")
+            props.getString("id") to props
+        }
+    }
+
+    @Test fun mapUsesJrOperatorAndKeepsBusClassification() {
+        val props = mapProperties(openMapFixture())
+        assertEquals(2, props.size)
+        assertEquals("station-jr-east", props.getValue("JR_1301").getString("rail_icon"))
+        assertEquals("rail", props.getValue("JR_1301").getString("kind"))
+        assertEquals("bus", props.getValue("NT_1").getString("kind"))
+    }
+
+    @Test fun sharedStationIncludesAlightingOnlyPrivateRailAndIgnoresBusRoutes() {
+        val timetable = openMapFixture()
+        // バスの乗り入れだけではJR＋私鉄表示にしない。
+        executeMapSql("INSERT INTO stop_times VALUES (1, 9, 'JR_1301', 'bus_stop', 35000, NULL, 1)")
+        assertEquals("station-jr-east", mapProperties(timetable).getValue("JR_1301").getString("rail_icon"))
+        executeMapSql("INSERT INTO stations VALUES ('P_1', 'rail', '駅名', 38, 142, 'rail')")
+        executeMapSql("INSERT INTO routes VALUES ('private', '京王電鉄', '高尾線', 0, 2)")
+        executeMapSql("INSERT INTO trips VALUES (5, 'private', 'inactive', '', '')")
+        executeMapSql("INSERT INTO stop_times VALUES (5, 1, 'P_1', 'private_stop', 35000, NULL, 0)")
+        val props = mapProperties(timetable)
+        assertEquals(2, props.size)
+        assertEquals("station-rail-both", props.getValue("JR_1301").getString("rail_icon"))
+        val features = JSONObject(timetable.stationsGeoJson()).getJSONArray("features")
+        val rail = (0 until features.length()).map { features.getJSONObject(it) }
+            .single { it.getJSONObject("properties").getString("id") == "JR_1301" }
+        val coords = rail.getJSONObject("geometry").getJSONArray("coordinates")
+        assertEquals(140.0, coords.getDouble(0), 0.001)
+        assertEquals(36.0, coords.getDouble(1), 0.001)
+        // 同名でもグループが違う駅は混ぜない。
+        executeMapSql("UPDATE stations SET grp = 'private' WHERE station_id = 'P_1'")
+        val separate = mapProperties(timetable)
+        assertEquals(3, separate.size)
+        assertEquals("station-jr-east", separate.getValue("JR_1301").getString("rail_icon"))
+        assertEquals("station-rail", separate.getValue("P_1").getString("rail_icon"))
+    }
+
+    @Test fun mapWithoutOperatorDetailsKeepsRailVisible() {
+        val timetable = openMapFixture()
+        executeMapSql("DROP TABLE routes")
+        assertEquals("station-rail", mapProperties(timetable).getValue("JR_1301").getString("rail_icon"))
+    }
+
+    @Test fun legacyMapWithoutKindKeepsExistingStationBehavior() {
+        val props = mapProperties(openMapFixture(withKind = false))
+        assertEquals(2, props.size)
+        assertTrue(props.values.all { it.getString("kind") == "bus" })
     }
 }

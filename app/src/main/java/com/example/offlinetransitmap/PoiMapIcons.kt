@@ -24,10 +24,13 @@ internal const val POI_ICON_EXPRESSION = """["case",
         ["hotel", "motel", "hostel", "guest_house", "bed_and_breakfast"], "poi-lodging",
         ""]]"""
 
-// 同梱の施設・バス停のベクター画像を登録するので、通信は不要。
+// 同梱の施設・駅・バス停の画像を登録するので、通信は不要。
 internal fun Style.Builder.withPoiIcons(context: Context): Style.Builder = apply {
     for ((id, drawable) in listOf(
         "bus-stop" to R.drawable.map_bus_stop,
+        "station-jr-east" to R.drawable.map_station_jr_east,
+        "station-rail" to R.drawable.map_station_rail,
+        "station-rail-both" to R.drawable.map_station_rail_both,
         "poi-food" to R.drawable.map_poi_food,
         "poi-medical" to R.drawable.map_poi_medical,
         "poi-junction" to R.drawable.map_poi_junction,
