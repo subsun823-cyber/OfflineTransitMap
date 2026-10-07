@@ -111,8 +111,37 @@ python3 tools/check_apk_data.py app/build/outputs/apk/debug/app-debug.apk
 
 Android Gradle Pluginはassets内の`.gz`を自動展開し拡張子を除去します。そのため圧縮京王DBは`keio.bundle`という名前にしています。圧縮形式はgzipです。最終チェックはAPK中のファイル名・内容がアプリの読み込み先と一致することも検証します。
 
+## GTFS定期自動更新とGitHub Actionsによる自動配布
+
+交通データ（JR東日本・京王電鉄・京王バス・西東京バス等）を半永久的・自動的に最新状態に維持するため、GitHub Actionsワークフローおよびアプリ内自動更新機構を整備しました。
+
+### 1. サーバー側（GitHub Actions）の自動更新パイプライン
+- ワークフロー: `.github/workflows/update-transit-data.yml`
+- スケジュール: 毎週日曜日 03:00 UTC（12:00 JST）に自動実行（手動実行 `workflow_dispatch` も可能）。
+- 処理フロー:
+  1. `tools/fetch_and_build_transit_data.py` を実行。
+  2. 京王バスGTFS・京王電鉄等のシードを更新し、既存DBとマージした統合DB（約60,800便）を生成。
+  3. `PRAGMA integrity_check` やテーブル件数を検証。
+  4. gzip圧縮版 `timetable.db.gz`（約30MB）と配布マニフェスト `transit-manifest.json` を生成。
+  5. 単体テスト（`tools/tests/`）を実行。
+  6. GitHub Releases（タグ `transit-data-latest`）に `timetable.db.gz` と `transit-manifest.json` を自動アップロード・更新。
+
+### 2. 端末側（Androidアプリ）の自動更新機構
+- クラス: `TransitUpdateManager.kt`、設定画面: `SettingsScreen.kt`
+- 動作:
+  - 端末は起動時または設定画面の操作により、GitHub Releasesのマニフェストを照合。
+  - 新しい時刻表データ（SHA-256が既存DBと異なるもの）が存在する場合、バックグラウンドでダウンロード。
+  - ダウンロード完了後、SHA-256・SQLite integrityを検証し、WALがないことを確認した上でアトミックに差し替え（安全なロールバック保証）。
+### 3. 公共交通オープンデータ（ODPT）アクセストークンの登録手順
+ODPTの公式APIからGTFS最新ファイルを直接自動ダウンロードするために、GitHub Secretsに2つのトークンを登録できます：
+1. GitHubのリポジトリページを開きます。
+2. **Settings** > **Secrets and variables** > **Actions** を開きます。
+3. **New repository secret** をクリックし、それぞれ追加します：
+   - **`ODPT_ACCESS_TOKEN`**: 通常のODPTトークン（都バス・西東京バス等のバス事業者データ用）
+   - **`ODPT_CHALLENGE_TOKEN`**: 東京公共交通オープンデータチャレンジ2026トークン（JR東日本・京王電鉄等の鉄道事業者データ用）
+4. これにより、ワークフロー実行時にバス・鉄道両方の最新データが公式APIから認証ダウンロードされ、最新DBがビルドされます。どちらか片方のみ登録されている場合でも、登録されたトークンに応じて取得可能なデータをダウンロードし、その他は同梱シードを用いて統合します。
+
 ## 未完了の確認
 
-- 実ファイルの受領・同梱設定・実DB統合・APK内容の照合は完了。恒久HTTPS配布先への切替と定期自動更新は未実施。
-- 端末での初回展開、既存DBへの追記、実際のHTTPS配布先からの取得、通信断・容量不足・再起動時の動作。
+- 実端末での新規インストール、初回展開、オンライン更新の実行、通信断・容量不足時の動作。
 - 京王の全時刻表・全運賃・競馬開催日・年末年始ダイヤの取得。

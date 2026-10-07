@@ -72,7 +72,9 @@ class MainActivity : ComponentActivity() {
             OfflineTransitMapTheme(darkTheme = dark) {
                 val surface = MaterialTheme.colorScheme.surface.toArgb()
                 SideEffect {
+                    @Suppress("DEPRECATION")
                     window.statusBarColor = surface
+                    @Suppress("DEPRECATION")
                     window.navigationBarColor = surface
                     WindowCompat.getInsetsController(window, window.decorView).apply {
                         isAppearanceLightStatusBars = !dark

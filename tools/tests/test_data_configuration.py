@@ -21,7 +21,7 @@ class DistributionConfigTest(unittest.TestCase):
     def configure(self,**kwargs):
         args=dict(timetable=self.db,timetable_url=None,map=None,map_url=None);args.update(kwargs)
         config.configure(argparse.Namespace(**args))
-        return json.loads((self.root/'app/src/main/assets/bootstrap/data-files.json').read_text())['files']
+        return json.loads((self.root/'app/src/main/assets/bootstrap/data-files.json').read_text(encoding='utf-8'))['files']
     def test_bundle_copies_validated_file_and_records_size_hash(self):
         entries=self.configure()
         self.assertEqual('bootstrap/timetable.db',entries[0]['asset'])

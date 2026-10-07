@@ -15,7 +15,7 @@ builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(builder)
 class KeioSeedTest(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
-        self.info=json.loads((ROOT/'app/src/main/assets/bootstrap/keio-info.json').read_text())
+        self.info=json.loads((ROOT/'app/src/main/assets/bootstrap/keio-info.json').read_text(encoding='utf-8'))
         raw=gzip.decompress((ROOT/'app/src/main/assets/bootstrap/keio.bundle').read_bytes())
         self.assertEqual(self.info['size'],len(raw))
         self.assertEqual(self.info['sha256'],hashlib.sha256(raw).hexdigest())

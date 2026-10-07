@@ -1,7 +1,7 @@
 # OfflineTransitMap — 現在の引き継ぎ状況
 
-最終更新: 2026-10-06
-調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、今回の地図表示修正。
+最終更新: 2026-10-07
+調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、京王バス追加 `bcde80da545876f5c072e78c478d1e1656fb3232`、今回のWindows環境エラー・ビルド警告修正。
 
 このファイルを今後の優先引き継ぎ資料とする。リポジトリには元の資料が存在しなかったため、ユーザー添付の `PROJECT_STATUS.md` を末尾に保存した。現在の確認結果はこの冒頭部分を優先する。末尾の実機確認済み表記は以前の確認履歴であり、今回の修正後の動作確認を意味しない。
 
@@ -14,6 +14,95 @@
 - 2026-10-06のユーザー指示により、今後は修正・検証・この資料の更新後にコミットし、GitHubへpushする。手動貼り付けを通常の反映手順としない。
 - このタスクの反映先は `coderabbit/review-offline-transit-project/895e6977`。実行環境でpushを許可されたタスク用ブランチを使い、完了報告に反映先とコミットを示す。
 - pushが失敗した場合は未反映と明記し、原因を報告する。実機未確認などの検証上の制約も維持して記録する。
+
+## GTFS定期自動更新・GitHub Actions配信パイプラインの実装（2026-10-07、最新）
+
+### 実装した内容
+1. **GitHub Actions 自動化ワークフロー (`.github/workflows/update-transit-data.yml`)**:
+   - 毎週日曜日 03:00 UTC（12:00 JST）の定期スケジュール（cron）および手動実行（`workflow_dispatch`）に対応。
+   - **2種類のODPTトークン（Secrets）対応**:
+     - `ODPT_ACCESS_TOKEN`: 通常の公共交通オープンデータセンター用（西東京バス等のバス事業者）。
+     - `ODPT_CHALLENGE_TOKEN`: 東京公共交通オープンデータチャレンジ2026用（JR東日本・京王電鉄等の鉄道事業者）。
+   - `tools/fetch_and_build_transit_data.py` を呼び出して、最新の京王バス・京王電鉄・西東京バス・JR東日本データを統合した最新 `timetable.db` を自動ビルド。
+   - テスト（`tools/tests/`）によるDBの整合性（`PRAGMA integrity_check`、便数・参照整合性）を検証。
+   - gzip圧縮した `timetable.db.gz`（約30MB）とメタデータマニフェスト `transit-manifest.json` を GitHub Releases（タグ `transit-data-latest`）に自動アップロード・更新。
+2. **統合データビルド・マニフェスト生成スクリプト (`tools/fetch_and_build_transit_data.py`)**:
+   - ODPT APIおよびチャレンジ2026 APIからのダウンロード関数（`download_odpt_gtfs`）および `--odpt-token`, `--odpt-challenge-token` オプションを実装。
+   - ベースDB（JR東日本・西東京バス）と、各事業者シード（京王電鉄・京王バス）を純粋なPython/SQLiteで安全にマージ（計60,866便）。
+   - 確定的なgzip圧縮（mtime=0）およびSHA-256・ファイルサイズ・有効期間・便数を記録した配布マニフェスト `transit-manifest.json` を出力。
+   - パイプラインの単体テスト [`tools/tests/test_fetch_and_build.py`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_fetch_and_build.py) を追加し、全17テスト合格を確認。
+3. **Androidアプリ側 自動更新機構 (`TransitUpdateManager.kt`)**:
+   - リモートの `transit-manifest.json` を照合し、新データがあるかをSHA-256・バージョンで判定（`checkForUpdate`）。
+   - バックグラウンドで `timetable.db.gz` をダウンロードしながらストリーム展開・SHA-256照合。
+   - SQLite検査（`PRAGMA quick_check`）とWAL未書き込みを確認の上、`DataFileIO.commit` による原子的差し替え（アトミックリプレイス）で安全に更新。失敗時は既存DBを完全保護（ロールバック保証）。
+4. **設定画面 UI拡張 (`SettingsScreen.kt`, `AppSettings.kt`)**:
+   - 「時刻表データの自動更新」設定カードを追加。
+   - 「起動時に更新を確認」トグルスイッチ、手動「更新を確認」ボタン、プログレスバー表示、「最新版を適用」ボタンを配置。
+   - ユニットテスト [`TransitUpdateManagerTest.kt`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/app/src/test/java/com/example/offlinetransitmap/TransitUpdateManagerTest.kt) を追加。
+
+### 検証結果
+- `.\gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (全22単体テスト成功)
+- `.\gradlew.bat compileDebugAndroidTestKotlin`: **BUILD SUCCESSFUL**
+- `.\gradlew.bat assembleDebug`: **BUILD SUCCESSFUL**
+- `python -m unittest discover tools/tests`: **Ran 17 tests, OK**
+- `python tools/check_apk_data.py`: **PASS**
+
+### 制約・次に必要な作業
+1. **GitHub Secretsの登録**:
+   - GitHubリポジトリの `Settings > Secrets and variables > Actions` に以下を登録する：
+     - `ODPT_ACCESS_TOKEN`: バス用トークン
+     - `ODPT_CHALLENGE_TOKEN`: 鉄道用トークン（チャレンジ2026）
+2. **変更のコミット＆プッシュ**:
+   - ローカルの変更（ワークフロー含む）をGitHubへpushすると、GitHub上の「Actions」タブに「Update Transit Data」が自動表示される。
+3. **初回のActions実行とRelease確認**:
+   - Actionsで「Update Transit Data」を手動実行し、Releases（`transit-data-latest`）にデータが公開されることを確認。
+4. **アプリでの更新確認**:
+   - アプリの設定画面から「更新を確認」をタップして反映を確認。
+
+## Windows環境エラー・ビルド警告の修正（2026-10-07）
+
+### 今回修正した問題
+1. **Pythonユニットテスト (`tools/tests`) の UnicodeDecodeError（7件のエラー）**:
+   - `test_keio_bus_data.py` および `test_keio_data.py` のテスト実行時に、UTF-8で保存されたメタデータJSON（`keio-info.json`, `keio-bus-info.json`）の読み込みで `UnicodeDecodeError: 'cp932' codec can't decode byte ...` が発生してテストが失敗していた。
+2. **Kotlinコンパイラ警告 (`Navigation.kt:389`)**:
+   - `walking` 変数判定内の `boardPoint != null` とその後の `if (walking && boardPoint != null)` の重複判定により、`Condition is always 'true'` 警告が発生していた。
+3. **Androidシステムバー色の非推奨警告 (`MainActivity.kt:75-76`)**:
+   - Android 15 (API 35+) 移行で非推奨となった `window.statusBarColor` / `window.navigationBarColor` による警告が発生していた。
+
+### 原因
+1. **Python側**:
+   - Windows環境におけるPythonの既定ファイル読み書きエンコーディングが `cp932`（Shift_JIS）であるため、明示的に `encoding='utf-8'` を指定せずに `Path.read_text()` または `Path.write_text()` を実行すると、日本語文字列を含むUTF-8ファイルでデコード/エンコード不整合が発生していた。
+2. **Kotlin側**:
+   - `Navigation.kt` で `val walking = boardDist != null && boardDist > APPROACH_M && boardPoint != null` と定義された後、`if (walking && boardPoint != null)` と記述されていたため、後者の `boardPoint != null` が静的解析で常に真と判定されていた。
+   - `MainActivity.kt` で古い互換API呼び出しに対して警告抑制アノテーションが付与されていなかった。
+
+### 変更したファイル
+- [tools/tests/test_keio_bus_data.py](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_keio_bus_data.py#L20): `read_text(encoding='utf-8')` を指定
+- [tools/tests/test_keio_data.py](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_keio_data.py#L18): `read_text(encoding='utf-8')` を指定
+- [tools/tests/test_data_configuration.py](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_data_configuration.py#L24): `read_text(encoding='utf-8')` を指定
+- [tools/build_keio_bus_data.py](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/build_keio_bus_data.py#L148): `write_text(..., encoding='utf-8')` を指定
+- [tools/build_keio_data.py](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/build_keio_data.py#L140): `write_text(..., encoding='utf-8')` を指定
+- [tools/configure_data_files.py](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/configure_data_files.py#L57): `write_text(..., encoding='utf-8')` を指定
+- [app/src/main/java/com/example/offlinetransitmap/Navigation.kt](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/app/src/main/java/com/example/offlinetransitmap/Navigation.kt#L388): 冗長条件判定を解消しスマートキャストを活用
+- [app/src/main/java/com/example/offlinetransitmap/MainActivity.kt](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/app/src/main/java/com/example/offlinetransitmap/MainActivity.kt#L75-L77): `@Suppress("DEPRECATION")` を追加
+
+### ビルド結果
+- `.\gradlew.bat assembleDebug`: **BUILD SUCCESSFUL** (APK生成成功)
+- `.\gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (全JVM単体テスト成功)
+- `.\gradlew.bat compileDebugAndroidTestKotlin`: **BUILD SUCCESSFUL** (AndroidTestコンパイル成功)
+- `.\gradlew.bat compileDebugKotlin --rerun-tasks`: **BUILD SUCCESSFUL** (警告 0 件)
+- `python -m unittest discover tools/tests`: **Ran 16 tests, OK** (全16件のテスト成功、失敗0件)
+- `python tools/check_apk_data.py`: **PASS** (APK内同梱アセットのハッシュ・整合性検証合格)
+
+### まだ残っている問題
+- Android実機での動作確認（新規インストール、既存DBからの更新、オフライン地図・バス停表示、乗換案内、通知・ナビ操作など）は開発環境に実機がないため未実施。
+- 京王バスGTFSの有効期限（2026-10-01〜2026-12-31）および将来の定期更新手順の整備。
+- 道路に沿ったオフラインナビ（現在は直線ベースの簡易案内）。
+
+### 次に行うべき作業
+1. 実機端末での動作確認。
+2. 将来のデータ定期更新手順・恒久配布先の検討。
+3. 道路ネットワークデータを用いた道路沿いナビゲーションエンジンの導入検討。
 
 ## 京王バス追加・実ファイル同梱（2026-10-06、最新）
 

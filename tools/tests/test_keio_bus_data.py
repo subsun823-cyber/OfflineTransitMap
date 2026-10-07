@@ -17,7 +17,7 @@ class KeioBusDataTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.directory=tempfile.TemporaryDirectory()
-        cls.info=json.loads((ASSETS/'keio-bus-info.json').read_text())
+        cls.info=json.loads((ASSETS/'keio-bus-info.json').read_text(encoding='utf-8'))
         raw=gzip.decompress((ASSETS/'keio-bus.bundle').read_bytes())
         assert len(raw)==cls.info['size'] and hashlib.sha256(raw).hexdigest()==cls.info['sha256']
         file=Path(cls.directory.name)/'seed.db';file.write_bytes(raw)

@@ -1,0 +1,76 @@
+name: Update Transit Data
+
+on:
+  schedule:
+    # Every Sunday at 03:00 UTC (12:00 JST)
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force re-building and publishing transit data even if no GTFS change detected'
+        type: boolean
+        default: false
+      keio_bus_gtfs_url:
+        description: 'Optional direct download URL for latest Keio Bus GTFS zip'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  update-transit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download latest Keio Bus GTFS (if URL provided)
+        if: ${{ inputs.keio_bus_gtfs_url != '' }}
+        run: |
+          mkdir -p inputs/transit-data
+          curl -fSL "${{ inputs.keio_bus_gtfs_url }}" -o inputs/transit-data/keio-bus-gtfs.zip
+          echo "KEIO_BUS_GTFS_ARG=--keio-bus-gtfs inputs/transit-data/keio-bus-gtfs.zip" >> $GITHUB_ENV
+
+      - name: Build integrated transit data and manifest
+        env:
+          ODPT_ACCESS_TOKEN: ${{ secrets.ODPT_ACCESS_TOKEN }}
+          ODPT_CHALLENGE_TOKEN: ${{ secrets.ODPT_CHALLENGE_TOKEN }}
+        run: |
+          python3 tools/fetch_and_build_transit_data.py \
+            --output-dir build/transit-dist \
+            --download-url-base "https://github.com/${{ github.repository }}/releases/download/transit-data-latest" \
+            ${{ env.KEIO_BUS_GTFS_ARG }}
+
+      - name: Run verification tests
+        run: |
+          python3 -m unittest discover -s tools/tests -v
+
+      - name: Publish or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="transit-data-latest"
+          
+          # Ensure release tag exists or create it
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --title "Latest Offline Transit Data" \
+              --notes "Automated weekly build of integrated offline transit data (JR East, Keio Rail, Keio Bus, Nishi Tokyo Bus)." \
+              build/transit-dist/transit-manifest.json \
+              build/transit-dist/timetable.db.gz
+          else
+            gh release upload "$TAG_NAME" \
+              build/transit-dist/transit-manifest.json \
+              build/transit-dist/timetable.db.gz \
+              --clobber
+          fi
+          echo "Successfully published latest transit data and manifest to release $TAG_NAME"

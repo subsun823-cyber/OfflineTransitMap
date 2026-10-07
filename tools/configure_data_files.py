@@ -54,7 +54,7 @@ def configure(args):
         entries.append(entry)
     if not entries:raise ValueError('Specify --timetable and/or --map')
     path=asset_root/'bootstrap/data-files.json'
-    path.write_text(json.dumps({'files':entries},ensure_ascii=False,indent=2)+'\n')
+    path.write_text(json.dumps({'files':entries},ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print(f'Configured {len(entries)} files in {path.relative_to(ROOT)}')
 
 if __name__=='__main__':

@@ -385,8 +385,7 @@ class NavigationService : Service() {
             } else if (sec <= 300) {
                 alert("board5_$cur", "乗車まであと${minutesCeil(sec)}分", "${hm(dep)}発 $head / ${leg.fromName}$platform")
             }
-            val walking = boardDist != null && boardDist > APPROACH_M && boardPoint != null
-            if (walking && boardPoint != null) {
+            if (boardPoint != null && boardDist != null && boardDist > APPROACH_M) {
                 NavigationState.guidance = Guidance(
                     GuidanceKind.WALK, "${leg.fromName}へ", "徒歩で向かう · ${hm(dep)}発 $head$platform",
                     boardDist, boardPoint.first, boardPoint.second,

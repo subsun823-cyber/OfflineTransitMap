@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "version": "20261007-01",
+  "updated_at": "2026-10-07T12:00:00Z",
+  "files": [
+    {
+      "id": "timetable",
+      "name": "統合時刻表データ（JR東日本・京王電鉄・京王バス・西東京バス）",
+      "filename": "timetable.db.gz",
+      "url": "https://github.com/subsun823-cyber/OfflineTransitMap/releases/download/transit-data-latest/timetable.db.gz",
+      "compressed": "gzip",
+      "size": 30965623,
+      "sha256": "169e25ca071b83abbfa8a2ab29c6c74da7cbcc35383ab5c09b0c51e75da675fa",
+      "uncompressed_size": 133828608,
+      "uncompressed_sha256": "dac6897555737ade314bb28b0952aff4de17e048150aed8d7720dda5ded632e4",
+      "valid_from": 20260314,
+      "valid_to": 20270312,
+      "validity_text": "2026/03/14〜2027/03/12",
+      "trip_count": 60866
+    }
+  ]
+}

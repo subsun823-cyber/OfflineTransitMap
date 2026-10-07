@@ -145,7 +145,7 @@ def build(source, output):
     report.update(size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
     output.mkdir(parents=True,exist_ok=True)
     (output/'keio-bus.bundle').write_bytes(gzip.compress(raw,mtime=0))
-    (output/'keio-bus-info.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+    (output/'keio-bus-info.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print(json.dumps(report,ensure_ascii=False,indent=2))
 
 

@@ -34,11 +34,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+
 @Composable
 fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Unit, dataNote: String = "") {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var savedData by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    LaunchedEffect(Unit) {
+    var updateStatusMessage by remember { mutableStateOf<String?>(null) }
+    var availableUpdate by remember { mutableStateOf<TransitManifest?>(null) }
+    var isCheckingOrUpdating by remember { mutableStateOf(false) }
+    var updateProgressPercent by remember { mutableStateOf(0) }
+
+    suspend fun refreshSavedData() {
         savedData = withContext(Dispatchers.IO) {
             listOf("地図" to ("maps" to "tokyo.pmtiles"), "時刻表" to ("timetable" to "timetable.db"))
                 .map { (label, path) ->
@@ -49,6 +61,10 @@ fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Un
                     label to status
                 }
         }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshSavedData()
     }
     Surface(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -107,6 +123,95 @@ fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Un
                         Spacer(Modifier.height(12.dp))
                         SettingNote(dataNote)
                     }
+                }
+            }
+            item {
+                SettingsGroup("時刻表データの自動更新") {
+                    SettingSwitch(
+                        "起動時に更新を確認", "新しい時刻表（GTFS）が公開されているか定期的に確認します",
+                        preferences.autoCheckTransitUpdates
+                    ) { onChange(preferences.copy(autoCheckTransitUpdates = it)) }
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    isCheckingOrUpdating = true
+                                    updateStatusMessage = "最新の時刻表データを確認中…"
+                                    when (val result = TransitUpdateManager.check(context, preferences.customManifestUrl)) {
+                                        is UpdateCheckResult.UpToDate -> {
+                                            updateStatusMessage = "時刻表データは最新です（${result.manifest.version}）"
+                                            availableUpdate = null
+                                        }
+                                        is UpdateCheckResult.Available -> {
+                                            val validText = result.manifest.file.validityText.ifBlank { "最新版" }
+                                            updateStatusMessage = "新しい時刻表が見つかりました（${validText}、約${result.manifest.file.tripCount}便）"
+                                            availableUpdate = result.manifest
+                                        }
+                                        is UpdateCheckResult.Error -> {
+                                            updateStatusMessage = "確認に失敗しました: ${result.message}"
+                                            availableUpdate = null
+                                        }
+                                    }
+                                    isCheckingOrUpdating = false
+                                }
+                            },
+                            enabled = !isCheckingOrUpdating
+                        ) {
+                            Text(if (isCheckingOrUpdating && availableUpdate == null) "確認中…" else "更新を確認")
+                        }
+
+                        if (availableUpdate != null) {
+                            Button(
+                                onClick = {
+                                    val update = availableUpdate ?: return@Button
+                                    scope.launch {
+                                        isCheckingOrUpdating = true
+                                        val res = TransitUpdateManager.downloadAndApply(context, update.file, update.version) { msg, percent ->
+                                            updateStatusMessage = msg
+                                            updateProgressPercent = percent
+                                        }
+                                        when (res) {
+                                            is UpdateApplyResult.Success -> {
+                                                updateStatusMessage = "時刻表データを最新版に更新しました（${res.version}）"
+                                                availableUpdate = null
+                                                refreshSavedData()
+                                            }
+                                            is UpdateApplyResult.Failure -> {
+                                                updateStatusMessage = "更新に失敗しました: ${res.message}"
+                                            }
+                                        }
+                                        isCheckingOrUpdating = false
+                                    }
+                                },
+                                enabled = !isCheckingOrUpdating
+                            ) {
+                                Text(if (isCheckingOrUpdating) "適用中…" else "最新版を適用")
+                            }
+                        }
+                    }
+
+                    if (isCheckingOrUpdating && updateProgressPercent in 1..99) {
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { updateProgressPercent / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    if (updateStatusMessage != null) {
+                        Spacer(Modifier.height(8.dp))
+                        SettingNote(requireNotNull(updateStatusMessage))
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    val activeUrl = preferences.customManifestUrl.ifBlank { TransitUpdateManager.DEFAULT_MANIFEST_URL }
+                    SettingNote("配信元URL: $activeUrl")
                 }
             }
             item { Spacer(Modifier.height(16.dp)) }

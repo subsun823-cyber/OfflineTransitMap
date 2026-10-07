@@ -137,7 +137,7 @@ def build(args):
     compressed=gzip.compress(raw,mtime=0)
     (args.output/'keio.bundle').write_bytes(compressed)
     report['sha256']=hashlib.sha256(raw).hexdigest();report['size']=len(raw)
-    (args.output/'keio-info.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
+    (args.output/'keio-info.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({k:v for k,v in report.items() if k!='sources'},ensure_ascii=False,indent=2));print('Compressed bytes:',len(compressed))
     db.close()
 
