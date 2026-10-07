@@ -15,6 +15,11 @@ on:
         type: string
         required: false
         default: ''
+      base_timetable_url:
+        description: 'Optional URL to download base timetable DB if no release exists yet'
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -44,6 +49,7 @@ jobs:
         env:
           ODPT_ACCESS_TOKEN: ${{ secrets.ODPT_ACCESS_TOKEN }}
           ODPT_CHALLENGE_TOKEN: ${{ secrets.ODPT_CHALLENGE_TOKEN }}
+          BASE_TIMETABLE_URL: ${{ inputs.base_timetable_url }}
         run: |
           python3 tools/fetch_and_build_transit_data.py \
             --output-dir build/transit-dist \

@@ -170,11 +170,51 @@ def download_odpt_gtfs(token: str, operator_code: str, dest_path: Path, is_chall
     return False
 
 
+def resolve_base_db(base_db_arg: Path, base_db_url: str, download_url_base: str, work_dir: Path) -> Path:
+    """Finds or downloads the base timetable DB."""
+    if base_db_arg and base_db_arg.exists():
+        print(f"Using local base timetable: {base_db_arg}")
+        return base_db_arg
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    target_db = work_dir / "base-timetable.db"
+
+    candidate_urls = []
+    if base_db_url:
+        candidate_urls.append(base_db_url)
+    if download_url_base:
+        candidate_urls.append(f"{download_url_base.rstrip('/')}/timetable.db.gz")
+        candidate_urls.append(f"{download_url_base.rstrip('/')}/timetable.db")
+
+    for url in candidate_urls:
+        print(f"Attempting to fetch base timetable from {url}...")
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'OfflineTransitMap-DataUpdater/1.0'})
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                if resp.status == 200:
+                    data = resp.read()
+                    if url.endswith('.gz') or (len(data) >= 2 and data[:2] == b'\x1f\x8b'):
+                        decompressed = gzip.decompress(data)
+                        target_db.write_bytes(decompressed)
+                    else:
+                        target_db.write_bytes(data)
+                    print(f"Successfully obtained base timetable ({target_db.stat().st_size} bytes)")
+                    return target_db
+        except Exception as e:
+            print(f"Notice: Could not fetch from {url}: {e}")
+
+    raise FileNotFoundError(
+        f"Base timetable DB not found at '{base_db_arg}' and could not be fetched from {candidate_urls}.\n"
+        "For the initial automated build, please either create a GitHub release 'transit-data-latest' with timetable.db.gz,\n"
+        "or pass --base-db-url pointing to a valid timetable.db."
+    )
+
+
 def build_integrated_timetable(
     base_timetable: Path,
-    keio_bus_seed_path: Path,
+    keio_bus_seed_path: Path | None,
     keio_bus_version: str,
-    keio_rail_seed_path: Path,
+    keio_rail_seed_path: Path | None,
     keio_rail_version: str,
     output_db_path: Path
 ):
@@ -183,23 +223,31 @@ def build_integrated_timetable(
     if output_db_path.resolve() != base_timetable.resolve():
         shutil.copyfile(base_timetable, output_db_path)
 
-    # 1. Merge Keio Rail
-    merge_seed_into_db(
-        output_db_path,
-        keio_rail_seed_path,
-        prefix="ODPT_KEIO:",
-        version=keio_rail_version,
-        version_key="keio.version"
-    )
+    # 1. Merge Keio Rail if seed available
+    if keio_rail_seed_path and keio_rail_seed_path.exists():
+        print(f"Merging Keio Rail seed into {output_db_path}...")
+        merge_seed_into_db(
+            output_db_path,
+            keio_rail_seed_path,
+            prefix="ODPT_KEIO:",
+            version=keio_rail_version,
+            version_key="keio.version"
+        )
+    else:
+        print("Notice: Keio Rail seed not provided; keeping existing rail records.")
 
-    # 2. Merge Keio Bus
-    merge_seed_into_db(
-        output_db_path,
-        keio_bus_seed_path,
-        prefix="GTFS_KEIO_BUS:",
-        version=keio_bus_version,
-        version_key="keio-bus.version"
-    )
+    # 2. Merge Keio Bus if seed available
+    if keio_bus_seed_path and keio_bus_seed_path.exists():
+        print(f"Merging Keio Bus seed into {output_db_path}...")
+        merge_seed_into_db(
+            output_db_path,
+            keio_bus_seed_path,
+            prefix="GTFS_KEIO_BUS:",
+            version=keio_bus_version,
+            version_key="keio-bus.version"
+        )
+    else:
+        print("Notice: Keio Bus seed not provided; keeping existing bus records.")
 
     # 3. Integrity & summary
     conn = sqlite3.connect(str(output_db_path))
@@ -280,6 +328,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base-db', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/timetable.db',
                         help='Base timetable.db (containing JR & Nishi Tokyo Bus)')
+    parser.add_argument('--base-db-url', type=str, default=os.environ.get('BASE_TIMETABLE_URL', ''),
+                        help='URL to download base timetable DB if local file not found')
     parser.add_argument('--keio-bus-gtfs', type=Path, help='Path to latest Keio Bus GTFS zip')
     parser.add_argument('--keio-bus-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/keio-bus.bundle',
                         help='Pre-built Keio Bus bundle (if GTFS zip not specified)')
@@ -300,7 +350,15 @@ def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Resolve Keio Bus seed
+    # 1. Resolve base timetable.db
+    resolved_base_db = resolve_base_db(
+        base_db_arg=args.base_db,
+        base_db_url=args.base_db_url,
+        download_url_base=args.download_url_base,
+        work_dir=args.output_dir
+    )
+
+    # 2. Resolve Keio Bus seed
     keio_bus_seed_file = args.output_dir / "keio-bus-seed.db"
     keio_gtfs_target = args.keio_bus_gtfs
     if not keio_gtfs_target:
@@ -311,6 +369,7 @@ def main():
         elif args.odpt_token and download_odpt_gtfs(args.odpt_token, "KeioBus", odpt_download_path, is_challenge=False):
             keio_gtfs_target = odpt_download_path
 
+    bus_version = ""
     if keio_gtfs_target and keio_gtfs_target.exists():
         print(f"Building Keio Bus bundle from GTFS: {keio_gtfs_target}...")
         build_keio_bus_data.build(keio_gtfs_target, args.output_dir)
@@ -318,25 +377,41 @@ def main():
         keio_bus_seed_file.write_bytes(raw_bus)
         bus_info = json.loads((args.output_dir / 'keio-bus-info.json').read_text(encoding='utf-8'))
         bus_version = bus_info['sha256']
-    else:
+    elif args.keio_bus_bundle and args.keio_bus_bundle.exists():
         print(f"Using pre-built Keio Bus bundle: {args.keio_bus_bundle}...")
         raw_bus = gzip.decompress(args.keio_bus_bundle.read_bytes())
         keio_bus_seed_file.write_bytes(raw_bus)
-        bus_info = json.loads((ROOT / 'app/src/main/assets/bootstrap/keio-bus-info.json').read_text(encoding='utf-8'))
-        bus_version = bus_info['sha256']
+        info_path = ROOT / 'app/src/main/assets/bootstrap/keio-bus-info.json'
+        if info_path.exists():
+            bus_info = json.loads(info_path.read_text(encoding='utf-8'))
+            bus_version = bus_info.get('sha256', '')
+        else:
+            bus_version = hashlib.sha256(raw_bus).hexdigest()
+    else:
+        print("Notice: No Keio Bus bundle or GTFS found; existing bus records in base DB will be retained.")
+        keio_bus_seed_file = None
 
-    # 2. Resolve Keio Rail seed
+    # 3. Resolve Keio Rail seed
     keio_rail_seed_file = args.output_dir / "keio-rail-seed.db"
-    raw_rail = gzip.decompress(args.keio_rail_bundle.read_bytes())
-    keio_rail_seed_file.write_bytes(raw_rail)
-    rail_info = json.loads((ROOT / 'app/src/main/assets/bootstrap/keio-info.json').read_text(encoding='utf-8'))
-    rail_version = rail_info['sha256']
+    rail_version = ""
+    if args.keio_rail_bundle and args.keio_rail_bundle.exists():
+        raw_rail = gzip.decompress(args.keio_rail_bundle.read_bytes())
+        keio_rail_seed_file.write_bytes(raw_rail)
+        rail_info_path = ROOT / 'app/src/main/assets/bootstrap/keio-info.json'
+        if rail_info_path.exists():
+            rail_info = json.loads(rail_info_path.read_text(encoding='utf-8'))
+            rail_version = rail_info.get('sha256', '')
+        else:
+            rail_version = hashlib.sha256(raw_rail).hexdigest()
+    else:
+        print("Notice: No Keio Rail bundle found; existing rail records in base DB will be retained.")
+        keio_rail_seed_file = None
 
-    # 3. Build integrated DB
+    # 4. Build integrated DB
     output_db = args.output_dir / "timetable.db"
     print(f"Integrating into {output_db}...")
     stats = build_integrated_timetable(
-        base_timetable=args.base_db,
+        base_timetable=resolved_base_db,
         keio_bus_seed_path=keio_bus_seed_file,
         keio_bus_version=bus_version,
         keio_rail_seed_path=keio_rail_seed_file,
