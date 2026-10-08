@@ -34,13 +34,14 @@
 3. **ビルド検証・テスト・配信パイプライン拡張 (`app/build.gradle.kts`, `check_apk_data.py`, `fetch_and_build_transit_data.py`, `test_tokyometro_data.py`)**:
    - `app/build.gradle.kts` の `verifyOfflineAssets` タスクに `tokyometro.bundle` と `tokyometro-info.json` の存在・サイズ検証を追加。
    - `tools/check_apk_data.py` でAPK内の東京メトロアセット同梱検証を追加。
-   - `tools/fetch_and_build_transit_data.py` に東京メトロシードのマージオプション `--tokyometro-bundle` を追加。
-   - 東京メトロシード検証用単体テスト [`tools/tests/test_tokyometro_data.py`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_tokyometro_data.py)（6テスト）を追加。
+   - `tools/fetch_and_build_transit_data.py` に通常トークン（`ODPT_ACCESS_TOKEN` / `--odpt-token`）を用いた東京メトロ更新確認・データ取得処理（`check_and_fetch_odpt_tokyometro`）を追加。ODPT API（`api-public.odpt.org` / `api.odpt.org`）にアクセスし、最新データが検知された場合に自動取得・バンドル再生成を行い、更新なし時やトークン未指定・エラー時は既存バンドルへ安全にフォールバック。
+   - 東京メトロシード検証用単体テスト [`tools/tests/test_tokyometro_data.py`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_tokyometro_data.py)（6テスト）および更新確認テスト [`tools/tests/test_tokyometro_update.py`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_tokyometro_update.py)（3テスト）を追加。
    - Androidテスト [`KeioDatabaseTest.kt`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/app/src/androidTest/java/com/example/offlinetransitmap/KeioDatabaseTest.kt) に東京メトロデータマージの検証（全9,982便、186駅）を追加。
 
 ### 検証結果
 - `python -m unittest tools/tests/test_tokyometro_data.py`: **Ran 6 tests, OK**
-- `python -m unittest discover tools/tests`: **Ran 29 tests, OK**
+- `python -m unittest tools/tests/test_tokyometro_update.py`: **Ran 3 tests, OK**
+- `python -m unittest discover tools/tests`: **Ran 32 tests, OK**
 - `.\gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (全26単体テスト合格)
 - `.\gradlew.bat compileDebugAndroidTestKotlin`: **BUILD SUCCESSFUL**
 - `.\gradlew.bat assembleDebug`: **BUILD SUCCESSFUL**

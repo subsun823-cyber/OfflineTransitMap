@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 
 import build_keio_bus_data
 import build_keio_data
+import build_tokyometro_data
 
 DEFAULT_MANIFEST_NAME = "transit-manifest.json"
 DEFAULT_RELEASE_TAG = "transit-data-latest"
@@ -168,6 +169,121 @@ def download_odpt_gtfs(token: str, operator_code: str, dest_path: Path, is_chall
             print(f"Notice: Could not fetch {operator_code} from {url.split('?')[0]}: {e}")
             continue
     return False
+
+
+def check_and_fetch_odpt_tokyometro(
+    token: str,
+    output_dir: Path,
+    bundle_path: Path | None = None,
+    info_path: Path | None = None,
+    holidays_csv: Path | None = None
+) -> tuple[Path | None, str]:
+    """Checks for Tokyo Metro updates using standard ODPT access token (api-public.odpt.org / api.odpt.org).
+    If an updated dataset is detected, fetches JSON exports from the ODPT API and rebuilds tokyometro.bundle.
+    If no token is provided, or if the server reports no update, falls back to the existing tokyometro.bundle.
+    Returns (seed_db_path, version_hash).
+    """
+    metro_seed_file = output_dir / "tokyometro-rail-seed.db"
+
+    # 1. If standard token provided, check ODPT API for Tokyo Metro updates
+    if token:
+        print("Checking Tokyo Metro updates from ODPT API using standard token (ODPT_ACCESS_TOKEN)...")
+        api_hosts = ["https://api-public.odpt.org/api/v4", "https://api.odpt.org/api/v4"]
+        last_date = ""
+        if info_path and info_path.exists():
+            try:
+                info_data = json.loads(info_path.read_text(encoding='utf-8'))
+                last_date = info_data.get('sourceTimetableDate', '')
+            except Exception:
+                pass
+
+        updated_found = False
+        fetched_railways = None
+        active_host = ""
+
+        for host in api_hosts:
+            check_url = f"{host}/odpt:Railway?odpt:operator=odpt.Operator:TokyoMetro&acl:consumerKey={token}"
+            try:
+                req = urllib.request.Request(check_url, headers={'User-Agent': 'OfflineTransitMap-DataUpdater/1.0'})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    if resp.status == 200:
+                        raw = resp.read()
+                        railways_data = json.loads(raw)
+                        latest_date = max((r.get('dc:date', '') for r in railways_data), default='')
+                        print(f"ODPT Tokyo Metro API check succeeded ({host}): latest date={latest_date}, local date={last_date}")
+                        active_host = host
+                        if not last_date or (latest_date and latest_date > last_date) or not (bundle_path and bundle_path.exists()):
+                            updated_found = True
+                            fetched_railways = railways_data
+                            break
+                        else:
+                            print("Tokyo Metro data is already up-to-date with ODPT.")
+                            break
+            except Exception as e:
+                print(f"Notice: Could not check Tokyo Metro updates via {host}: {e}")
+                continue
+
+        # If an update is detected, download all Tokyo Metro ODPT datasets and rebuild bundle
+        if updated_found and fetched_railways and active_host:
+            try:
+                print(f"Fetching complete Tokyo Metro dataset from {active_host}...")
+                dl_dir = output_dir / "odpt_tokyometro_download"
+                dl_dir.mkdir(parents=True, exist_ok=True)
+
+                (dl_dir / "odptRailway.json").write_text(json.dumps(fetched_railways, ensure_ascii=False), encoding='utf-8')
+
+                for endpoint, filename in [
+                    ("odpt:Station", "odptStation.json"),
+                    ("odpt:StationTimetable", "odptStationTimetable.json"),
+                    ("odpt:RailwayFare", "odptRailwayFare.json")
+                ]:
+                    ep_url = f"{active_host}/{endpoint}?odpt:operator=odpt.Operator:TokyoMetro&acl:consumerKey={token}"
+                    req = urllib.request.Request(ep_url, headers={'User-Agent': 'OfflineTransitMap-DataUpdater/1.0'})
+                    with urllib.request.urlopen(req, timeout=120) as resp:
+                        (dl_dir / filename).write_bytes(resp.read())
+                    print(f"Downloaded {filename} ({dl_dir.joinpath(filename).stat().st_size} bytes)")
+
+                class Args:
+                    pass
+                b_args = Args()
+                b_args.railways = dl_dir / "odptRailway.json"
+                b_args.stations = dl_dir / "odptStation.json"
+                b_args.timetables = dl_dir / "odptStationTimetable.json"
+                b_args.fares = dl_dir / "odptRailwayFare.json"
+                b_args.holidays = holidays_csv or (ROOT / 'inputs/syukujitsu.csv')
+                b_args.output = output_dir
+
+                build_tokyometro_data.build(b_args)
+                new_bundle = output_dir / "tokyometro.bundle"
+                new_info = output_dir / "tokyometro-info.json"
+                if new_bundle.exists():
+                    raw_metro = gzip.decompress(new_bundle.read_bytes())
+                    metro_seed_file.write_bytes(raw_metro)
+                    version = hashlib.sha256(raw_metro).hexdigest()
+                    print(f"Successfully rebuilt Tokyo Metro bundle from ODPT API ({len(raw_metro)} bytes)")
+                    return metro_seed_file, version
+            except Exception as e:
+                print(f"Warning: Failed to fetch/build updated Tokyo Metro data from ODPT: {e}")
+                print("Falling back to existing bundle...")
+
+    # 2. Fallback to pre-built bundle
+    if bundle_path and bundle_path.exists():
+        print(f"Using pre-built Tokyo Metro bundle: {bundle_path}...")
+        raw_metro = gzip.decompress(bundle_path.read_bytes())
+        metro_seed_file.write_bytes(raw_metro)
+        if info_path and info_path.exists():
+            try:
+                metro_info = json.loads(info_path.read_text(encoding='utf-8'))
+                version = metro_info.get('sha256', '')
+            except Exception:
+                version = hashlib.sha256(raw_metro).hexdigest()
+        else:
+            version = hashlib.sha256(raw_metro).hexdigest()
+        return metro_seed_file, version
+
+    print("Notice: No Tokyo Metro bundle or ODPT token available; keeping existing records in base DB.")
+    return None, ""
+
 
 
 def resolve_base_db(base_db_arg: Path, base_db_url: str, download_url_base: str, work_dir: Path) -> Path:
@@ -375,7 +491,7 @@ def main():
                         default='https://github.com/subsun823-cyber/OfflineTransitMap/releases/download/transit-data-latest',
                         help='Base URL where release artifacts will be hosted')
     parser.add_argument('--odpt-token', type=str, default=os.environ.get('ODPT_ACCESS_TOKEN', ''),
-                        help='ODPT API consumer key (token) for fetching bus GTFS (e.g. Nishi Tokyo Bus)')
+                        help='ODPT API consumer key (standard token) for bus GTFS and Tokyo Metro update check')
     parser.add_argument('--odpt-challenge-token', type=str, default=os.environ.get('ODPT_CHALLENGE_TOKEN', ''),
                         help='ODPT Challenge 2026 API consumer key for railway GTFS (JR East, Keio Rail, etc.)')
     parser.add_argument('--version-tag', type=str, default='',
@@ -457,21 +573,14 @@ def main():
         print("Notice: No Odakyu Rail bundle found; existing records in base DB will be retained.")
         odakyu_rail_seed_file = None
 
-    # 5. Resolve Tokyo Metro Rail seed
-    tokyometro_rail_seed_file = args.output_dir / "tokyometro-rail-seed.db"
-    tokyometro_version = ""
-    if args.tokyometro_bundle and args.tokyometro_bundle.exists():
-        raw_tokyometro = gzip.decompress(args.tokyometro_bundle.read_bytes())
-        tokyometro_rail_seed_file.write_bytes(raw_tokyometro)
-        tokyometro_info_path = ROOT / 'app/src/main/assets/bootstrap/tokyometro-info.json'
-        if tokyometro_info_path.exists():
-            tokyometro_info = json.loads(tokyometro_info_path.read_text(encoding='utf-8'))
-            tokyometro_version = tokyometro_info.get('sha256', '')
-        else:
-            tokyometro_version = hashlib.sha256(raw_tokyometro).hexdigest()
-    else:
-        print("Notice: No Tokyo Metro Rail bundle found; existing records in base DB will be retained.")
-        tokyometro_rail_seed_file = None
+    # 5. Resolve Tokyo Metro Rail seed (checks ODPT API with standard token, or falls back to bundle)
+    tokyometro_info_path = ROOT / 'app/src/main/assets/bootstrap/tokyometro-info.json'
+    tokyometro_rail_seed_file, tokyometro_version = check_and_fetch_odpt_tokyometro(
+        token=args.odpt_token,
+        output_dir=args.output_dir,
+        bundle_path=args.tokyometro_bundle,
+        info_path=tokyometro_info_path
+    )
 
     # 6. Build integrated DB
     output_db = args.output_dir / "timetable.db"
