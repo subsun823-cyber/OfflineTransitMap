@@ -1,0 +1,17 @@
+{
+  "operator": "東京メトロ",
+  "railways": 10,
+  "stations": 186,
+  "rawDepartureEvents": 162469,
+  "trips": 9982,
+  "stopTimesRows": 168928,
+  "receivedFares": 1000,
+  "supplementedFares": 3503,
+  "calendarStart": "2026-03-14",
+  "calendarEnd": "2027-12-31",
+  "size": 49004544,
+  "sha256": "40de9b2939bb43c6923bd5782fda06e0e70cff50368f46ea46478deb1e965d02",
+  "compressedSize": 4778525,
+  "bundleSha256": "641b7942117e1e21551cbc95fab2fabb6fcbcd539227ca0b42cdd5544a969184",
+  "note": "東京メトロ：全10路線（186駅）の全発車時刻（162469件、9982便）および普通旅客運賃（提供データ 1000件・補完 3503区間）を完全収録。S-TRAIN・TH-LINER・ロマンスカー等の指定席は別途指定席券が必要です。祝日ダイヤ対応（2027年末まで）。"
+}

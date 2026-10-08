@@ -15,7 +15,40 @@
 - このタスクの反映先は `coderabbit/review-offline-transit-project/895e6977`。実行環境でpushを許可されたタスク用ブランチを使い、完了報告に反映先とコミットを示す。
 - pushが失敗した場合は未反映と明記し、原因を報告する。実機未確認などの検証上の制約も維持して記録する。
 
-## 経路検索・長押しピン配置の軽量化・高速化（2026-10-08、最新）
+## 東京メトロデータの追加（2026-10-08、最新）
+
+### 実装した内容
+1. **東京メトロデータ取り込みツールの実装 (`tools/build_tokyometro_data.py`)**:
+   - ユーザー提供の ODPT データ（`odptRailway.json` 10路線、`odptStation.json` 186駅、`odptStationTimetable.json` 704時刻表・162,469発車時刻、`odptRailwayFare.json` 1,000運賃）および内閣府祝日CSVを解析。
+   - `(railway, calendar, trainNumber)` に基づく厳密なグループ化により、162,469件の発車イベントから全9,982便・168,928停車時刻を完全構築（単調増加性100.0%確認、推定誤差ゼロ）。
+   - 銀座線、丸ノ内線、丸ノ内線支線、日比谷線、東西線、千代田線、有楽町線、半蔵門線、南北線、副都心線の全10路線・全186駅を完全収録。
+   - S-TRAIN、TH-LINER、特急ロマンスカー（千代田線）等の有料指定席列車に `:extra-fare` 系統を定義。
+   - 普通旅客運賃（提供データ1,000件＋キロ程運賃表による補完3,503区間、計4,503区間）を完全登録（180円〜330円、連絡駅0円）。
+   - 小田急での知見に基づき、駅ナンバリング（stationCode）が `stops.platform` に誤混入しないよう `''` で統一。
+   - 祝日ダイヤ対応（2027年末まで）および年末年始（12/30〜1/3）運休制御。
+   - 約4.7MBの確定gzip圧縮 bundle (`assets/bootstrap/tokyometro.bundle`) およびメタデータ `tokyometro-info.json` を生成。
+2. **Androidアプリ本体への東京メトロデータ統合 (`KeioDatabase.kt`, `OfflineDataSetup.kt`, `TimetableDb.kt`)**:
+   - `KeioDatabase.kt` に `TOKYO_METRO_PREFIX` (`ODPT_TOKYO_METRO:`) を追加し、`merge`・`isBootstrapOnly` 判定を拡張。
+   - `OfflineDataSetup.kt` の初回展開およびシードマージループに `tokyometro` を追加。アプリ初回起動時・更新時に自動的に既存の `timetable.db` へ東京メトロデータ（全10路線186駅、9,982便）を安全・原子的（アトミック）にマージ。
+   - 700m以内ルールにより、JR・私鉄・他路線との同名駅（新宿、渋谷、池袋、大手町、銀座、霞ヶ関など）が自動的に単一駅グループに合流。
+   - `TimetableDb.kt` の `stationDataNote` で、東京メトロの駅タップ時に収録内容の案内メッセージを表示。
+   - `RailStationIcons.kt` により、JR接続駅は `station-rail-both`、地下鉄単独駅は `station-rail` で地図上に表示。
+3. **ビルド検証・テスト・配信パイプライン拡張 (`app/build.gradle.kts`, `check_apk_data.py`, `fetch_and_build_transit_data.py`, `test_tokyometro_data.py`)**:
+   - `app/build.gradle.kts` の `verifyOfflineAssets` タスクに `tokyometro.bundle` と `tokyometro-info.json` の存在・サイズ検証を追加。
+   - `tools/check_apk_data.py` でAPK内の東京メトロアセット同梱検証を追加。
+   - `tools/fetch_and_build_transit_data.py` に東京メトロシードのマージオプション `--tokyometro-bundle` を追加。
+   - 東京メトロシード検証用単体テスト [`tools/tests/test_tokyometro_data.py`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_tokyometro_data.py)（6テスト）を追加。
+   - Androidテスト [`KeioDatabaseTest.kt`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/app/src/androidTest/java/com/example/offlinetransitmap/KeioDatabaseTest.kt) に東京メトロデータマージの検証（全9,982便、186駅）を追加。
+
+### 検証結果
+- `python -m unittest tools/tests/test_tokyometro_data.py`: **Ran 6 tests, OK**
+- `python -m unittest discover tools/tests`: **Ran 29 tests, OK**
+- `.\gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (全26単体テスト合格)
+- `.\gradlew.bat compileDebugAndroidTestKotlin`: **BUILD SUCCESSFUL**
+- `.\gradlew.bat assembleDebug`: **BUILD SUCCESSFUL**
+- `python tools/check_apk_data.py`: **PASS**
+
+## 経路検索・長押しピン配置の軽量化・高速化（2026-10-08）
 
 ### 課題とボトルネック
 - 端末のCPU性能差やスペックにより、「地図長押し時のピン設置と最寄り駅認識」および「経路検索」の処理に遅延・引っ掛かりが発生していた。

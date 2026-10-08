@@ -94,4 +94,22 @@ class KeioDatabaseTest {
             }
         } finally { directory.deleteRecursively() }
     }
+
+    @Test fun tokyoMetroSeedMergesCorrectly() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = Files.createTempDirectory(context.cacheDir.toPath(), "tokyometro-test").toFile()
+        try {
+            val seed = File(directory, "tokyometro-seed.db")
+            GZIPInputStream(context.assets.open("bootstrap/tokyometro.bundle")).use { input -> seed.outputStream().use { input.copyTo(it) } }
+            val target = File(directory, "timetable.db")
+            seed.copyTo(target)
+            KeioDatabase.merge(target, seed, "test-tokyometro-version", KeioDatabase.TOKYO_METRO_PREFIX, "tokyometro.version")
+            KeioDatabase.validate(target)
+            assertEquals("test-tokyometro-version", KeioDatabase.version(target, "tokyometro.version"))
+            SQLiteDatabase.openDatabase(target.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery("SELECT COUNT(*) FROM trips WHERE trip_id LIKE 'ODPT_TOKYO_METRO:%'", null).use { it.moveToFirst(); assertEquals(9982, it.getInt(0)) }
+                db.rawQuery("SELECT COUNT(*) FROM stations WHERE station_id LIKE 'ODPT_TOKYO_METRO:%'", null).use { it.moveToFirst(); assertEquals(186, it.getInt(0)) }
+            }
+        } finally { directory.deleteRecursively() }
+    }
 }

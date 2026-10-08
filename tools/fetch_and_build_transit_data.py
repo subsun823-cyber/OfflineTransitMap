@@ -218,9 +218,11 @@ def build_integrated_timetable(
     keio_rail_version: str,
     output_db_path: Path,
     odakyu_seed_path: Path | None = None,
-    odakyu_version: str = ""
+    odakyu_version: str = "",
+    tokyometro_seed_path: Path | None = None,
+    tokyometro_version: str = ""
 ):
-    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train, Keio bus, and Odakyu seeds."""
+    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train, Keio bus, Odakyu, and Tokyo Metro seeds."""
     output_db_path.parent.mkdir(parents=True, exist_ok=True)
     if output_db_path.resolve() != base_timetable.resolve():
         shutil.copyfile(base_timetable, output_db_path)
@@ -263,6 +265,19 @@ def build_integrated_timetable(
         )
     else:
         print("Notice: Odakyu Rail seed not provided; keeping existing Odakyu records if present.")
+
+    # 4. Merge Tokyo Metro Rail if seed available
+    if tokyometro_seed_path and tokyometro_seed_path.exists():
+        print(f"Merging Tokyo Metro Rail seed into {output_db_path}...")
+        merge_seed_into_db(
+            output_db_path,
+            tokyometro_seed_path,
+            prefix="ODPT_TOKYO_METRO:",
+            version=tokyometro_version,
+            version_key="tokyometro.version"
+        )
+    else:
+        print("Notice: Tokyo Metro Rail seed not provided; keeping existing Tokyo Metro records if present.")
 
     # 4. Integrity & summary
     conn = sqlite3.connect(str(output_db_path))
@@ -352,6 +367,8 @@ def main():
                         help='Keio Rail bundle')
     parser.add_argument('--odakyu-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/odakyu.bundle',
                         help='Odakyu Rail bundle')
+    parser.add_argument('--tokyometro-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/tokyometro.bundle',
+                        help='Tokyo Metro Rail bundle')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build/transit-dist',
                         help='Output directory for generated release artifacts')
     parser.add_argument('--download-url-base', type=str,
@@ -440,7 +457,23 @@ def main():
         print("Notice: No Odakyu Rail bundle found; existing records in base DB will be retained.")
         odakyu_rail_seed_file = None
 
-    # 5. Build integrated DB
+    # 5. Resolve Tokyo Metro Rail seed
+    tokyometro_rail_seed_file = args.output_dir / "tokyometro-rail-seed.db"
+    tokyometro_version = ""
+    if args.tokyometro_bundle and args.tokyometro_bundle.exists():
+        raw_tokyometro = gzip.decompress(args.tokyometro_bundle.read_bytes())
+        tokyometro_rail_seed_file.write_bytes(raw_tokyometro)
+        tokyometro_info_path = ROOT / 'app/src/main/assets/bootstrap/tokyometro-info.json'
+        if tokyometro_info_path.exists():
+            tokyometro_info = json.loads(tokyometro_info_path.read_text(encoding='utf-8'))
+            tokyometro_version = tokyometro_info.get('sha256', '')
+        else:
+            tokyometro_version = hashlib.sha256(raw_tokyometro).hexdigest()
+    else:
+        print("Notice: No Tokyo Metro Rail bundle found; existing records in base DB will be retained.")
+        tokyometro_rail_seed_file = None
+
+    # 6. Build integrated DB
     output_db = args.output_dir / "timetable.db"
     print(f"Integrating into {output_db}...")
     stats = build_integrated_timetable(
@@ -451,6 +484,8 @@ def main():
         keio_rail_version=rail_version,
         odakyu_seed_path=odakyu_rail_seed_file,
         odakyu_version=odakyu_version,
+        tokyometro_seed_path=tokyometro_rail_seed_file,
+        tokyometro_version=tokyometro_version,
         output_db_path=output_db
     )
     print(f"Integrated DB ready: {stats['trips']} trips, validity {stats['valid_from']}..{stats['valid_to']}")

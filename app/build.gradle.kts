@@ -66,7 +66,8 @@ val verifyOfflineAssets = tasks.register("verifyOfflineAssets") {
         val config = JsonSlurper().parse(root.resolve("bootstrap/data-files.json")) as Map<*, *>
         val required = mutableListOf("bootstrap/keio.bundle", "bootstrap/keio-bus.bundle",
             "bootstrap/keio-info.json", "bootstrap/keio-bus-info.json",
-            "bootstrap/odakyu.bundle", "bootstrap/odakyu-info.json")
+            "bootstrap/odakyu.bundle", "bootstrap/odakyu-info.json",
+            "bootstrap/tokyometro.bundle", "bootstrap/tokyometro-info.json")
         for (entry in config["files"] as List<*>) {
             val spec = entry as Map<*, *>
             val asset = spec["asset"] as? String ?: continue
