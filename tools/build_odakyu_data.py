@@ -106,7 +106,7 @@ def build(args):
         )
         db.execute(
             'INSERT INTO stops VALUES (?, ?, ?, ?, ?)',
-            (sid(raw_id), sid(raw_id), name, s.get('odpt:stationCode', ''), sid(raw_id))
+            (sid(raw_id), sid(raw_id), name, '', sid(raw_id))
         )
         db.execute(
             'INSERT INTO station_operators VALUES (?, ?)',

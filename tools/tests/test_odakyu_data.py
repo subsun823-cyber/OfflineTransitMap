@@ -55,6 +55,10 @@ class OdakyuSeedTest(unittest.TestCase):
         self.assertIsNotNone(fujisawa)
         self.assertEqual('藤沢', fujisawa[0])
 
+    def test_platform_is_empty_for_rail_stations(self):
+        # Platform must not be populated with stationCode (e.g. OH01, OE03)
+        self.assertEqual(0, self.count("SELECT COUNT(*) FROM stops WHERE platform IS NOT NULL AND platform != ''"))
+
     def active(self, date):
         col = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][date.weekday()]
         ymd = int(date.strftime('%Y%m%d'))

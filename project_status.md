@@ -1,7 +1,7 @@
 # OfflineTransitMap — 現在の引き継ぎ状況
 
 最終更新: 2026-10-08
-調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、京王バス追加 `bcde80da545876f5c072e78c478d1e1656fb3232`、Windows環境エラー・ビルド警告修正、小田急電鉄データ追加。
+調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、京王バス追加 `bcde80da545876f5c072e78c478d1e1656fb3232`、Windows環境エラー・ビルド警告修正、小田急電鉄データ追加、小田急発車番線バグ修正。
 
 このファイルを今後の優先引き継ぎ資料とする。リポジトリには元の資料が存在しなかったため、ユーザー添付の `PROJECT_STATUS.md` を末尾に保存した。現在の確認結果はこの冒頭部分を優先する。末尾の実機確認済み表記は以前の確認履歴であり、今回の修正後の動作確認を意味しない。
 
@@ -15,7 +15,30 @@
 - このタスクの反映先は `coderabbit/review-offline-transit-project/895e6977`。実行環境でpushを許可されたタスク用ブランチを使い、完了報告に反映先とコミットを示す。
 - pushが失敗した場合は未反映と明記し、原因を報告する。実機未確認などの検証上の制約も維持して記録する。
 
-## 小田急電鉄データの追加（2026-10-08、最新）
+## 小田急電鉄の発車番線表示バグ修正（2026-10-08、最新）
+
+### 発生していた問題
+- 小田急電鉄の各駅における時刻表・発車案内画面（出発シート等）で、発車番線が「OH01番線」「OE03番線」のように駅ナンバリング（stationCode）で表示されていた。
+
+### 原因
+- `tools/build_odakyu_data.py` の `stops` テーブル作成処理で、誤って `odpt:stationCode` を `stops.platform` カラムに挿入していた。
+- アプリ側のUIロジック（`TimetableDb.kt` の `platformText()`、`DepartureSheet.kt`、`Navigation.kt`、`RoutePanel.kt` 等）は、`stops.platform` が空文字でない場合に「〜番線」と付加して表示する仕様となっている。
+- 既存のJR東日本（711駅）および京王電鉄の鉄道データでは、のりば（番線）情報が存在しないため `stops.platform` は例外なく空文字（`''`）に統一されている（バス停のみのりば番号が入る）。
+
+### 修正内容
+1. **シード生成スクリプト修正 (`tools/build_odakyu_data.py`)**:
+   - `stops` 挿入時の `platform` 値を `s.get('odpt:stationCode', '')` から `''` に修正。
+2. **単体テスト追加 (`tools/tests/test_odakyu_data.py`)**:
+   - `test_platform_is_empty_for_rail_stations` を追加し、小田急の `stops.platform` が全て空文字（駅ナンバリング誤混入がないこと）を検証。
+3. **アセット再生成・検証**:
+   - `odakyu.bundle`（確定gzip、1,289,054 bytes）および `odakyu-info.json` を再生成。
+   - `python -m unittest tools/tests/test_odakyu_data.py`（6テスト PASS）
+   - `.\gradlew.bat testDebugUnitTest`（全JVMテスト PASS）
+   - `.\gradlew.bat compileDebugAndroidTestKotlin`（PASS）
+   - `.\gradlew.bat assembleDebug`（BUILD SUCCESSFUL）
+   - `python tools/check_apk_data.py`（PASS: APK内アセット検証合格）
+
+## 小田急電鉄データの追加（2026-10-08）
 
 ### 実装した内容
 1. **小田急電鉄データ取り込みツールの実装・最適化 (`tools/build_odakyu_data.py`)**:
