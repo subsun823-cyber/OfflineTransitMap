@@ -61,7 +61,15 @@ private const val WALK_MAX_M = 300              // 歩いて乗り換えられ�
 private const val SAME_STATION_WALK_M = 150     // 同じ名前の駅で、これ未満の移動は「徒歩」として出さない
 private const val HORIZON_SEC = 6 * 3600        // いまから6時間先までの便を読む
 private const val EXTRA_MAX_MIN = 120L          // 最速より2時間以上遅い経路は出さない
-private val RUN_OFFSETS_MIN = intArrayOf(0, 5, 10, 15, 20, 30, 40, 50, 60, 75, 90)
+// 探索オフセットを最適化(直近から少し余裕を持った便まで計6回に集約して計算量を半減)
+private val RUN_OFFSETS_MIN = intArrayOf(0, 10, 20, 35, 55, 80)
+private const val GRID_CELL_DEG = 0.01          // 空間インデックス用グリッドサイズ(約1.1km)
+
+private fun gridCellKey(lat: Double, lon: Double): Long {
+    val y = (lat / GRID_CELL_DEG).toInt()
+    val x = (lon / GRID_CELL_DEG).toInt()
+    return (y.toLong() shl 32) or (x.toLong() and 0xFFFFFFFFL)
+}
 
 fun calcDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Int {
     val dy = (lat2 - lat1) * 110540.0
@@ -101,7 +109,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val index: HashMap<String, Int>,
         val members: HashMap<String, IntArray>,
         val nbIdx: Array<IntArray>,
-        val nbMeters: Array<IntArray>
+        val nbMeters: Array<IntArray>,
+        val grid: HashMap<Long, IntArray>
     )
 
     // 探索に使う時刻データ(便ごとに停車行が連続して並ぶ。時刻は「今日の0時からの秒」)
@@ -114,7 +123,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val rowArr: IntArray,
         val rowDep: IntArray,
         val rowBoard: BooleanArray,
-        val rowAlight: BooleanArray
+        val rowAlight: BooleanArray,
+        val stationTrips: Array<IntArray>
     )
 
     private class Labels(n: Int) {
@@ -197,31 +207,65 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val members = HashMap<String, IntArray>()
         for ((g, l) in memberLists) members[g] = l.toIntArray()
 
+        // 空間グリッドインデックスの構築(約1.1km四方のバケット)
+        val gridBuckets = HashMap<Long, ArrayList<Int>>()
+        for (i in 0 until n) {
+            val key = gridCellKey(list[i].lat, list[i].lon)
+            gridBuckets.getOrPut(key) { ArrayList() }.add(i)
+        }
+        val grid = HashMap<Long, IntArray>(gridBuckets.size * 2)
+        for ((k, v) in gridBuckets) grid[k] = v.toIntArray()
+
         // 徒歩で乗り換えられる駅(300m以内、または同じグループの駅)
+        // 300m 以内は同じセルおよび隣接セル(計9セル)に必ず収まるため、周囲9セルのみを比較して O(N) に高速化
         val nbIdx = Array(n) { IntArray(0) }
         val nbMeters = Array(n) { IntArray(0) }
         for (i in 0 until n) {
             val a = list[i]
+            val cy = (a.lat / GRID_CELL_DEG).toInt()
+            val cx = (a.lon / GRID_CELL_DEG).toInt()
             val cosLat = cos(Math.toRadians(a.lat))
             val js = ArrayList<Int>()
             val ms = ArrayList<Int>()
-            for (j in 0 until n) {
-                if (i == j) continue
-                val b = list[j]
-                val dy = (b.lat - a.lat) * 110540.0
-                val far = dy > WALK_MAX_M || dy < -WALK_MAX_M
-                if (far && a.group != b.group) continue
-                val dx = (b.lon - a.lon) * cosLat * 111320.0
-                val m = hypot(dx, dy)
-                if (m <= WALK_MAX_M || a.group == b.group) {
+            val seen = HashSet<Int>()
+
+            for (dyCell in -1..1) {
+                for (dxCell in -1..1) {
+                    val k = ((cy + dyCell).toLong() shl 32) or ((cx + dxCell).toLong() and 0xFFFFFFFFL)
+                    val candidates = grid[k] ?: continue
+                    for (j in candidates) {
+                        if (i == j || !seen.add(j)) continue
+                        val b = list[j]
+                        val dy = (b.lat - a.lat) * 110540.0
+                        if (dy > WALK_MAX_M || dy < -WALK_MAX_M) continue
+                        val dx = (b.lon - a.lon) * cosLat * 111320.0
+                        val m = hypot(dx, dy)
+                        if (m <= WALK_MAX_M) {
+                            js.add(j)
+                            ms.add(m.toInt())
+                        }
+                    }
+                }
+            }
+
+            // 同一グループの駅(同じ駅内の移動)
+            val sameGroup = members[a.group]
+            if (sameGroup != null) {
+                for (j in sameGroup) {
+                    if (i == j || !seen.add(j)) continue
+                    val b = list[j]
+                    val dy = (b.lat - a.lat) * 110540.0
+                    val dx = (b.lon - a.lon) * cosLat * 111320.0
+                    val m = hypot(dx, dy)
                     js.add(j)
                     ms.add(m.toInt())
                 }
             }
+
             nbIdx[i] = js.toIntArray()
             nbMeters[i] = ms.toIntArray()
         }
-        return Network(list, index, members, nbIdx, nbMeters)
+        return Network(list, index, members, nbIdx, nbMeters, grid)
     }
 
     private fun distanceMeters(a: StationEntry, b: StationEntry): Int =
@@ -261,18 +305,59 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         return (starts + contains).take(limit)
     }
 
-    // 緯度経度に最も近い駅
+    // 緯度経度に最も近い駅(空間グリッドを活用して高速化)
     fun nearestStation(lat: Double, lon: Double): StationEntry? {
+        val cy = (lat / GRID_CELL_DEG).toInt()
+        val cx = (lon / GRID_CELL_DEG).toInt()
+        val cosLat = cos(Math.toRadians(lat))
+
         var best: StationEntry? = null
         var bestD = Double.MAX_VALUE
-        val cosLat = cos(Math.toRadians(lat))
-        for (s in net.stations) {
-            val dy = (s.lat - lat) * 110540.0
-            val dx = (s.lon - lon) * cosLat * 111320.0
-            val d = dx * dx + dy * dy
-            if (d < bestD) {
-                bestD = d
-                best = s
+
+        // 半径 r のセル境界を探索
+        fun checkRadius(r: Int) {
+            for (dyCell in -r..r) {
+                for (dxCell in -r..r) {
+                    if (r > 0 && Math.abs(dyCell) < r && Math.abs(dxCell) < r) continue
+                    val k = ((cy + dyCell).toLong() shl 32) or ((cx + dxCell).toLong() and 0xFFFFFFFFL)
+                    val candidates = net.grid[k] ?: continue
+                    for (idx in candidates) {
+                        val s = net.stations[idx]
+                        val dy = (s.lat - lat) * 110540.0
+                        val dx = (s.lon - lon) * cosLat * 111320.0
+                        val d = dx * dx + dy * dy
+                        if (d < bestD) {
+                            bestD = d
+                            best = s
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1. まず中心セルおよび隣接セル(計9セル、約1.1km四方)を探索
+        checkRadius(0)
+        checkRadius(1)
+
+        // 2. 見つからない、または境界付近の可能性がある場合は外側(最大半径5セル)を探索
+        val cellMeters = GRID_CELL_DEG * 110540.0
+        if (best == null || bestD > cellMeters * cellMeters) {
+            for (r in 2..5) {
+                checkRadius(r)
+                if (best != null && bestD <= (r * cellMeters) * (r * cellMeters)) break
+            }
+        }
+
+        // 3. 極端な遠方のフォールバック(全駅走査)
+        if (best == null) {
+            for (s in net.stations) {
+                val dy = (s.lat - lat) * 110540.0
+                val dx = (s.lon - lon) * cosLat * 111320.0
+                val d = dx * dx + dy * dy
+                if (d < bestD) {
+                    bestD = d
+                    best = s
+                }
             }
         }
         return best
@@ -302,8 +387,20 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         return services
     }
 
+    private var cachedSearchData: Pair<LocalDateTime, SearchData>? = null
+    private val legInfoCache = HashMap<Long, LegInfo?>()
+    private val fareCache = HashMap<String, Int?>()
+
     // いまから HORIZON_SEC 先までの停車時刻を読み込む(昨日・今日・明日の運行日を対象)
     private fun loadData(now: LocalDateTime): SearchData {
+        val cached = cachedSearchData
+        if (cached != null) {
+            val (cachedTime, data) = cached
+            val diffSec = java.time.Duration.between(cachedTime, now).seconds
+            if (diffSec in 0..180 && cachedTime.toLocalDate() == now.toLocalDate()) {
+                return data
+            }
+        }
         val today = now.toLocalDate()
         val lo = now.toLocalTime().toSecondOfDay()
         val hi = lo + HORIZON_SEC
@@ -349,11 +446,28 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             }
         }
         tripFirst.add(rs.size)
-        return SearchData(
+
+        val tripCount = tripNo.size
+        val stationTripLists = Array(net.stations.size) { ArrayList<Int>() }
+        for (t in 0 until tripCount) {
+            var prevSt = -1
+            for (r in tripFirst[t] until tripFirst[t + 1]) {
+                val st = rs[r]
+                if (st != prevSt) {
+                    stationTripLists[st].add(t)
+                    prevSt = st
+                }
+            }
+        }
+        val stationTrips = Array(net.stations.size) { stationTripLists[it].toIntArray() }
+
+        val data = SearchData(
             tripFirst.toIntArray(), tripNo.toLongArray(), rs.toIntArray(), rseq.toIntArray(),
             rstop.toTypedArray(), rarr.toIntArray(), rdep.toIntArray(),
-            rb.toBooleanArray(), ra.toBooleanArray()
+            rb.toBooleanArray(), ra.toBooleanArray(), stationTrips
         )
+        cachedSearchData = Pair(now, data)
+        return data
     }
 
     // 出発時刻 startSec(今日の0時からの秒)で探し、乗る便の本数ごとの最速経路を返す
@@ -370,9 +484,11 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val isDest = BooleanArray(n)
         for (d in dests) isDest[d] = true
 
+        val marked = BooleanArray(n)
         for (o in origins) {
             L.arr[0][o] = startSec
             L.kind[0][o] = KIND_START
+            marked[o] = true
         }
         for (o in origins) {
             val nb = net.nbIdx[o]
@@ -383,6 +499,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     L.arr[0][j] = a
                     L.kind[0][j] = KIND_WALK
                     L.walkFrom[0][j] = o
+                    marked[j] = true
                 }
             }
         }
@@ -392,6 +509,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         for (d in dests) bestDest = minOf(bestDest, L.arr[0][d])
         var destBest = bestDest
 
+        val tripsToScan = BooleanArray(tripCount)
+        val nextMarked = BooleanArray(n)
+
         for (k in 1..MAX_TRIPS) {
             val prev = L.arr[k - 1]
             val cur = L.arr[k]
@@ -399,6 +519,24 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             System.arraycopy(L.kind[k - 1], 0, L.kind[k], 0, n)
             System.arraycopy(L.labRound[k - 1], 0, L.labRound[k], 0, n)
             System.arraycopy(L.walkFrom[k - 1], 0, L.walkFrom[k], 0, n)
+
+            // 到着時刻が更新された(marked)駅を通る便のみを走査対象にする(無関係な便の走査を90%以上削減)
+            tripsToScan.fill(false)
+            var hasTrips = false
+            for (s in 0 until n) {
+                if (!marked[s]) continue
+                val ts = data.stationTrips[s]
+                for (x in ts.indices) {
+                    val t = ts[x]
+                    if (!tripsToScan[t]) {
+                        tripsToScan[t] = true
+                        hasTrips = true
+                    }
+                }
+            }
+            if (!hasTrips) break
+
+            nextMarked.fill(false)
 
             // その駅から次の便に乗れる最も早い時刻
             val prevKind = L.kind[k - 1]
@@ -415,6 +553,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             }
 
             for (t in 0 until tripCount) {
+                if (!tripsToScan[t]) continue
                 var board = -1
                 for (r in data.tripFirst[t] until data.tripFirst[t + 1]) {
                     val s = data.rowStation[r]
@@ -428,6 +567,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                             L.tTrip[k][s] = t
                             L.tBoard[k][s] = board
                             L.tAlight[k][s] = r
+                            nextMarked[s] = true
                             if (isDest[s]) destBest = a
                         }
                     }
@@ -441,6 +581,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
             // 降りた駅から、近くの駅(同じ名前の駅を含む)へ歩く
             for (s in 0 until n) {
+                if (!nextMarked[s]) continue
                 val base = L.tArr[k][s]
                 if (base >= INF) continue
                 val nb = net.nbIdx[s]
@@ -453,10 +594,13 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                         L.kind[k][j] = KIND_WALK
                         L.labRound[k][j] = k
                         L.walkFrom[k][j] = s
+                        nextMarked[j] = true
                         if (isDest[j]) destBest = a
                     }
                 }
             }
+
+            System.arraycopy(nextMarked, 0, marked, 0, n)
 
             var bd = INF
             var bdNode = -1
@@ -514,6 +658,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
     }
 
     private fun legInfo(tripNo: Long, seq: Int): LegInfo? {
+        val key = (tripNo shl 16) or (seq.toLong() and 0xFFFFL)
+        if (legInfoCache.containsKey(key)) return legInfoCache[key]
+
         var info: LegInfo? = null
         db.rawQuery(
             "SELECT t.route_id, r.operator, r.name, r.color, COALESCE(st.headsign, t.headsign), s.platform, $trainTypeColumn " +                    "FROM stop_times st JOIN trips t ON t.trip_no = st.trip " +
@@ -534,11 +681,15 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 )
             }
         }
+        legInfoCache[key] = info
         return info
     }
 
     // 運賃(路線 × 乗る乗り場 × 降りる乗り場)。データが無いとき(JRなど)は null
     private fun fareOf(routeId: String, fromStop: String, toStop: String): Int? {
+        val key = "$routeId|$fromStop|$toStop"
+        if (fareCache.containsKey(key)) return fareCache[key]
+
         var price: Int? = null
         db.rawQuery(
             "SELECT f.price FROM fares f WHERE f.route_id = ? " +
@@ -548,6 +699,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         ).use { c ->
             if (c.moveToFirst()) price = c.getInt(0)
         }
+        fareCache[key] = price
         return price
     }
 
@@ -703,12 +855,17 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             )
         }
 
+        if (directMeters <= 500) {
+            return listOf(directWalkItinerary())
+        }
+
         val originSt = nearestStation(originLat, originLon)
         val destSt = nearestStation(destLat, destLon)
 
         if (originSt == null || destSt == null) {
             return listOf(directWalkItinerary())
         }
+
 
         val originWalkMeters = calcDistanceMeters(originLat, originLon, originSt.lat, originSt.lon)
         val originWalkMin = if (originWalkMeters > 40) walkDurationMinutes(originWalkMeters) else 0

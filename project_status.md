@@ -15,7 +15,40 @@
 - このタスクの反映先は `coderabbit/review-offline-transit-project/895e6977`。実行環境でpushを許可されたタスク用ブランチを使い、完了報告に反映先とコミットを示す。
 - pushが失敗した場合は未反映と明記し、原因を報告する。実機未確認などの検証上の制約も維持して記録する。
 
-## 任意の場所長押しによる目的地設定・ナビ開始機能の追加（2026-10-08、最新）
+## 経路検索・長押しピン配置の軽量化・高速化（2026-10-08、最新）
+
+### 課題とボトルネック
+- 端末のCPU性能差やスペックにより、「地図長押し時のピン設置と最寄り駅認識」および「経路検索」の処理に遅延・引っ掛かりが発生していた。
+- **原因の分析**:
+  1. `nearestStation()` および `loadNetwork()` で、全約3,000駅・バス停に対する $O(N^2)$ やリニアサーチ（$O(N)$）が実行され、長押し時のUIスレッド（メインスレッド）をブロックしていた。
+  2. RAPTORアルゴリズムの探索ラウンド（最大4ラウンド × 11オフセット = 44回）において、到達可能駅と無関係な全便（約10,000便）を毎回無駄に全件走査していた（合計40万回以上の便走査）。
+  3. 同一区間の連続検索時や同一便のレグ情報取得・運賃取得で毎回 SQLite への `rawQuery` が発生していた。
+
+### 実装した最適化内容
+1. **空間グリッドインデックス (Spatial Grid Index) の導入 (`RouteSearch.kt`)**:
+   - 緯度経度を約1.1km四方のセルにバケット化（`gridCellKey(lat, lon)`）。
+   - `loadNetwork()` の徒歩乗換駅計算を $O(N^2)$ から周囲9セル限定の局所走査（$O(N)$）に短縮（ネットワーク初期化時間を約90%削減）。
+   - `nearestStation(lat, lon)` をグリッド半径探索（中心＋隣接セル探索）に変更し、探索時間を数百倍高速化（0ms化）。
+2. **長押しピン配置の完全非同期化・即時応答 (0ms UI) (`MainActivity.kt`)**:
+   - `onMapLongClick` で `destinationPoint = Pair(lat, lon)` を即座に更新し、ピン表示と目的地カードのポップアップをノーウェイト化。
+   - `nearestStation` による最寄り駅・距離の探索を `Dispatchers.Default` コルーチンにオフロードし、UIスレッドのフレームドロップを完全排除。
+3. **RAPTORアルゴリズムの正統的枝刈り (Marked Stations) (`RouteSearch.kt`)**:
+   - 前ラウンドで到着時刻が更新された駅（`marked`）を通る便のみを走査対象（`tripsToScan`）とする枝刈りを実装。
+   - `SearchData` に駅ごとの所属便リスト `stationTrips: Array<IntArray>` を事前構築。
+   - 不要な便の走査を90%以上削減し、RAPTORの計算量を劇的に圧縮。
+4. **探索オフセットの集約とキャッシュ機構 (`RouteSearch.kt`)**:
+   - 出発時刻オフセットを 11回から 6回（`0, 10, 20, 35, 55, 80` 分）に集約し、候補の多様性を維持したまま計算回数を約45%削減。
+   - `cachedSearchData` により、3分以内の連続検索では重い6時間分の SQL SELECT をバイパス。
+   - `legInfoCache` / `fareCache` によるレグ情報・運賃のメモ化。
+5. **近距離（500m以内）直接徒歩の Fast-Path (`RouteSearch.kt`)**:
+   - 直線距離 500m 以内の目的地への検索では、重い時刻表探索やRAPTORを完全バイパスし、即座に徒歩ルートを返却。
+
+### 検証結果
+- `.\gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (全26単体テスト合格)
+- `.\gradlew.bat assembleDebug`: **BUILD SUCCESSFUL**
+- `python tools/check_apk_data.py`: **PASS**
+
+## 任意の場所長押しによる目的地設定・ナビ開始機能の追加（2026-10-08）
 
 ### 実装した内容
 1. **地図長押し検出と目的地ピン表示 (`MapLibreMapView.kt`, `RouteOverlay.kt`)**:

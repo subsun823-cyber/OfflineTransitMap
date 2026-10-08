@@ -387,9 +387,18 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         selectedStation = null
                         selectedItinerary = null
                         destinationPoint = Pair(lat, lon)
-                        val nearest = searcher?.nearestStation(lat, lon)
-                        destinationStation = nearest
-                        destinationDistance = if (nearest != null) calcDistanceMeters(lat, lon, nearest.lat, nearest.lon) else null
+                        destinationStation = null
+                        destinationDistance = null
+                        scope.launch(Dispatchers.Default) {
+                            val nearest = searcher?.nearestStation(lat, lon)
+                            val dist = if (nearest != null) calcDistanceMeters(lat, lon, nearest.lat, nearest.lon) else null
+                            withContext(Dispatchers.Main) {
+                                if (destinationPoint == Pair(lat, lon)) {
+                                    destinationStation = nearest
+                                    destinationDistance = dist
+                                }
+                            }
+                        }
                     }
                 }
             )
