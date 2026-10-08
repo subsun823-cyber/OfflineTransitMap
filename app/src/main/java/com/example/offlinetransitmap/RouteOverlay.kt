@@ -41,3 +41,10 @@ fun Itinerary.toOverlay(): RouteOverlay {
         .put("features", features)
     return RouteOverlay(collection.toString(), points)
 }
+
+// 地図に目的地マーク(ピン)を出すGeoJSON
+fun destinationGeoJson(point: Pair<Double, Double>?, name: String = "目的地"): String {
+    if (point == null) return EMPTY_ROUTE_JSON
+    val cleanName = name.replace("\"", "")
+    return "{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\",\"properties\":{\"name\":\"$cleanName\"},\"geometry\":{\"type\":\"Point\",\"coordinates\":[${point.second},${point.first}]}}]}"
+}

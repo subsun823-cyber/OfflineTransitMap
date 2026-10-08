@@ -1,7 +1,7 @@
-# OfflineTransitMap — 現在の引き継ぎ状況
+   # OfflineTransitMap — 現在の引き継ぎ状況
 
 最終更新: 2026-10-08
-調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、京王バス追加 `bcde80da545876f5c072e78c478d1e1656fb3232`、Windows環境エラー・ビルド警告修正、小田急電鉄データ追加、小田急発車番線バグ修正。
+調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、京王バス追加 `bcde80da545876f5c072e78c478d1e1656fb3232`、Windows環境エラー・ビルド警告修正、小田急電鉄データ追加、小田急発車番線バグ修正、任意地点長押し目的地設定・ナビ開始。
 
 このファイルを今後の優先引き継ぎ資料とする。リポジトリには元の資料が存在しなかったため、ユーザー添付の `PROJECT_STATUS.md` を末尾に保存した。現在の確認結果はこの冒頭部分を優先する。末尾の実機確認済み表記は以前の確認履歴であり、今回の修正後の動作確認を意味しない。
 
@@ -15,7 +15,39 @@
 - このタスクの反映先は `coderabbit/review-offline-transit-project/895e6977`。実行環境でpushを許可されたタスク用ブランチを使い、完了報告に反映先とコミットを示す。
 - pushが失敗した場合は未反映と明記し、原因を報告する。実機未確認などの検証上の制約も維持して記録する。
 
-## 小田急電鉄の発車番線表示バグ修正（2026-10-08、最新）
+## 任意の場所長押しによる目的地設定・ナビ開始機能の追加（2026-10-08、最新）
+
+### 実装した内容
+1. **地図長押し検出と目的地ピン表示 (`MapLibreMapView.kt`, `RouteOverlay.kt`)**:
+   - `MapLibreMap.addOnMapLongClickListener` を登録し、地図上の任意座標の長押しを検出。
+   - スタイルに `destination` GeoJSONソースおよびマーカーレイヤー（`destination-circle-pulse`, `destination-circle`, `destination-name`）を追加。長押し地点に赤色のピン・サークルおよび「目的地」ラベルを鮮明に表示。
+   - 地図の別地点タップ時や戻る操作時に目的地選択を解除するハンドラーを整備。
+2. **ドア・ツー・ドア経路検索の実装 (`RouteSearch.kt`)**:
+   - `findRoutesBetweenCoordinates` を追加。現在地（出発地）から長押し地点（目的地）の座標をもとに、
+     - 出発地〜最寄り乗車駅への徒歩レグ（`fromName = "現在地"`, `walkMinutes`, `path`）
+     - 公共交通機関（電車・バス）の乗換レグ群
+     - 降車駅〜目的地への徒歩レグ（`toName = "目的地"`, `walkMinutes`, `path`）
+     を自動で結合した完全なドア・ツー・ドア経路（`Itinerary`）を生成。
+   - 近距離（2.5km以内）や公共交通機関が利用できない場合に対応する直接徒歩ルート生成ヘルパーを実装。
+   - 地球楕円体面近似による高速な距離計算 `calcDistanceMeters` および `walkDurationMinutes` を提供。
+3. **全行程徒歩ナビゲーション対応 (`Navigation.kt`)**:
+   - `NavigationService.evaluate()` を拡張し、電車やバスに乗らない全行程徒歩ルート（`busIdx.isEmpty()`）でも目的地への距離・方位矢印・点線案内・到着判定（50m以内）が正確に動作するように改修。
+4. **目的地案内カード UI (`DestinationCard.kt`, `MainActivity.kt`)**:
+   - 地図長押し時に画面下部に `DestinationCard` がポップアップ表示。
+   - 最寄り駅・バス停名、直線距離、徒歩所要時間を表示。
+   - **「ナビ開始」ボタン**: 現在地から最速ルートを即座に計算し、ターンバイターンのナビゲーション（フォアグラウンドサービス、通知、画面上オーバーレイ）を1タップで開始。
+   - **「ルート確認」ボタン**: 経路詳細パネル（`RouteDetailPanel`）を表示し、地図上のルートラインやタイムライン、運賃等を確認可能。
+5. **テストの追加と検証 (`DestinationNavigationTest.kt`)**:
+   - 距離計算、徒歩分数計算、目的地GeoJSON生成、直接徒歩Itinerary生成の単体テストを追加。
+
+### 検証結果
+- `.\gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (全26単体テスト合格)
+- `.\gradlew.bat compileDebugAndroidTestKotlin`: **BUILD SUCCESSFUL**
+- `.\gradlew.bat assembleDebug`: **BUILD SUCCESSFUL**
+- `python tools/check_apk_data.py`: **PASS**
+- `python -m unittest discover tools/tests`: **Ran 23 tests, OK**
+
+## 小田急電鉄の発車番線表示バグ修正（2026-10-08）
 
 ### 発生していた問題
 - 小田急電鉄の各駅における時刻表・発車案内画面（出発シート等）で、発車番線が「OH01番線」「OE03番線」のように駅ナンバリング（stationCode）で表示されていた。

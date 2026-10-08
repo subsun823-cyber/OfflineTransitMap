@@ -44,10 +44,12 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toArgb
@@ -154,6 +156,13 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     // 結果から選ばれた経路(地図に線を出し、詳細パネルを表示する)
     var selectedItinerary by remember { mutableStateOf<Itinerary?>(null) }
 
+    // 任意の場所を長押ししたときの目的地
+    var destinationPoint by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var destinationStation by remember { mutableStateOf<StationEntry?>(null) }
+    var destinationDistance by remember { mutableStateOf<Int?>(null) }
+    var isSearchingForDestination by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
     // ナビ中の経路・案内・地図の向き
     val navItin = if (NavigationState.active) NavigationState.itinerary else null
     val navMode = navItin != null
@@ -176,6 +185,13 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     BackHandler(enabled = selectedItinerary != null && !navMode && !showSettings) {
         selectedItinerary = null
         showSearch = true
+    }
+
+    // 目的地カードが開いているときの戻る操作
+    BackHandler(enabled = destinationPoint != null && selectedItinerary == null && !navMode && !showSettings) {
+        destinationPoint = null
+        destinationStation = null
+        destinationDistance = null
     }
 
     BackHandler(enabled = showSettings) { showSettings = false }
@@ -230,6 +246,48 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         }
     }
 
+    val handleDestinationSearch: (startNavImmediately: Boolean) -> Unit = { startNavImmediately ->
+        val dest = destinationPoint
+        if (dest != null) {
+            if (searcher == null) {
+                Toast.makeText(context, "経路検索には、新しい timetable.db が必要です", Toast.LENGTH_LONG).show()
+            } else if (!hasLocationPermission) {
+                permissionLauncher.launch(locationPermissions)
+                Toast.makeText(context, "現在地を取得するため、位置情報を許可してください", Toast.LENGTH_SHORT).show()
+            } else {
+                val curLoc = lastKnownLatLon(context)
+                if (curLoc == null) {
+                    Toast.makeText(context, "現在地を取得できませんでした。GPSが有効か確認してください", Toast.LENGTH_LONG).show()
+                } else {
+                    isSearchingForDestination = true
+                    scope.launch {
+                        val candidates = withContext(Dispatchers.Default) {
+                            searcher.findRoutesBetweenCoordinates(
+                                originLat = curLoc.first,
+                                originLon = curLoc.second,
+                                destLat = dest.first,
+                                destLon = dest.second,
+                                now = LocalDateTime.now(),
+                                destName = destinationStation?.name?.let { "$it 付近" } ?: "目的地"
+                            )
+                        }
+                        isSearchingForDestination = false
+                        val bestItin = searcher.rank(candidates, SortMode.FASTEST).firstOrNull() ?: candidates.firstOrNull()
+                        if (bestItin != null) {
+                            if (startNavImmediately) {
+                                startNavigation(bestItin)
+                            } else {
+                                selectedItinerary = bestItin
+                            }
+                        } else {
+                            Toast.makeText(context, "目的地への経路が見つかりませんでした", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // 起動時に、まだ許可がなければ確認ダイアログを出す
     LaunchedEffect(Unit) {
         if (!hasLocationPermission) {
@@ -252,7 +310,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             }
         },
         floatingActionButton = {
-            if (!showSettings && !showSearch && selectedItinerary == null && !navMode) {
+            if (!showSettings && !showSearch && selectedItinerary == null && !navMode && destinationPoint == null) {
                 Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -306,10 +364,53 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 routeOverlay = routeOverlay,
                 followMode = navMode,
                 navLineJson = navLine,
+                destinationPoint = destinationPoint,
                 onFollowLostChange = { followLost = it },
                 onBearingChange = { mapBearing = it },
-                onStationClick = { id, name -> selectedStation = SelectedStation(id, name) }
+                onStationClick = { id, name ->
+                    if (!navMode) {
+                        destinationPoint = null
+                        destinationStation = null
+                        destinationDistance = null
+                        selectedStation = SelectedStation(id, name)
+                    }
+                },
+                onMapClick = { _, _ ->
+                    if (!navMode && selectedItinerary == null && destinationPoint != null) {
+                        destinationPoint = null
+                        destinationStation = null
+                        destinationDistance = null
+                    }
+                },
+                onMapLongClick = { lat, lon ->
+                    if (!navMode && !showSettings && !showSearch) {
+                        selectedStation = null
+                        selectedItinerary = null
+                        destinationPoint = Pair(lat, lon)
+                        val nearest = searcher?.nearestStation(lat, lon)
+                        destinationStation = nearest
+                        destinationDistance = if (nearest != null) calcDistanceMeters(lat, lon, nearest.lat, nearest.lon) else null
+                    }
+                }
             )
+            destinationPoint?.let { point ->
+                if (!navMode && !showSettings && !showSearch && selectedItinerary == null) {
+                    DestinationCard(
+                        point = point,
+                        nearestStation = destinationStation,
+                        nearestDistanceMeters = destinationDistance,
+                        isSearching = isSearchingForDestination,
+                        onStartNavigation = { handleDestinationSearch(true) },
+                        onViewRoute = { handleDestinationSearch(false) },
+                        onClose = {
+                            destinationPoint = null
+                            destinationStation = null
+                            destinationDistance = null
+                        },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
+            }
             if (showSearch && searcher != null && !navMode && !showSettings) {
                 RouteSearchScreen(
                     state = searchState,
@@ -334,7 +435,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         modifier = Modifier.align(Alignment.BottomCenter),
                         navigating = NavigationState.active && NavigationState.itinerary === itin,
                         onStartNavigation = { startNavigation(itin) },
-                        onStopNavigation = { NavigationController.stop(context) }
+                        onStopNavigation = {
+                            NavigationController.stop(context)
+                            destinationPoint = null
+                            destinationStation = null
+                            destinationDistance = null
+                        }
                     )
                 }
             }
@@ -345,7 +451,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     mapBearing = mapBearing,
                     followLost = followLost,
                     onRecenter = { recenterRequest++ },
-                    onStop = { NavigationController.stop(context) }
+                    onStop = {
+                        NavigationController.stop(context)
+                        destinationPoint = null
+                        destinationStation = null
+                        destinationDistance = null
+                    }
                 )
             }
             if (showSettings) {

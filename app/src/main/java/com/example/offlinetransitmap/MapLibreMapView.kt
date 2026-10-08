@@ -10,6 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -55,7 +56,8 @@ private fun offlineStyleJson(
     "protomaps": { "type": "vector", "url": "pmtiles://file://PMTILES_PATH", "attribution": "© OpenStreetMap contributors" },
     "stations": { "type": "geojson", "data": STATIONS_DATA },
     "route": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
-    "nav-line": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
+    "nav-line": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },
+    "destination": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } }
   },
   "layers": [
     {"id": "background", "type": "background", "paint": {"background-color": "#f1efe9"}},
@@ -83,6 +85,9 @@ private fun offlineStyleJson(
     {"id": "route-bus", "type": "line", "source": "route", "filter": ["==", ["get", "walk"], false], "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": ["get", "color"], "line-width": 5.5}},
     {"id": "route-walk", "type": "line", "source": "route", "filter": ["==", ["get", "walk"], true], "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#1a73e8", "line-width": 6, "line-dasharray": [0.01, 2]}},
     {"id": "nav-line", "type": "line", "source": "nav-line", "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#1a73e8", "line-width": 6, "line-dasharray": [0.01, 2]}},
+    {"id": "destination-circle-pulse", "type": "circle", "source": "destination", "paint": {"circle-radius": 14, "circle-color": "#ea4335", "circle-opacity": 0.25}},
+    {"id": "destination-circle", "type": "circle", "source": "destination", "paint": {"circle-radius": 7, "circle-color": "#ea4335", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2.5}},
+    {"id": "destination-name", "type": "symbol", "source": "destination", "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 12, "text-max-width": 8, "text-anchor": "top", "text-offset": [0, 0.9]}, "paint": {"text-color": "#c5221f", "text-halo-color": "#ffffff", "text-halo-width": 2.0}},
     {"id": "water-name", "type": "symbol", "source": "protomaps", "source-layer": "water", "minzoom": 10, "filter": ["all", ["==", "${'$'}type", "Point"], ["has", "name"]], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 12, "text-max-width": 8}, "paint": {"text-color": "#4a7fb0", "text-halo-color": "#ffffff", "text-halo-width": 1.2}},
     {"id": "roads-name", "type": "symbol", "source": "protomaps", "source-layer": "roads", "minzoom": 14, "filter": ["all", ["==", "${'$'}type", "LineString"], ["has", "name"]], "layout": {"symbol-placement": "line", "text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": ["interpolate", ["linear"], ["zoom"], 14, 10, 18, 13], "text-letter-spacing": 0.05, "symbol-spacing": 280}, "paint": {"text-color": "#5f6368", "text-halo-color": "#ffffff", "text-halo-width": 1.5}},
     {"id": "places", "type": "symbol", "source": "protomaps", "source-layer": "places", "minzoom": 8, "filter": ["all", ["==", "${'$'}type", "Point"], ["has", "name"]], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": ["interpolate", ["linear"], ["zoom"], 8, 12, 12, 14, 16, 16], "text-max-width": 8, "text-padding": 4}, "paint": {"text-color": "#3c4043", "text-halo-color": "#ffffff", "text-halo-width": 1.6}},
@@ -138,13 +143,20 @@ fun MapLibreMapView(
     routeOverlay: RouteOverlay? = null,
     followMode: Boolean = false,
     navLineJson: String? = null,
+    destinationPoint: Pair<Double, Double>? = null,
     onFollowLostChange: (Boolean) -> Unit = {},
     onBearingChange: (Double) -> Unit = {},
-    onStationClick: (id: String, name: String) -> Unit = { _, _ -> }
+    onStationClick: (id: String, name: String) -> Unit = { _, _ -> },
+    onMapClick: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+    onMapLongClick: (lat: Double, lon: Double) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     var mapState by remember { mutableStateOf<MapLibreMap?>(null) }
     var loadedStyle by remember { mutableStateOf<Style?>(null) }
+
+    val currentOnStationClick by rememberUpdatedState(onStationClick)
+    val currentOnMapClick by rememberUpdatedState(onMapClick)
+    val currentOnMapLongClick by rememberUpdatedState(onMapLongClick)
 
     val mapView = remember {
         MapLibre.getInstance(context)
@@ -161,7 +173,7 @@ fun MapLibreMapView(
                     .zoom(if (file.exists()) 9.5 else 11.0)
                     .build()
 
-                // 駅・バス停のマークをタップしたときの処理
+                // 駅・バス停のマークまたは地図をタップしたときの処理
                 map.addOnMapClickListener { latLng ->
                     val p = map.projection.toScreenLocation(latLng)
                     val area = RectF(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
@@ -169,9 +181,18 @@ fun MapLibreMapView(
                     val id = feature?.getStringProperty("id") ?: ""
                     val name = feature?.getStringProperty("name")
                     if (name != null) {
-                        onStationClick(id, name)
+                        currentOnStationClick(id, name)
                         true
-                    } else false
+                    } else {
+                        currentOnMapClick(latLng.latitude, latLng.longitude)
+                        false
+                    }
+                }
+
+                // 地図を長押ししたときの処理(目的地設定など)
+                map.addOnMapLongClickListener { latLng ->
+                    currentOnMapLongClick(latLng.latitude, latLng.longitude)
+                    true
                 }
             }
         }
@@ -180,6 +201,9 @@ fun MapLibreMapView(
     val appearance = remember(loadedStyle) { loadedStyle?.let { MapAppearance(it) } }
     LaunchedEffect(loadedStyle, stationsGeoJson) {
         loadedStyle?.getSourceAs<GeoJsonSource>("stations")?.setGeoJson(stationsGeoJson)
+    }
+    LaunchedEffect(loadedStyle, destinationPoint) {
+        loadedStyle?.getSourceAs<GeoJsonSource>("destination")?.setGeoJson(destinationGeoJson(destinationPoint))
     }
     LaunchedEffect(appearance, darkTheme, preferences.showPoiNames, preferences.showPoiIcons) {
         appearance?.apply(darkTheme, preferences)

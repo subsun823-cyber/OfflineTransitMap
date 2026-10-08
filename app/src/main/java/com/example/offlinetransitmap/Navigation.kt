@@ -319,11 +319,29 @@ class NavigationService : Service() {
         val legs = r.legs
         val now = LocalDateTime.now()
         val busIdx = legs.indices.filter { !legs[it].isWalk }
+        val remaining = minutesCeil(Duration.between(now, r.arrival).seconds)
+
         if (busIdx.isEmpty()) {
-            stopSelf()
+            val destPoint = legs.lastOrNull()?.path?.lastOrNull()
+            val destName = legs.lastOrNull()?.toName ?: "目的地"
+            if (destPoint == null) {
+                stopSelf()
+                return
+            }
+            val d = distanceTo(destPoint)
+            if ((d != null && d <= ARRIVE_WALK_M) || now.isAfter(r.arrival.plusMinutes(10))) {
+                alert("arrive", "到着しました", "${destName}に到着しました")
+                stopSelf()
+                return
+            }
+            val totalWalkMin = legs.sumOf { it.walkMinutes }
+            NavigationState.guidance = Guidance(
+                GuidanceKind.WALK, "${destName}へ", "徒歩で向かう · 約${totalWalkMin}分",
+                d, destPoint.first, destPoint.second, "目的地に到着", remaining, r.arrival
+            )
+            showStatus("徒歩で${destName}へ", "目的地まで${distShort(d)}")
             return
         }
-        val remaining = minutesCeil(Duration.between(now, r.arrival).seconds)
 
         // 終わったバス区間を判定し、いま乗る(乗っている)区間を決める
         var cur = -1

@@ -63,6 +63,15 @@ private const val HORIZON_SEC = 6 * 3600        // いまから6時間先まで�
 private const val EXTRA_MAX_MIN = 120L          // 最速より2時間以上遅い経路は出さない
 private val RUN_OFFSETS_MIN = intArrayOf(0, 5, 10, 15, 20, 30, 40, 50, 60, 75, 90)
 
+fun calcDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Int {
+    val dy = (lat2 - lat1) * 110540.0
+    val dx = (lon2 - lon1) * cos(Math.toRadians(lat1)) * 111320.0
+    return hypot(dx, dy).toInt()
+}
+
+fun walkDurationMinutes(meters: Int): Int =
+    (meters * 0.9375 / 60.0).roundToInt().coerceAtLeast(1)
+
 private fun walkSec(meters: Int): Int = (meters * 0.9375).toInt()
 
 private fun toHiragana(s: String): String {
@@ -215,11 +224,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         return Network(list, index, members, nbIdx, nbMeters)
     }
 
-    private fun distanceMeters(a: StationEntry, b: StationEntry): Int {
-        val dy = (b.lat - a.lat) * 110540.0
-        val dx = (b.lon - a.lon) * cos(Math.toRadians(a.lat)) * 111320.0
-        return hypot(dx, dy).toInt()
-    }
+    private fun distanceMeters(a: StationEntry, b: StationEntry): Int =
+        calcDistanceMeters(a.lat, a.lon, b.lat, b.lon)
 
     // 時刻表の有効期間(開始日, 終了日)
     fun validityRange(): Pair<LocalDate, LocalDate>? {
@@ -660,5 +666,123 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             .map { group -> group.minWithOrNull(comparator)!! }
             .sortedWith(comparator)
             .take(3)
+    }
+
+    // 任意の座標（現在地など）から任意の座標（長押し地点など）への経路を探す。
+    // 出発地〜乗車駅、降車駅〜目的地への徒歩区間を自動で付加する。
+    fun findRoutesBetweenCoordinates(
+        originLat: Double,
+        originLon: Double,
+        destLat: Double,
+        destLon: Double,
+        now: LocalDateTime,
+        destName: String = "目的地"
+    ): List<Itinerary> {
+        val directMeters = calcDistanceMeters(originLat, originLon, destLat, destLon)
+        val directWalkMin = walkDurationMinutes(directMeters)
+
+        fun directWalkItinerary(): Itinerary {
+            val dep = now
+            val arr = now.plusMinutes(directWalkMin.toLong())
+            val walkLeg = RouteLeg(
+                isWalk = true,
+                fromName = "現在地",
+                toName = destName,
+                walkMinutes = directWalkMin,
+                walkMeters = directMeters,
+                path = listOf(Pair(originLat, originLon), Pair(destLat, destLon))
+            )
+            return Itinerary(
+                legs = listOf(walkLeg),
+                departure = dep,
+                arrival = arr,
+                transfers = 0,
+                fare = 0,
+                knownFare = 0,
+                routeKey = "walk_direct"
+            )
+        }
+
+        val originSt = nearestStation(originLat, originLon)
+        val destSt = nearestStation(destLat, destLon)
+
+        if (originSt == null || destSt == null) {
+            return listOf(directWalkItinerary())
+        }
+
+        val originWalkMeters = calcDistanceMeters(originLat, originLon, originSt.lat, originSt.lon)
+        val originWalkMin = if (originWalkMeters > 40) walkDurationMinutes(originWalkMeters) else 0
+
+        val destWalkMeters = calcDistanceMeters(destSt.lat, destSt.lon, destLat, destLon)
+        val destWalkMin = if (destWalkMeters > 40) walkDurationMinutes(destWalkMeters) else 0
+
+        val transitSearchTime = now.plusMinutes(originWalkMin.toLong())
+
+        val transitRoutes = if (originSt.group != destSt.group) {
+            findRoutes(originSt.id, destSt.id, transitSearchTime)
+        } else {
+            emptyList()
+        }
+
+        val results = ArrayList<Itinerary>()
+
+        for (itin in transitRoutes) {
+            val newLegs = ArrayList<RouteLeg>()
+
+            // 1. 出発地から最初の乗車駅への徒歩レグ（40m以上離れている場合）
+            val firstLeg = itin.legs.firstOrNull()
+            if (originWalkMeters > 40 && firstLeg != null) {
+                val boardStationName = firstLeg.fromName
+                val boardCoord = firstLeg.path.firstOrNull() ?: Pair(originSt.lat, originSt.lon)
+                newLegs.add(
+                    RouteLeg(
+                        isWalk = true,
+                        fromName = "現在地",
+                        toName = boardStationName,
+                        walkMinutes = originWalkMin,
+                        walkMeters = originWalkMeters,
+                        path = listOf(Pair(originLat, originLon), boardCoord)
+                    )
+                )
+            }
+
+            // 2. 公共交通のレグ群
+            newLegs.addAll(itin.legs)
+
+            // 3. 最後の降車駅から目的地への徒歩レグ（40m以上離れている場合）
+            val lastLeg = itin.legs.lastOrNull()
+            if (destWalkMeters > 40 && lastLeg != null) {
+                val alightStationName = lastLeg.toName
+                val alightCoord = lastLeg.path.lastOrNull() ?: Pair(destSt.lat, destSt.lon)
+                newLegs.add(
+                    RouteLeg(
+                        isWalk = true,
+                        fromName = alightStationName,
+                        toName = destName,
+                        walkMinutes = destWalkMin,
+                        walkMeters = destWalkMeters,
+                        path = listOf(alightCoord, Pair(destLat, destLon))
+                    )
+                )
+            }
+
+            val dep = if (originWalkMin > 0) itin.departure.minusMinutes(originWalkMin.toLong()) else itin.departure
+            val arr = if (destWalkMin > 0) itin.arrival.plusMinutes(destWalkMin.toLong()) else itin.arrival
+
+            results.add(
+                itin.copy(
+                    legs = newLegs,
+                    departure = dep,
+                    arrival = arr
+                )
+            )
+        }
+
+        // 徒歩で移動可能な距離（2.5km以内）、または公共交通の経路が見つからなかった場合は徒歩ルートも追加
+        if (results.isEmpty() || directMeters <= 2500) {
+            results.add(directWalkItinerary())
+        }
+
+        return results
     }
 }
