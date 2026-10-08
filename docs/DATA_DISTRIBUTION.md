@@ -10,6 +10,7 @@
 | timetable.db | 50,499,584 bytes | 受領したJR／西東京バス等のv5 DB。Git対象外 |
 | keio.bundle | 約300KB | 京王電鉄の部分データ。Gitに同梱 |
 | keio-bus.bundle | 約12MiB（展開後約75MiB） | 受領GTFSから生成。Git対象外 |
+| odakyu.bundle | 約1.3MiB（展開後約10MiB） | 受領ODPTデータから生成。Gitに同梱 |
 
 APKは約250MiBです。初回・更新時はAPK、展開済みファイル、統合中のDBコピーが必要なので、端末に1GB程度の空き容量を確保してください。実際の必要量は既存DBの大きさにも依存します。地図の範囲は東経138.94〜139.92・北緯35.50〜35.90で、全国地図ではありません。
 
@@ -20,6 +21,7 @@ APKは約250MiBです。初回・更新時はAPK、展開済みファイル、�
 大容量データはGitに入れないため、**ビルド担当者が一度だけ**元ファイルを用意して以下を実行します。Python 3の標準ライブラリだけで生成できます。パスは保存場所に合わせてください。
 
 ```sh
+python3 tools/build_odakyu_data.py
 python3 tools/build_keio_bus_data.py /path/to/keio-bus-gtfs.zip
 python3 tools/configure_data_files.py \
   --timetable /path/to/timetable.db --map /path/to/tokyo.pmtiles

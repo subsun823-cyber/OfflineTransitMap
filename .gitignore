@@ -23,3 +23,5 @@ __pycache__/
 /app/src/main/assets/bootstrap/keio-bus.bundle
 *.patch
 *.zip
+inputs/
+scratch/

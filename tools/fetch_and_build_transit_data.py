@@ -216,9 +216,11 @@ def build_integrated_timetable(
     keio_bus_version: str,
     keio_rail_seed_path: Path | None,
     keio_rail_version: str,
-    output_db_path: Path
+    output_db_path: Path,
+    odakyu_seed_path: Path | None = None,
+    odakyu_version: str = ""
 ):
-    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train and Keio bus seeds."""
+    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train, Keio bus, and Odakyu seeds."""
     output_db_path.parent.mkdir(parents=True, exist_ok=True)
     if output_db_path.resolve() != base_timetable.resolve():
         shutil.copyfile(base_timetable, output_db_path)
@@ -249,7 +251,20 @@ def build_integrated_timetable(
     else:
         print("Notice: Keio Bus seed not provided; keeping existing bus records.")
 
-    # 3. Integrity & summary
+    # 3. Merge Odakyu Rail if seed available
+    if odakyu_seed_path and odakyu_seed_path.exists():
+        print(f"Merging Odakyu Rail seed into {output_db_path}...")
+        merge_seed_into_db(
+            output_db_path,
+            odakyu_seed_path,
+            prefix="ODPT_ODAKYU:",
+            version=odakyu_version,
+            version_key="odakyu.version"
+        )
+    else:
+        print("Notice: Odakyu Rail seed not provided; keeping existing Odakyu records if present.")
+
+    # 4. Integrity & summary
     conn = sqlite3.connect(str(output_db_path))
     try:
         check = conn.execute("PRAGMA integrity_check").fetchone()[0]
@@ -303,7 +318,7 @@ def generate_manifest(
         "files": [
             {
                 "id": "timetable",
-                "name": "統合時刻表データ（JR東日本・京王電鉄・京王バス・西東京バス）",
+                "name": "統合時刻表データ（JR東日本・京王電鉄・京王バス・西東京バス・小田急電鉄）",
                 "filename": db_gz_path.name,
                 "url": f"{download_url_base.rstrip('/')}/{db_gz_path.name}",
                 "compressed": "gzip",
@@ -335,6 +350,8 @@ def main():
                         help='Pre-built Keio Bus bundle (if GTFS zip not specified)')
     parser.add_argument('--keio-rail-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/keio.bundle',
                         help='Keio Rail bundle')
+    parser.add_argument('--odakyu-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/odakyu.bundle',
+                        help='Odakyu Rail bundle')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build/transit-dist',
                         help='Output directory for generated release artifacts')
     parser.add_argument('--download-url-base', type=str,
@@ -407,7 +424,23 @@ def main():
         print("Notice: No Keio Rail bundle found; existing rail records in base DB will be retained.")
         keio_rail_seed_file = None
 
-    # 4. Build integrated DB
+    # 4. Resolve Odakyu Rail seed
+    odakyu_rail_seed_file = args.output_dir / "odakyu-rail-seed.db"
+    odakyu_version = ""
+    if args.odakyu_bundle and args.odakyu_bundle.exists():
+        raw_odakyu = gzip.decompress(args.odakyu_bundle.read_bytes())
+        odakyu_rail_seed_file.write_bytes(raw_odakyu)
+        odakyu_info_path = ROOT / 'app/src/main/assets/bootstrap/odakyu-info.json'
+        if odakyu_info_path.exists():
+            odakyu_info = json.loads(odakyu_info_path.read_text(encoding='utf-8'))
+            odakyu_version = odakyu_info.get('sha256', '')
+        else:
+            odakyu_version = hashlib.sha256(raw_odakyu).hexdigest()
+    else:
+        print("Notice: No Odakyu Rail bundle found; existing records in base DB will be retained.")
+        odakyu_rail_seed_file = None
+
+    # 5. Build integrated DB
     output_db = args.output_dir / "timetable.db"
     print(f"Integrating into {output_db}...")
     stats = build_integrated_timetable(
@@ -416,6 +449,8 @@ def main():
         keio_bus_version=bus_version,
         keio_rail_seed_path=keio_rail_seed_file,
         keio_rail_version=rail_version,
+        odakyu_seed_path=odakyu_rail_seed_file,
+        odakyu_version=odakyu_version,
         output_db_path=output_db
     )
     print(f"Integrated DB ready: {stats['trips']} trips, validity {stats['valid_from']}..{stats['valid_to']}")

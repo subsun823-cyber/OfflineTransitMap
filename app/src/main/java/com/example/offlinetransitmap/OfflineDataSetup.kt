@@ -85,10 +85,10 @@ internal object OfflineDataSetup {
                     DataFileIO.commit(part, target)
                 } finally { part.delete() }
             }
-            progress("京王の駅・バス停・時刻表を準備中…")
+            progress("京王・小田急の駅・バス停・時刻表を準備中…")
             val target = targets.getValue("timetable")
             if (target.exists() && target.length() > 0) KeioDatabase.validate(target)
-            for ((assetName, prefix) in listOf("keio" to "ODPT_KEIO:", "keio-bus" to KeioDatabase.BUS_PREFIX)) {
+            for ((assetName, prefix) in listOf("keio" to "ODPT_KEIO:", "keio-bus" to KeioDatabase.BUS_PREFIX, "odakyu" to KeioDatabase.ODAKYU_PREFIX)) {
                 val info = JSONObject(context.assets.open("bootstrap/$assetName-info.json").bufferedReader().use { it.readText() })
                 val version = info.getString("sha256")
                 if (!target.exists() || target.length() == 0L || KeioDatabase.version(target, "$assetName.version") != version) {
@@ -116,7 +116,7 @@ internal object OfflineDataSetup {
             val map = targets.getValue("map")
             if (map.isFile) validateMap(map) else warnings.add("地図データが未準備です。配布元が設定されるまで、背景地図なしで駅を表示します。")
             // データの範囲を端末ごとに確認可能にする。
-            if (KeioDatabase.isBootstrapOnly(target)) warnings.add("この端末には京王電鉄・京王バスのみ収録されています。JR・西東京バス入り時刻表の配布設定が必要です。")
+            if (KeioDatabase.isBootstrapOnly(target)) warnings.add("この端末には京王・小田急のみ収録されています。JR・西東京バス入り時刻表の配布設定が必要です。")
             warnings
         }
     }

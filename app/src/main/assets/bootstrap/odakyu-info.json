@@ -1,0 +1,15 @@
+{
+  "operator": "小田急電鉄",
+  "railways": 3,
+  "stations": 72,
+  "rawDepartureEvents": 40351,
+  "trips": 4475,
+  "stopTimesRows": 43929,
+  "calendarStart": "2026-03-14",
+  "calendarEnd": "2027-12-31",
+  "size": 10383360,
+  "sha256": "7a6a341145145a0e4ef0ebe5b440f7a61f56410659724e2617da8640d9af6bc8",
+  "compressedSize": 1289349,
+  "bundleSha256": "7b75a1bfdb759eedde42729c63ab63f46147624ac493ba76f612f2b8ae0a2ac6",
+  "note": "小田急電鉄：全線（小田原線・江ノ島線・多摩線 72駅）の全発車時刻（40351件、4475便）を収録。運賃データは未提供のため0円または未表示となります。特急ロマンスカーは別途特急券が必要です。祝日ダイヤ対応（2027年末まで）。"
+}

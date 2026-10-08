@@ -1,7 +1,7 @@
 # OfflineTransitMap — 現在の引き継ぎ状況
 
-最終更新: 2026-10-07
-調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、京王バス追加 `bcde80da545876f5c072e78c478d1e1656fb3232`、今回のWindows環境エラー・ビルド警告修正。
+最終更新: 2026-10-08
+調査対象: 初回調査 `a0c7ea83c4dd4cb52e6414396c1db8d1da286ccf`、時刻表修正 `eedc9533bd395ce834df79bc54822464fae6575f`、京王バス追加 `bcde80da545876f5c072e78c478d1e1656fb3232`、Windows環境エラー・ビルド警告修正、小田急電鉄データ追加。
 
 このファイルを今後の優先引き継ぎ資料とする。リポジトリには元の資料が存在しなかったため、ユーザー添付の `PROJECT_STATUS.md` を末尾に保存した。現在の確認結果はこの冒頭部分を優先する。末尾の実機確認済み表記は以前の確認履歴であり、今回の修正後の動作確認を意味しない。
 
@@ -15,7 +15,36 @@
 - このタスクの反映先は `coderabbit/review-offline-transit-project/895e6977`。実行環境でpushを許可されたタスク用ブランチを使い、完了報告に反映先とコミットを示す。
 - pushが失敗した場合は未反映と明記し、原因を報告する。実機未確認などの検証上の制約も維持して記録する。
 
-## GTFS定期自動更新・GitHub Actions配信パイプラインの実装（2026-10-07、最新）
+## 小田急電鉄データの追加（2026-10-08、最新）
+
+### 実装した内容
+1. **小田急電鉄データ取り込みツールの実装・最適化 (`tools/build_odakyu_data.py`)**:
+   - ユーザー提供の ODPT データ（`odptRailway.json` 3路線、`odptStation.json` 72駅、`odptStationTimetable.json` 276時刻表・40,351発車時刻）および内閣府祝日CSVを解析。
+   - `bisect`（二分探索）による高速トリップ連鎖マッチングを導入し、40,351件の発車イベントを4,475便・43,929停車時刻に瞬時に統合（所要時間約0.5秒）。
+   - 小田原線（47駅）、江ノ島線（17駅）、多摩線（8駅）の各駅・急行・快速急行・準急・特急ロマンスカー（extra-fare別系統）を完全収録。
+   - 祝日ダイヤ対応（2027年末まで）および年末年始（12/30〜1/3）運休制御。
+   - 約1.3MBの確定gzip圧縮 bundle (`assets/bootstrap/odakyu.bundle`) およびメタデータ `odakyu-info.json` を生成。
+2. **Androidアプリ本体への小田急データ統合 (`KeioDatabase.kt`, `OfflineDataSetup.kt`, `TimetableDb.kt`)**:
+   - `KeioDatabase.kt` に `ODAKYU_PREFIX` (`ODPT_ODAKYU:`) を追加し、`merge`・`isBootstrapOnly`・`feeds` テーブル対応を拡張。
+   - `OfflineDataSetup.kt` の初回展開およびシードマージループに `odakyu` を追加。アプリ初回起動時・更新時に自動的に既存の `timetable.db` へ小田急データ（全線72駅、4,475便）を安全・原子的（アトミック）にマージ。
+   - `TimetableDb.kt` の `stationDataNote` で、小田急の駅タップ時に収録内容の案内メッセージを表示。
+   - `RailStationIcons.kt` により、新宿駅などのJR共用駅は自動的に横並びアイコン (`station-rail-both`)、小田急単独駅は列車アイコン (`station-rail`) で地図上に表示。
+3. **ビルド検証・テスト・配信パイプライン拡張 (`app/build.gradle.kts`, `check_apk_data.py`, `fetch_and_build_transit_data.py`)**:
+   - `app/build.gradle.kts` の `verifyOfflineAssets` タスクに `odakyu.bundle` と `odakyu-info.json` の存在・サイズ検証を追加。
+   - `tools/check_apk_data.py` でAPK内の小田急アセット同梱検証を追加。
+   - `tools/fetch_and_build_transit_data.py` に小田急シードのマージオプション `--odakyu-bundle` を追加し、統合DBビルド時（全65,341便）に小田急を含めるよう拡張。
+   - 小田急シード検証用単体テスト [`tools/tests/test_odakyu_data.py`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/tools/tests/test_odakyu_data.py)（5テスト）を追加。
+   - Androidテスト [`KeioDatabaseTest.kt`](file:///C:/Users/hayat/AndroidStudioProjects/OfflineTransitMap/app/src/androidTest/java/com/example/offlinetransitmap/KeioDatabaseTest.kt) に小田急データマージの検証（全65,341便、小田急6路線・72駅）を追加。
+
+### 検証結果
+- `python -m unittest tools/tests/test_odakyu_data.py`: **Ran 5 tests, OK**
+- `python -m unittest discover tools/tests`: **Ran 22 tests, OK**
+- `.\gradlew.bat testDebugUnitTest`: **BUILD SUCCESSFUL** (全JVM単体テスト成功)
+- `.\gradlew.bat compileDebugAndroidTestKotlin`: **BUILD SUCCESSFUL**
+- `.\gradlew.bat assembleDebug`: **BUILD SUCCESSFUL**
+- `python tools/check_apk_data.py`: **PASS**
+
+## GTFS定期自動更新・GitHub Actions配信パイプラインの実装（2026-10-07）
 
 ### 実装した内容
 1. **GitHub Actions 自動化ワークフロー (`.github/workflows/update-transit-data.yml`)**:

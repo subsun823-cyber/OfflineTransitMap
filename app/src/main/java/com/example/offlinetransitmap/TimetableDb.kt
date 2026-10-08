@@ -113,6 +113,12 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
                 if (c.moveToFirst()) notes.add(c.getString(0))
             }
         }
+        val odakyu = ids.any { it.startsWith("ODPT_ODAKYU:") } || db.rawQuery("SELECT 1 FROM station_operators WHERE station_id IN ($placeholders) AND operator='小田急電鉄' LIMIT 1", ids.toTypedArray()).use { it.moveToFirst() }
+        if (odakyu && hasTable("app_data")) {
+            db.rawQuery("SELECT value FROM app_data WHERE key='odakyu.note'", null).use { c ->
+                if (c.moveToFirst()) notes.add(c.getString(0))
+            }
+        }
         return notes.takeIf { it.isNotEmpty() }?.joinToString("\n")
     }
 

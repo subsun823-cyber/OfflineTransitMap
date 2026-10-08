@@ -60,6 +60,7 @@ class KeioDatabaseTest {
             assertFalse(KeioDatabase.isBootstrapOnly(file))
             assertTrue(File(directory,"maps/tokyo.pmtiles").isFile)
             assertNotNull(KeioDatabase.version(file, "keio-bus.version"))
+            assertNotNull(KeioDatabase.version(file, "odakyu.version"))
             val version = KeioDatabase.version(file)
             val modified = file.lastModified()
             val second = OfflineDataSetup.prepare(wrapper) {}
@@ -68,8 +69,28 @@ class KeioDatabaseTest {
             assertEquals(modified,file.lastModified())
             assertFalse(first.any { it.contains("地図データが未準備") })
             SQLiteDatabase.openDatabase(file.path,null,SQLiteDatabase.OPEN_READONLY).use { db ->
-                db.rawQuery("SELECT COUNT(*) FROM trips", null).use { it.moveToFirst(); assertEquals(60866,it.getInt(0)) }
+                db.rawQuery("SELECT COUNT(*) FROM trips", null).use { it.moveToFirst(); assertEquals(65341,it.getInt(0)) }
                 db.rawQuery("SELECT COUNT(*) FROM routes WHERE operator='京王バス'", null).use { it.moveToFirst(); assertEquals(254,it.getInt(0)) }
+                db.rawQuery("SELECT COUNT(*) FROM routes WHERE operator='小田急電鉄'", null).use { it.moveToFirst(); assertEquals(6,it.getInt(0)) }
+                db.rawQuery("SELECT COUNT(*) FROM stations WHERE station_id LIKE 'ODPT_ODAKYU:%'", null).use { it.moveToFirst(); assertEquals(72,it.getInt(0)) }
+            }
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun odakyuSeedMergesCorrectly() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = Files.createTempDirectory(context.cacheDir.toPath(), "odakyu-test").toFile()
+        try {
+            val seed = File(directory, "odakyu-seed.db")
+            GZIPInputStream(context.assets.open("bootstrap/odakyu.bundle")).use { input -> seed.outputStream().use { input.copyTo(it) } }
+            val target = File(directory, "timetable.db")
+            seed.copyTo(target)
+            KeioDatabase.merge(target, seed, "test-odakyu-version", KeioDatabase.ODAKYU_PREFIX, "odakyu.version")
+            KeioDatabase.validate(target)
+            assertEquals("test-odakyu-version", KeioDatabase.version(target, "odakyu.version"))
+            SQLiteDatabase.openDatabase(target.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                db.rawQuery("SELECT COUNT(*) FROM trips WHERE trip_id LIKE 'ODPT_ODAKYU:%'", null).use { it.moveToFirst(); assertEquals(4475, it.getInt(0)) }
+                db.rawQuery("SELECT COUNT(*) FROM stations WHERE station_id LIKE 'ODPT_ODAKYU:%'", null).use { it.moveToFirst(); assertEquals(72, it.getInt(0)) }
             }
         } finally { directory.deleteRecursively() }
     }
