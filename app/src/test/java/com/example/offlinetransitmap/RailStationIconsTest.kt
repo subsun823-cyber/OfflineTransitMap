@@ -32,4 +32,18 @@ class RailStationIconsTest {
             assertEquals(operator, "station-rail", railStationIcon(setOf(operator)))
         }
     }
+
+    @Test fun tokyoMetroUsesMetroSymbolIncludingAliasesAndVariants() {
+        for (operator in listOf("東京メトロ", "東京地下鉄", "東京地下鉄株式会社", "Tokyo Metro", "Tokyo Metro Co., Ltd.", "tokyo metro")) {
+            assertEquals(operator, "station-tokyo-metro", railStationIcon(setOf(operator)))
+        }
+    }
+
+    @Test fun sharedStationWithJrAndTokyoMetroUsesBothSymbols() {
+        assertEquals("station-rail-both", railStationIcon(setOf("東京メトロ", "JR東日本")))
+    }
+
+    @Test fun tokyoMetroWithPrivateRailwayUsesMetroSymbol() {
+        assertEquals("station-tokyo-metro", railStationIcon(setOf("東京メトロ", "小田急電鉄")))
+    }
 }

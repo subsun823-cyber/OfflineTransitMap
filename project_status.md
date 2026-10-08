@@ -30,8 +30,14 @@
    - `OfflineDataSetup.kt` の初回展開およびシードマージループに `tokyometro` を追加。アプリ初回起動時・更新時に自動的に既存の `timetable.db` へ東京メトロデータ（全10路線186駅、9,982便）を安全・原子的（アトミック）にマージ。
    - 700m以内ルールにより、JR・私鉄・他路線との同名駅（新宿、渋谷、池袋、大手町、銀座、霞ヶ関など）が自動的に単一駅グループに合流。
    - `TimetableDb.kt` の `stationDataNote` で、東京メトロの駅タップ時に収録内容の案内メッセージを表示。
-   - `RailStationIcons.kt` により、JR接続駅は `station-rail-both`、地下鉄単独駅は `station-rail` で地図上に表示。
-3. **ビルド検証・テスト・配信パイプライン拡張 (`app/build.gradle.kts`, `check_apk_data.py`, `fetch_and_build_transit_data.py`, `test_tokyometro_data.py`)**:
+   - `RailStationIcons.kt` により、JR接続駅は `station-rail-both`、東京メトロ駅は `station-tokyo-metro`（東京メトロ公式ハートMシンボルアイコン）、その他私鉄は `station-rail` で地図上に表示。
+3. **東京メトロの駅マップアイコンの追加 (`map_station_tokyo_metro.png`, `PoiMapIcons.kt`, `MapLibreMapView.kt`, `RailStationIcons.kt`)**:
+   - 提供素材 `metro.webp` から、外側余白を透過・エッジのアンチエイリアス補正を行い、80x80 (xxxhdpi) の高品質透過PNGバッジ `app/src/main/res/drawable-xxxhdpi/map_station_tokyo_metro.png` を生成。
+   - `PoiMapIcons.kt` の `withPoiIcons` に `"station-tokyo-metro"` を登録。
+   - `MapLibreMapView.kt` の `stations-rail` レイヤーの `icon-image` 式に `"station-tokyo-metro"` のマッチを追加。
+   - `RailStationIcons.kt` で東京メトロ（`東京メトロ`, `東京地下鉄`, `tokyometro`, `tokyosubway` 等）を判定し、JR接続のない駅で `"station-tokyo-metro"` を返すよう設定。
+   - `RailStationIconsTest.kt` に東京メトロ駅アイコン判定テスト（別名・半角全角バリアント、私鉄共用駅等）を追加。
+4. **ビルド検証・テスト・配信パイプライン拡張 (`app/build.gradle.kts`, `check_apk_data.py`, `fetch_and_build_transit_data.py`, `test_tokyometro_data.py`)**:
    - `app/build.gradle.kts` の `verifyOfflineAssets` タスクに `tokyometro.bundle` と `tokyometro-info.json` の存在・サイズ検証を追加。
    - `tools/check_apk_data.py` でAPK内の東京メトロアセット同梱検証を追加。
    - `tools/fetch_and_build_transit_data.py` に通常トークン（`ODPT_ACCESS_TOKEN` / `--odpt-token`）を用いた東京メトロ更新確認・データ取得処理（`check_and_fetch_odpt_tokyometro`）を追加。ODPT API（`api-public.odpt.org` / `api.odpt.org`）にアクセスし、最新データが検知された場合に自動取得・バンドル再生成を行い、更新なし時やトークン未指定・エラー時は既存バンドルへ安全にフォールバック。

@@ -12,11 +12,14 @@ internal fun railStationIcon(operators: Set<String>): String {
             .replace("株式会社", "")
     }.filter { it.isNotEmpty() }.toSet()
     val jrEastNames = setOf("jr東日本", "東日本旅客鉄道", "jreast", "eastjapanrailwaycompany")
+    val tokyoMetroNames = setOf("東京メトロ", "東京地下鉄", "tokyometro", "tokyometrocoltd", "tokyosubway")
     val hasJrEast = names.any { it in jrEastNames }
+    val hasTokyoMetro = names.any { it in tokyoMetroNames }
     val hasOther = names.any { it !in jrEastNames }
     return when {
         hasJrEast && hasOther -> "station-rail-both"
         hasJrEast -> "station-jr-east"
+        hasTokyoMetro -> "station-tokyo-metro"
         else -> "station-rail"
     }
 }

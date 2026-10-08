@@ -29,6 +29,7 @@ internal fun Style.Builder.withPoiIcons(context: Context): Style.Builder = apply
     for ((id, drawable) in listOf(
         "bus-stop" to R.drawable.map_bus_stop,
         "station-jr-east" to R.drawable.map_station_jr_east,
+        "station-tokyo-metro" to R.drawable.map_station_tokyo_metro,
         "station-rail" to R.drawable.map_station_rail,
         "station-rail-both" to R.drawable.map_station_rail_both,
         "poi-food" to R.drawable.map_poi_food,
