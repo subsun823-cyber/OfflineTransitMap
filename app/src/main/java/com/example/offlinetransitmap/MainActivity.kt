@@ -180,6 +180,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
 
     // 「現在地に戻る」が押された回数(増えるたびに地図側が現在地へ移動する)
     var recenterRequest by remember { mutableIntStateOf(0) }
+    var mapReloadKey by remember { mutableIntStateOf(0) }
 
     // 経路の詳細パネルで「戻る」操作をしたら、検索結果の画面に戻る
     BackHandler(enabled = selectedItinerary != null && !navMode && !showSettings) {
@@ -365,6 +366,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 followMode = navMode,
                 navLineJson = navLine,
                 destinationPoint = destinationPoint,
+                mapReloadKey = mapReloadKey,
                 onFollowLostChange = { followLost = it },
                 onBearingChange = { mapBearing = it },
                 onStationClick = { id, name ->
@@ -469,7 +471,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 )
             }
             if (showSettings) {
-                SettingsScreen(preferences = preferences, onChange = settings::update, dataNote = dataNote)
+                SettingsScreen(
+                    preferences = preferences,
+                    onChange = settings::update,
+                    dataNote = dataNote,
+                    onMapUpdated = { mapReloadKey++ }
+                )
             }
         }
     }

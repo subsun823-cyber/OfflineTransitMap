@@ -8,17 +8,20 @@ import org.maplibre.android.style.layers.PropertyFactory
 // 経路や駅の色は識別に使うため、背景地図の配色だけを変える。
 internal fun mapPaintColor(dark: Boolean, id: String, property: String, light: String): String {
     if (!dark || id.startsWith("route-") || id == "nav-line" || id == "stations" || id == "stations-rail") return light
+    val baseId = id.substringBeforeLast("-protomaps-").let { raw ->
+        KantoPrefectures.all.fold(raw) { acc, p -> acc.removeSuffix("-${p.id}") }
+    }
     return when (property) {
         "background-color" -> "#171d25"
         "text-halo-color" -> "#171d25"
         "text-color" -> when {
-            id.startsWith("pois") -> "#90caf9"
-            id == "water-name" -> "#80b8d6"
-            id == "station-name" -> "#ff9c97"
-            id == "station-name-rail" -> "#80cbc4"
+            baseId.startsWith("pois") -> "#90caf9"
+            baseId == "water-name" -> "#80b8d6"
+            baseId == "station-name" -> "#ff9c97"
+            baseId == "station-name-rail" -> "#80cbc4"
             else -> "#d6dee8"
         }
-        "fill-color" -> when (id) {
+        "fill-color" -> when (baseId) {
             "water" -> "#183e57"
             "landuse-green", "natural-green" -> "#263c30"
             "landuse-hospital" -> "#43323c"
@@ -28,13 +31,13 @@ internal fun mapPaintColor(dark: Boolean, id: String, property: String, light: S
         }
         "fill-outline-color" -> "#47515f"
         "line-color" -> when {
-            id == "water-line" -> "#285974"
-            id == "boundaries" -> "#9281aa"
-            id.endsWith("casing") -> "#141a22"
-            id == "roads-highway" -> "#b9914e"
-            id == "roads-major" -> "#9c895c"
-            id == "roads-path" -> "#9ba7b6"
-            id == "transit-rail-dash" -> "#a4aebb"
+            baseId == "water-line" -> "#285974"
+            baseId == "boundaries" -> "#9281aa"
+            baseId.endsWith("casing") -> "#141a22"
+            baseId == "roads-highway" -> "#b9914e"
+            baseId == "roads-major" -> "#9c895c"
+            baseId == "roads-path" -> "#9ba7b6"
+            baseId == "transit-rail-dash" -> "#a4aebb"
             else -> "#566372"
         }
         else -> light
@@ -57,7 +60,8 @@ internal class MapAppearance(private val style: Style) {
             for (i in 0 until layers.length()) {
                 val layer = layers.getJSONObject(i)
                 val id = layer.getString("id")
-                if (layer.optString("source") != "protomaps" && id != "background" && !id.startsWith("station-name")) continue
+                val source = layer.optString("source")
+                if (!source.startsWith("protomaps") && id != "background" && !id.startsWith("station-name")) continue
                 val paint = layer.optJSONObject("paint") ?: continue
                 for (property in listOf("background-color", "fill-color", "fill-outline-color", "line-color", "text-color", "text-halo-color")) {
                     val value = paint.opt(property)
@@ -82,15 +86,18 @@ internal class MapAppearance(private val style: Style) {
         }
         val poi = PoiPresentation(preferences.showPoiNames, preferences.showPoiIcons)
         fun visibility(visible: Boolean) = PropertyFactory.visibility(if (visible) Property.VISIBLE else Property.NONE)
-        style.getLayer("pois-dot")?.setProperties(visibility(poi.icons))
-        style.getLayer("pois-name")?.setProperties(visibility(poi.names))
-        style.getLayer("pois-symbols")?.setProperties(
-            visibility(poi.symbolsVisible),
-            PropertyFactory.iconSize(poi.iconSize),
-            PropertyFactory.iconOpacity(if (poi.icons) 1f else 0f),
-            PropertyFactory.iconOptional(!poi.icons),
-            PropertyFactory.textSize(poi.textSize),
-            PropertyFactory.textOpacity(if (poi.names) 1f else 0f)
-        )
+        for (layer in style.layers) {
+            val layerId = layer.id
+            if (layerId == "pois-dot" || layerId.startsWith("pois-dot-")) layer.setProperties(visibility(poi.icons))
+            if (layerId == "pois-name" || layerId.startsWith("pois-name-")) layer.setProperties(visibility(poi.names))
+            if (layerId == "pois-symbols" || layerId.startsWith("pois-symbols-")) layer.setProperties(
+                visibility(poi.symbolsVisible),
+                PropertyFactory.iconSize(poi.iconSize),
+                PropertyFactory.iconOpacity(if (poi.icons) 1f else 0f),
+                PropertyFactory.iconOptional(!poi.icons),
+                PropertyFactory.textSize(poi.textSize),
+                PropertyFactory.textOpacity(if (poi.names) 1f else 0f)
+            )
+        }
     }
 }

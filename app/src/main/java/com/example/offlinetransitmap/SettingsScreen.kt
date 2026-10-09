@@ -40,30 +40,65 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 
+data class PrefectureDownloadState(
+    val info: PrefectureMapInfo,
+    val isDownloaded: Boolean,
+    val sizeBytes: Long
+)
+
 @Composable
-fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Unit, dataNote: String = "") {
+fun SettingsScreen(
+    preferences: AppPreferences,
+    onChange: (AppPreferences) -> Unit,
+    dataNote: String = "",
+    onMapUpdated: () -> Unit = {}
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var savedData by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var prefectureStates by remember { mutableStateOf<List<PrefectureDownloadState>>(emptyList()) }
+    var downloadingPrefectureId by remember { mutableStateOf<String?>(null) }
+    var mapDownloadPercent by remember { mutableStateOf(0) }
+    var mapActionMessage by remember { mutableStateOf<String?>(null) }
+
     var updateStatusMessage by remember { mutableStateOf<String?>(null) }
     var availableUpdate by remember { mutableStateOf<TransitManifest?>(null) }
     var isCheckingOrUpdating by remember { mutableStateOf(false) }
     var updateProgressPercent by remember { mutableStateOf(0) }
 
+    suspend fun refreshPrefectureStates() {
+        prefectureStates = withContext(Dispatchers.IO) {
+            KantoPrefectures.all.map { pref ->
+                val file = KantoPrefectures.getFile(context, pref)
+                val downloaded = KantoPrefectures.isDownloaded(context, pref)
+                PrefectureDownloadState(
+                    info = pref,
+                    isDownloaded = downloaded,
+                    sizeBytes = if (downloaded) file.length() else 0L
+                )
+            }
+        }
+    }
+
     suspend fun refreshSavedData() {
         savedData = withContext(Dispatchers.IO) {
-            listOf("地図" to ("maps" to "tokyo.pmtiles"), "時刻表" to ("timetable" to "timetable.db"))
-                .map { (label, path) ->
-                    val file = context.getExternalFilesDir(path.first)?.let { File(it, path.second) }
-                    val status = if (file != null && file.isFile && file.length() > 0) {
-                        "保存済み（%.1f MB）".format(file.length() / 1024.0 / 1024.0)
-                    } else "未保存"
-                    label to status
-                }
+            val mapDownloaded = KantoPrefectures.getDownloadedList(context)
+            val mapStatus = if (mapDownloaded.isNotEmpty()) {
+                val totalBytes = mapDownloaded.sumOf { KantoPrefectures.getFile(context, it).length() }
+                "保存済み: ${mapDownloaded.joinToString("、") { it.name }}（%.1f MB）".format(totalBytes / 1024.0 / 1024.0)
+            } else "未保存"
+
+            val timetableFile = context.getExternalFilesDir("timetable")?.let { File(it, "timetable.db") }
+            val timetableStatus = if (timetableFile != null && timetableFile.isFile && timetableFile.length() > 0) {
+                "保存済み（%.1f MB）".format(timetableFile.length() / 1024.0 / 1024.0)
+            } else "未保存"
+
+            listOf("地図" to mapStatus, "時刻表" to timetableStatus)
         }
     }
 
     LaunchedEffect(Unit) {
+        refreshPrefectureStates()
         refreshSavedData()
     }
     Surface(modifier = Modifier.fillMaxSize()) {
@@ -108,6 +143,98 @@ fun SettingsScreen(preferences: AppPreferences, onChange: (AppPreferences) -> Un
                         "ナビ中は画面を消さない", "アプリを表示している間に適用します。電池の消費が増えます。",
                         preferences.keepScreenOnDuringNavigation
                     ) { onChange(preferences.copy(keepScreenOnDuringNavigation = it)) }
+                }
+            }
+            item {
+                SettingsGroup("オフライン地図（関東各都県）") {
+                    val totalMb = prefectureStates.filter { it.isDownloaded }.sumOf { it.sizeBytes } / 1024.0 / 1024.0
+                    val downloadedCount = prefectureStates.count { it.isDownloaded }
+                    Text(
+                        if (downloadedCount > 0) "保存済み: $downloadedCount 都県（%.1f MB）".format(totalMb) else "未保存（都県を選択してダウンロードしてください）",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    SettingNote("オフラインで使用する地図データを都県ごとにダウンロードできます。不要な都県は削除して空き容量を確保できます。")
+                    Spacer(Modifier.height(8.dp))
+
+                    for (state in prefectureStates) {
+                        val pref = state.info
+                        val isDownloading = downloadingPrefectureId == pref.id
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                Text(pref.name, style = MaterialTheme.typography.bodyLarge)
+                                val statusText = when {
+                                    isDownloading -> "ダウンロード中… ($mapDownloadPercent%)"
+                                    state.isDownloaded -> "保存済み（%.1f MB）".format(state.sizeBytes / 1024.0 / 1024.0)
+                                    else -> "未保存（目安: 約${pref.approximateSizeMb} MB）"
+                                }
+                                SettingNote(statusText)
+                                if (isDownloading) {
+                                    Spacer(Modifier.height(4.dp))
+                                    LinearProgressIndicator(
+                                        progress = { mapDownloadPercent / 100f },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                            }
+
+                            if (state.isDownloaded) {
+                                OutlinedButton(
+                                    onClick = {
+                                        val success = MapDownloadManager.deletePrefecture(context, pref)
+                                        if (success) {
+                                            mapActionMessage = "${pref.name}の地図を削除しました"
+                                            scope.launch {
+                                                refreshPrefectureStates()
+                                                refreshSavedData()
+                                                onMapUpdated()
+                                            }
+                                        }
+                                    },
+                                    enabled = downloadingPrefectureId == null
+                                ) {
+                                    Text("削除")
+                                }
+                            } else {
+                                Button(
+                                    onClick = {
+                                        downloadingPrefectureId = pref.id
+                                        mapDownloadPercent = 0
+                                        mapActionMessage = "${pref.name}をダウンロード中…"
+                                        scope.launch {
+                                            val result = MapDownloadManager.downloadPrefecture(context, pref) { p ->
+                                                mapDownloadPercent = p
+                                            }
+                                            when (result) {
+                                                is MapDownloadResult.Success -> {
+                                                    mapActionMessage = "${pref.name}のダウンロードが完了しました"
+                                                    refreshPrefectureStates()
+                                                    refreshSavedData()
+                                                    onMapUpdated()
+                                                }
+                                                is MapDownloadResult.Failure -> {
+                                                    mapActionMessage = "${pref.name}のダウンロードに失敗しました: ${result.message}"
+                                                }
+                                            }
+                                            downloadingPrefectureId = null
+                                        }
+                                    },
+                                    enabled = downloadingPrefectureId == null
+                                ) {
+                                    Text(if (isDownloading) "取得中…" else "取得")
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+                    }
+
+                    if (mapActionMessage != null) {
+                        Spacer(Modifier.height(8.dp))
+                        SettingNote(requireNotNull(mapActionMessage))
+                    }
                 }
             }
             item {
