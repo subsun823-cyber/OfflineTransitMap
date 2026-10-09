@@ -37,7 +37,14 @@
    - `MapLibreMapView.kt` の `stations-rail` レイヤーの `icon-image` 式に `"station-tokyo-metro"` のマッチを追加。
    - `RailStationIcons.kt` で東京メトロ（`東京メトロ`, `東京地下鉄`, `tokyometro`, `tokyosubway` 等）を判定し、JR接続のない駅で `"station-tokyo-metro"` を返すよう設定。
    - `RailStationIconsTest.kt` に東京メトロ駅アイコン判定テスト（別名・半角全角バリアント、私鉄共用駅等）を追加。
-4. **ビルド検証・テスト・配信パイプライン拡張 (`app/build.gradle.kts`, `check_apk_data.py`, `fetch_and_build_transit_data.py`, `test_tokyometro_data.py`)**:
+4. **乗り換え駅における複数事業者アイコン並列表示の対応（`station.png` 準拠）**:
+   - ユーザー提供の `station.png`（新宿駅での JR・私鉄・メトロ・都営 の並列表示）に基づき、乗り入れ事業者の順序（`JR` -> `私鉄` -> `東京メトロ` -> `都営地下鉄`）に従ってアイコンを横並びに結合・表示する仕組みを導入。
+   - 都営地下鉄（東京都交通局）の公式シンボル（イチョウマーク、`#199332`）を描画した `map_station_toei.png` を追加。
+   - 2事業者（6種: JR+私鉄、JR+メトロ、JR+都営、私鉄+メトロ、私鉄+都営、メトロ+都営）、3事業者（4種: JR+私鉄+メトロ、JR+私鉄+都営、JR+メトロ+都営、私鉄+メトロ+都営）、4事業者（1種: JR+私鉄+メトロ+都営）の全組み合わせバッジ（xxxhdpi）を `tools/generate_station_icons.py` により自動生成。
+   - `RailStationIcons.kt` を拡張し、駅に乗り入れる各路線事業者を正規化・分類（JR、私鉄、メトロ、都営）して該当する組み合わせID（例: 新宿/渋谷は `station-rail-jr-private-metro`、代々木上原は `station-rail-private-metro`、上野/神田/秋葉原は `station-rail-jr-metro`、吉祥寺/登戸/町田は `station-rail-both`）を返すよう更新。
+   - `PoiMapIcons.kt` および `MapLibreMapView.kt` に全組み合わせアイコンを登録。
+   - `RailStationIconsTest.kt` に各種乗り換え駅パターンの単体テストを追加。
+5. **ビルド検証・テスト・配信パイプライン拡張 (`app/build.gradle.kts`, `check_apk_data.py`, `fetch_and_build_transit_data.py`, `test_tokyometro_data.py`)**:
    - `app/build.gradle.kts` の `verifyOfflineAssets` タスクに `tokyometro.bundle` と `tokyometro-info.json` の存在・サイズ検証を追加。
    - `tools/check_apk_data.py` でAPK内の東京メトロアセット同梱検証を追加。
    - `tools/fetch_and_build_transit_data.py` に通常トークン（`ODPT_ACCESS_TOKEN` / `--odpt-token`）を用いた東京メトロ更新確認・データ取得処理（`check_and_fetch_odpt_tokyometro`）を追加。ODPT API（`api-public.odpt.org` / `api.odpt.org`）にアクセスし、最新データが検知された場合に自動取得・バンドル再生成を行い、更新なし時やトークン未指定・エラー時は既存バンドルへ安全にフォールバック。
