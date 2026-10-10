@@ -1,0 +1,14 @@
+{
+  "operator": "東武バス",
+  "routes": 25,
+  "stations": 421,
+  "trips": 1000,
+  "stopTimesRows": 11335,
+  "calendarStart": "2026-10-01",
+  "calendarEnd": "2027-12-31",
+  "size": 8925184,
+  "sha256": "2b000d5a4faa481c2fe0533d874d20c6f6437d25adc4183d808f81c0ad61d642",
+  "compressedSize": 726230,
+  "bundleSha256": "efc814842e7c44f3defb4a1d818dfe5639b28d6dd7610c784a0be1bed1bbf605",
+  "note": "東武バス：25系統（421停留所、1000便）の時刻表を収録。東京都区内・埼玉県・千葉県・日光等の各線をカバー。祝日ダイヤ対応（2027年末まで）。"
+}

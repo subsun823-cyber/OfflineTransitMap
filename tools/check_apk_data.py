@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def check(path):
     assets=ROOT/'app/src/main/assets'
     with zipfile.ZipFile(path) as apk:
-        for name in ('keio.bundle','keio-info.json','keio-bus.bundle','keio-bus-info.json','odakyu.bundle','odakyu-info.json','tokyometro.bundle','tokyometro-info.json','seibu.bundle','seibu-info.json','data-files.json'):
+        for name in ('keio.bundle','keio-info.json','keio-bus.bundle','keio-bus-info.json','odakyu.bundle','odakyu-info.json','tokyometro.bundle','tokyometro-info.json','seibu.bundle','seibu-info.json','tobu.bundle','tobu-info.json','tobu-bus.bundle','tobu-bus-info.json','data-files.json'):
 
             key='bootstrap/'+name
             if apk.read('assets/'+key)!=(assets/key).read_bytes():raise ValueError('APK asset mismatch: '+key)

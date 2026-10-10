@@ -81,9 +81,9 @@ def merge_seed_into_db(target_db_path: Path, seed_db_path: Path, prefix: str, ve
         for table, names in columns.items():
             cols = names.split(',')
             selected = ','.join(f"{c} + {offset}" if (table == "trips" and c == "trip_no") or (table == "stop_times" and c == "trip") else c for c in cols)
-            conn.execute(f"INSERT INTO {table} ({names}) SELECT {selected} FROM seed.{table}")
+            conn.execute(f"INSERT OR IGNORE INTO {table} ({names}) SELECT {selected} FROM seed.{table}")
 
-        conn.execute("INSERT INTO station_operators SELECT station_id, operator FROM seed.station_operators")
+        conn.execute("INSERT OR IGNORE INTO station_operators SELECT station_id, operator FROM seed.station_operators")
 
         # Group merging (700m rule)
         import math
@@ -339,9 +339,13 @@ def build_integrated_timetable(
     tokyometro_seed_path: Path | None = None,
     tokyometro_version: str = "",
     seibu_seed_path: Path | None = None,
-    seibu_version: str = ""
+    seibu_version: str = "",
+    tobu_seed_path: Path | None = None,
+    tobu_version: str = "",
+    tobu_bus_seed_path: Path | None = None,
+    tobu_bus_version: str = ""
 ):
-    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train, Keio bus, Odakyu, Tokyo Metro, and Seibu seeds."""
+    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train, Keio bus, Odakyu, Tokyo Metro, Seibu, and Tobu seeds."""
     output_db_path.parent.mkdir(parents=True, exist_ok=True)
     if output_db_path.resolve() != base_timetable.resolve():
         shutil.copyfile(base_timetable, output_db_path)
@@ -412,7 +416,33 @@ def build_integrated_timetable(
         print("Notice: Seibu Rail seed not provided; keeping existing Seibu records if present.")
 
 
-    # 4. Integrity & summary
+    # 6. Merge Tobu Rail if seed available
+    if tobu_seed_path and tobu_seed_path.exists():
+        print(f"Merging Tobu Rail seed into {output_db_path}...")
+        merge_seed_into_db(
+            output_db_path,
+            tobu_seed_path,
+            prefix="ODPT_TOBU:",
+            version=tobu_version,
+            version_key="tobu.version"
+        )
+    else:
+        print("Notice: Tobu Rail seed not provided; keeping existing Tobu records if present.")
+
+    # 7. Merge Tobu Bus if seed available
+    if tobu_bus_seed_path and tobu_bus_seed_path.exists():
+        print(f"Merging Tobu Bus seed into {output_db_path}...")
+        merge_seed_into_db(
+            output_db_path,
+            tobu_bus_seed_path,
+            prefix="ODPT_TOBU_BUS:",
+            version=tobu_bus_version,
+            version_key="tobu-bus.version"
+        )
+    else:
+        print("Notice: Tobu Bus seed not provided; keeping existing Tobu Bus records if present.")
+
+    # 8. Integrity & summary
     conn = sqlite3.connect(str(output_db_path))
     try:
         check = conn.execute("PRAGMA integrity_check").fetchone()[0]
@@ -504,6 +534,10 @@ def main():
                         help='Tokyo Metro Rail bundle')
     parser.add_argument('--seibu-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/seibu.bundle',
                         help='Seibu Rail bundle')
+    parser.add_argument('--tobu-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/tobu.bundle',
+                        help='Tobu Rail bundle')
+    parser.add_argument('--tobu-bus-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/tobu-bus.bundle',
+                        help='Tobu Bus bundle')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build/transit-dist',
 
                         help='Output directory for generated release artifacts')
@@ -618,7 +652,39 @@ def main():
         print("Notice: No Seibu Rail bundle found; existing records in base DB will be retained.")
         seibu_rail_seed_file = None
 
-    # 7. Build integrated DB
+    # 7. Resolve Tobu Rail seed
+    tobu_rail_seed_file = args.output_dir / "tobu-rail-seed.db"
+    tobu_version = ""
+    if args.tobu_bundle and args.tobu_bundle.exists():
+        raw_tobu = gzip.decompress(args.tobu_bundle.read_bytes())
+        tobu_rail_seed_file.write_bytes(raw_tobu)
+        tobu_info_path = ROOT / 'app/src/main/assets/bootstrap/tobu-info.json'
+        if tobu_info_path.exists():
+            tobu_info = json.loads(tobu_info_path.read_text(encoding='utf-8'))
+            tobu_version = tobu_info.get('sha256', '')
+        else:
+            tobu_version = hashlib.sha256(raw_tobu).hexdigest()
+    else:
+        print("Notice: No Tobu Rail bundle found; existing records in base DB will be retained.")
+        tobu_rail_seed_file = None
+
+    # 8. Resolve Tobu Bus seed
+    tobu_bus_seed_file = args.output_dir / "tobu-bus-seed.db"
+    tobu_bus_version = ""
+    if args.tobu_bus_bundle and args.tobu_bus_bundle.exists():
+        raw_tobu_bus = gzip.decompress(args.tobu_bus_bundle.read_bytes())
+        tobu_bus_seed_file.write_bytes(raw_tobu_bus)
+        tobu_bus_info_path = ROOT / 'app/src/main/assets/bootstrap/tobu-bus-info.json'
+        if tobu_bus_info_path.exists():
+            tobu_bus_info = json.loads(tobu_bus_info_path.read_text(encoding='utf-8'))
+            tobu_bus_version = tobu_bus_info.get('sha256', '')
+        else:
+            tobu_bus_version = hashlib.sha256(raw_tobu_bus).hexdigest()
+    else:
+        print("Notice: No Tobu Bus bundle found; existing records in base DB will be retained.")
+        tobu_bus_seed_file = None
+
+    # 9. Build integrated DB
     output_db = args.output_dir / "timetable.db"
     print(f"Integrating into {output_db}...")
     stats = build_integrated_timetable(
@@ -633,6 +699,10 @@ def main():
         tokyometro_version=tokyometro_version,
         seibu_seed_path=seibu_rail_seed_file,
         seibu_version=seibu_version,
+        tobu_seed_path=tobu_rail_seed_file,
+        tobu_version=tobu_version,
+        tobu_bus_seed_path=tobu_bus_seed_file,
+        tobu_bus_version=tobu_bus_version,
         output_db_path=output_db
     )
 

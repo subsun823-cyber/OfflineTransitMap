@@ -80,6 +80,22 @@ class RailStationIconsTest {
         assertEquals("station-rail-jr-private-metro", railStationIcon(setOf("JR東日本", "京王電鉄", "東京メトロ")))
     }
 
+    @Test fun tobuUsesTobuSymbolIncludingAliases() {
+        for (operator in listOf("東武鉄道", "東武", "Tobu", "tobu railway", "Tobu Railway Co., Ltd.", "odpt.Operator:Tobu")) {
+            assertEquals(operator, "station-tobu", railStationIcon(setOf(operator)))
+        }
+    }
+
+    @Test fun sharedStationWithTobuCombos() {
+        assertEquals("station-rail-jr-tobu", railStationIcon(setOf("東武鉄道", "JR東日本")))
+        assertEquals("station-rail-tobu-metro", railStationIcon(setOf("東武鉄道", "東京メトロ")))
+        assertEquals("station-rail-tobu-toei", railStationIcon(setOf("東武鉄道", "東京都交通局")))
+        assertEquals("station-rail-jr-tobu-metro", railStationIcon(setOf("JR東日本", "東武鉄道", "東京メトロ")))
+        assertEquals("station-rail-tobu-metro-toei", railStationIcon(setOf("東武鉄道", "東京メトロ", "都営地下鉄")))
+        assertEquals("station-rail-jr-tobu-metro-toei", railStationIcon(setOf("JR東日本", "東武鉄道", "東京メトロ", "都営地下鉄")))
+        assertEquals("station-rail-jr-seibu-tobu-metro", railStationIcon(setOf("JR東日本", "西武鉄道", "東武鉄道", "東京メトロ")))
+    }
+
     @Test fun sharedStationWithAllFourOperatorsUsesFourSymbols() {
         assertEquals("station-rail-jr-private-metro-toei", railStationIcon(setOf("JR東日本", "小田急電鉄", "東京メトロ", "都営地下鉄")))
         assertEquals("station-rail-jr-seibu-metro-toei", railStationIcon(setOf("JR東日本", "西武鉄道", "東京メトロ", "都営地下鉄")))

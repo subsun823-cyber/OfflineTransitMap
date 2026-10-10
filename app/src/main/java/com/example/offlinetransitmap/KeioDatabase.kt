@@ -12,6 +12,8 @@ internal object KeioDatabase {
     const val ODAKYU_PREFIX = "ODPT_ODAKYU:"
     const val TOKYO_METRO_PREFIX = "ODPT_TOKYO_METRO:"
     const val SEIBU_PREFIX = "ODPT_SEIBU:"
+    const val TOBU_PREFIX = "ODPT_TOBU:"
+    const val TOBU_BUS_PREFIX = "ODPT_TOBU_BUS:"
     private val columns = linkedMapOf(
         "stations" to "station_id,name,lat,lon,kana,grp,kind",
         "stops" to "stop_id,station_id,name,platform,zone",
@@ -40,7 +42,7 @@ internal object KeioDatabase {
     fun isBootstrapOnly(file: File): Boolean = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
         val exists = db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_data'", null).use { it.moveToFirst() }
         val marked = exists && db.rawQuery("SELECT 1 FROM app_data WHERE key='base.keio_only' AND value='true'", null).use { it.moveToFirst() }
-        marked && !db.rawQuery("SELECT 1 FROM routes WHERE substr(route_id,1,${PREFIX.length}) != '$PREFIX' AND substr(route_id,1,${BUS_PREFIX.length}) != '$BUS_PREFIX' AND substr(route_id,1,${ODAKYU_PREFIX.length}) != '$ODAKYU_PREFIX' AND substr(route_id,1,${TOKYO_METRO_PREFIX.length}) != '$TOKYO_METRO_PREFIX' AND substr(route_id,1,${SEIBU_PREFIX.length}) != '$SEIBU_PREFIX' LIMIT 1", null).use { it.moveToFirst() }
+        marked && !db.rawQuery("SELECT 1 FROM routes WHERE substr(route_id,1,${PREFIX.length}) != '$PREFIX' AND substr(route_id,1,${BUS_PREFIX.length}) != '$BUS_PREFIX' AND substr(route_id,1,${ODAKYU_PREFIX.length}) != '$ODAKYU_PREFIX' AND substr(route_id,1,${TOKYO_METRO_PREFIX.length}) != '$TOKYO_METRO_PREFIX' AND substr(route_id,1,${SEIBU_PREFIX.length}) != '$SEIBU_PREFIX' AND substr(route_id,1,${TOBU_PREFIX.length}) != '$TOBU_PREFIX' AND substr(route_id,1,${TOBU_BUS_PREFIX.length}) != '$TOBU_BUS_PREFIX' LIMIT 1", null).use { it.moveToFirst() }
     }
 
     fun markBootstrapOnly(file: File) {
@@ -51,7 +53,7 @@ internal object KeioDatabase {
 
     // 呼び出し元が既存DBのコピーを渡す。ライブのDBを書き換えない。
     fun merge(target: File, seed: File, version: String, prefix: String = PREFIX, versionKey: String = "keio.version") {
-        require(prefix == PREFIX || prefix == BUS_PREFIX || prefix == ODAKYU_PREFIX || prefix == TOKYO_METRO_PREFIX || prefix == SEIBU_PREFIX)
+        require(prefix == PREFIX || prefix == BUS_PREFIX || prefix == ODAKYU_PREFIX || prefix == TOKYO_METRO_PREFIX || prefix == SEIBU_PREFIX || prefix == TOBU_PREFIX || prefix == TOBU_BUS_PREFIX)
 
         SQLiteDatabase.openDatabase(target.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
             db.execSQL("ATTACH DATABASE ? AS keio", arrayOf(seed.path))
@@ -106,6 +108,10 @@ internal object KeioDatabase {
                                     val feedName = when (prefix) {
                                         BUS_PREFIX -> "京王バス"
                                         ODAKYU_PREFIX -> "小田急電鉄"
+                                        TOKYO_METRO_PREFIX -> "東京メトロ"
+                                        SEIBU_PREFIX -> "西武鉄道"
+                                        TOBU_PREFIX -> "東武鉄道"
+                                        TOBU_BUS_PREFIX -> "東武バス"
                                         else -> "京王電鉄"
                                     }
                                     put("name", feedName)

@@ -37,7 +37,7 @@ painter.end()
 toei_img.save(toei_path)
 print(f'Saved {toei_path}')
 
-# 2. Ensure map_station_seibu.png exists from ダウンロード.png
+# 2. Ensure map_station_seibu.png exists
 seibu_path = os.path.join(DRAWABLE_DIR, 'map_station_seibu.png')
 src_seibu_logo = 'ダウンロード.png'
 if os.path.exists(src_seibu_logo):
@@ -61,6 +61,39 @@ if os.path.exists(src_seibu_logo):
 else:
     seibu_img = QImage(seibu_path)
 
+# 3. Ensure map_station_tobu.png exists (Tobu Railway Future Blue "T" badge)
+tobu_path = os.path.join(DRAWABLE_DIR, 'map_station_tobu.png')
+tobu_img = QImage(80, 80, QImage.Format_ARGB32)
+tobu_img.fill(QColor(0, 0, 0, 0))
+p_t = QPainter(tobu_img)
+p_t.setRenderHint(QPainter.Antialiasing, True)
+p_t.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+c_path = QPainterPath()
+c_path.addEllipse(QRectF(1.0, 1.0, 78.0, 78.0))
+p_t.setClipPath(c_path)
+p_t.fillPath(c_path, QBrush(QColor('#ffffff')))
+
+path_t = QPainterPath()
+path_t.moveTo(66.449, 42.754)
+path_t.lineTo(65.48, 45.43)
+path_t.lineTo(58.483, 45.43)
+path_t.lineTo(52.768, 61.126)
+path_t.lineTo(48.127, 61.126)
+path_t.lineTo(53.836, 45.43)
+path_t.lineTo(46.827, 45.43)
+path_t.lineTo(47.799, 42.754)
+path_t.closeSubpath()
+
+scale_t = 2.4
+p_t.translate(40.0, 40.0)
+p_t.scale(scale_t, scale_t)
+p_t.translate(-56.638, -51.94)
+p_t.fillPath(path_t, QBrush(QColor('#005BAB')))
+p_t.end()
+tobu_img.save(tobu_path)
+print(f'Saved {tobu_path}')
+
 # Load base 80x80 icons
 icons = {
     'jr': QImage(os.path.join(DRAWABLE_DIR, 'map_station_jr_east.png')),
@@ -68,6 +101,7 @@ icons = {
     'metro': QImage(os.path.join(DRAWABLE_DIR, 'map_station_tokyo_metro.png')),
     'toei': toei_img,
     'seibu': seibu_img,
+    'tobu': tobu_img,
 }
 
 def create_combined(icon_keys):
@@ -118,6 +152,23 @@ combinations = {
 
     # Seibu combos (4-operator)
     'map_station_rail_jr_seibu_metro_toei.png': ['jr', 'seibu', 'metro', 'toei'],
+
+    # Tobu combos (2-operator)
+    'map_station_rail_jr_tobu.png': ['jr', 'tobu'],
+    'map_station_rail_tobu_metro.png': ['tobu', 'metro'],
+    'map_station_rail_tobu_toei.png': ['tobu', 'toei'],
+    'map_station_rail_tobu_private.png': ['tobu', 'private'],
+    'map_station_rail_tobu_seibu.png': ['seibu', 'tobu'],
+
+    # Tobu combos (3-operator)
+    'map_station_rail_jr_tobu_metro.png': ['jr', 'tobu', 'metro'],
+    'map_station_rail_jr_tobu_toei.png': ['jr', 'tobu', 'toei'],
+    'map_station_rail_tobu_metro_toei.png': ['tobu', 'metro', 'toei'],
+    'map_station_rail_jr_tobu_seibu.png': ['jr', 'seibu', 'tobu'],
+
+    # Tobu combos (4-operator)
+    'map_station_rail_jr_tobu_metro_toei.png': ['jr', 'tobu', 'metro', 'toei'],
+    'map_station_rail_jr_seibu_tobu_metro.png': ['jr', 'seibu', 'tobu', 'metro'],
 }
 
 for fname, keys in combinations.items():

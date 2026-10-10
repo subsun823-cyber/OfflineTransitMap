@@ -2,8 +2,8 @@
   "files": [
     {
       "id": "timetable",
-      "size": 66854912,
-      "sha256": "b7a8534e5fdb10914a75b440f7fdde3b8878cd2893d1fb56dff91a097b486d0c",
+      "size": 97304576,
+      "sha256": "64ccb7161f4e2f81a4c2ea07899cf576e4afbbcee7e9746c7f3f5ef3354d65a7",
       "asset": "bootstrap/timetable.db"
     },
     {

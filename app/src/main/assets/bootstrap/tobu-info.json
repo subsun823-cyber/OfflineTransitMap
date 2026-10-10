@@ -1,0 +1,17 @@
+{
+  "operator": "東武鉄道",
+  "railways": 15,
+  "stations": 220,
+  "rawDepartureEvents": 78181,
+  "trips": 8320,
+  "stopTimesRows": 85345,
+  "receivedFares": 1000,
+  "supplementedFares": 5154,
+  "calendarStart": "2026-03-14",
+  "calendarEnd": "2027-12-31",
+  "size": 24629248,
+  "sha256": "89fc2c013cb2d90f3315ac8f65139b378490159678e837d3d3dfb5e8debb7d87",
+  "compressedSize": 3088845,
+  "bundleSha256": "369225431b24b7c5df0bca5db68042ff5ed99e7cdfda5822fdffd92a04fc0b17",
+  "note": "東武鉄道：全15路線（220駅）の全発車時刻（78181件、8320便）および普通旅客運賃（提供データ 1000件・補完 5154区間）を完全収録。特急（スペーシア・リバティ・りょうもう等）・TJライナー・THライナー等の指定席は別途特急券・座席指定券が必要です。祝日ダイヤ対応（2027年末まで）。"
+}
