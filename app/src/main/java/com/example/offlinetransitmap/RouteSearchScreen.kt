@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -166,7 +167,7 @@ fun RouteSearchScreen(
 
     val base = state.departAt ?: LocalDateTime.now()
 
-    Surface(modifier = Modifier.fillMaxSize().imePadding()) {
+    Surface(modifier = Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
         Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onClose) { Text("‹ 地図に戻る") }

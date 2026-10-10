@@ -144,7 +144,10 @@ val PRESET_PLACES: List<PlaceItem> = listOf(
     PlaceItem("spot_seiruka_hp", "聖路加国際病院", "せいるかこくさいびょういん", 35.667222, 139.775833, PlaceCategory.FACILITY, "東京都中央区明石町")
 )
 
-class PlaceSearcher(private val db: SQLiteDatabase? = null) {
+class PlaceSearcher(
+    private val db: SQLiteDatabase? = null,
+    private val poiDb: PoiDatabase? = null
+) {
 
     private val allPlaces: List<PlaceItem> by lazy { loadAllPlaces() }
 
@@ -213,10 +216,17 @@ class PlaceSearcher(private val db: SQLiteDatabase? = null) {
         currentLat: Double? = null,
         currentLon: Double? = null,
         categoryFilter: PlaceCategory? = null,
-        limit: Int = 30
+        limit: Int = 40
     ): List<PlaceSearchResult> {
         val q = toSearchableHiragana(query)
         val places = allPlaces
+
+        // 施設DB (pois.db - コンビニ・店舗・病院・学校など25万件) からの検索
+        val poiItems = if (query.isNotBlank() || categoryFilter != null) {
+            poiDb?.searchPois(query, categoryFilter, limit = limit * 2) ?: emptyList()
+        } else {
+            emptyList()
+        }
 
         // フィルタリング対象の決定
         val candidatePlaces = if (categoryFilter != null) {
@@ -225,7 +235,7 @@ class PlaceSearcher(private val db: SQLiteDatabase? = null) {
             places
         }
 
-        if (q.isBlank()) {
+        if (q.isBlank() && categoryFilter == null) {
             // クエリが空の場合：現在地があれば近い順、なければプリセット主要スポットと主要駅を返す
             val sorted = if (currentLat != null && currentLon != null) {
                 candidatePlaces.sortedBy { p ->
@@ -248,6 +258,7 @@ class PlaceSearcher(private val db: SQLiteDatabase? = null) {
         val matches = ArrayList<ScoredPlace>()
         val seenIds = HashSet<String>()
 
+        // 1. プリセットおよび駅・バス停からマッチング
         for (p in candidatePlaces) {
             val nameHira = toSearchableHiragana(p.name)
             val kanaHira = toSearchableHiragana(p.kana)
@@ -270,7 +281,26 @@ class PlaceSearcher(private val db: SQLiteDatabase? = null) {
             }
         }
 
-        // マッチ順位（完全一致 > 前方一致 > 部分一致）昇順、次に距離昇順
+        // 2. 施設DB (pois.db - コンビニ等) からの結果をスコアリングして追加
+        for (p in poiItems) {
+            val nameHira = toSearchableHiragana(p.name)
+            val rank = when {
+                nameHira == q -> 1
+                nameHira.startsWith(q) -> 2
+                else -> 3
+            }
+
+            if (seenIds.add(p.id)) {
+                val dist = if (currentLat != null && currentLon != null) {
+                    calcDistanceMeters(currentLat, currentLon, p.lat, p.lon)
+                } else {
+                    Int.MAX_VALUE
+                }
+                matches.add(ScoredPlace(p, rank, dist))
+            }
+        }
+
+        // マッチ順位（完全一致 > 前方一致 > 部分一致）昇順、次に現在地からの距離昇順
         matches.sortWith(compareBy({ it.matchRank }, { it.distMeters }))
 
         return matches.take(limit).map { sp ->

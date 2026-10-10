@@ -43,6 +43,8 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -76,6 +78,7 @@ import java.time.LocalDateTime
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             val settings = remember {
                 AppSettings(applicationContext.getSharedPreferences("app_settings", Context.MODE_PRIVATE))
@@ -167,7 +170,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var selectedItinerary by remember { mutableStateOf<Itinerary?>(null) }
 
     // 施設・場所・駅・バス停の検索
-    val placeSearcher = remember(timetable) { PlaceSearcher(timetable?.db) }
+    val poiDb = remember { PoiDatabase.open(context) }
+    val placeSearcher = remember(timetable, poiDb) { PlaceSearcher(timetable?.db, poiDb) }
     var showPlaceSearch by remember { mutableStateOf(false) }
 
     // 目的地の状態（施設名、カテゴリ、アイコン、距離、所要時間など）
@@ -335,25 +339,17 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     navigationIcon = { TextButton(onClick = { showSettings = false }) { Text("戻る") } }
                 )
             } else if (!navMode && !showPlaceSearch && !showSearch) {
-                Surface(
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 2.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                TopAppBar(
+                    title = {
                         Surface(
                             modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
+                                .fillMaxWidth()
+                                .height(46.dp)
                                 .clickable {
                                     searchLocation = if (hasLocationPermission) lastKnownLatLon(context) else null
                                     showPlaceSearch = true
                                 },
-                            shape = RoundedCornerShape(24.dp),
+                            shape = RoundedCornerShape(23.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant
                         ) {
                             Row(
@@ -365,7 +361,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 Icon(
                                     imageVector = Icons.Default.Search,
                                     contentDescription = "検索",
-                                    tint = MaterialTheme.colorScheme.primary
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Text(
@@ -376,7 +373,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 )
                             }
                         }
-                        Spacer(Modifier.width(8.dp))
+                    },
+                    actions = {
                         IconButton(onClick = { showSettings = true }) {
                             Icon(
                                 imageVector = Icons.Default.Settings,
@@ -384,8 +382,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    }
-                }
+                    },
+                    windowInsets = TopAppBarDefaults.windowInsets,
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
             }
         },
         floatingActionButton = {
