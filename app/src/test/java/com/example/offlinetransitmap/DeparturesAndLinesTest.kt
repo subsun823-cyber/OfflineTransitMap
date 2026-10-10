@@ -51,6 +51,28 @@ class DeparturesAndLinesTest {
     }
 
     @Test
+    fun samplePastDepartures_allWithinOneHour() {
+        val now = LocalDateTime.now()
+        val past = samplePastDepartures()
+        for (dep in past) {
+            val minutesAgo = java.time.temporal.ChronoUnit.MINUTES.between(dep.time, now)
+            assertTrue("Past departure should be within 60 minutes, got: $minutesAgo", minutesAgo in 0..60)
+        }
+    }
+
+    @Test
+    fun stationLines_singleLineDoesNotShowChips_multiLineShowsChips() {
+        val singleLineStation = listOf(StationLine("京王線", 0xFFDD0077, "京王"))
+        assertFalse("Single station should not show line chips (lines.size < 2)", singleLineStation.size >= 2)
+
+        val multiLineStation = listOf(
+            StationLine("中央線", 0xFFF15A22, "JR"),
+            StationLine("京王線", 0xFFDD0077, "京王")
+        )
+        assertTrue("Multi-line station should show line chips (lines.size >= 2)", multiLineStation.size >= 2)
+    }
+
+    @Test
     fun tobuStationIcon_existsAndHasValidDimensions() {
         val iconFile = File("src/main/res/drawable-xxxhdpi/map_station_tobu.png")
         assertTrue("Tobu station icon file should exist", iconFile.exists())

@@ -196,20 +196,35 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
     }
 
     // その駅と同じグループ(同じ名前でまとまっている駅)の station_id の一覧
-    private fun groupStationIds(stationId: String): List<String> {
+    private fun groupStationIds(stationId: String, stationName: String? = null): List<String> {
         val ids = ArrayList<String>()
-        try {
-            db.rawQuery(
-                "SELECT station_id FROM stations WHERE grp = " +
-                        "(SELECT COALESCE(grp, station_id) FROM stations WHERE station_id = ?)",
-                arrayOf(stationId)
-            ).use { c ->
-                while (c.moveToNext()) ids.add(c.getString(0))
+        if (stationId.isNotBlank()) {
+            try {
+                db.rawQuery(
+                    "SELECT station_id FROM stations WHERE grp = " +
+                            "(SELECT COALESCE(grp, station_id) FROM stations WHERE station_id = ?)",
+                    arrayOf(stationId)
+                ).use { c ->
+                    while (c.moveToNext()) ids.add(c.getString(0))
+                }
+            } catch (e: Exception) {
+                // 何もしない
             }
-        } catch (e: Exception) {
-            // 何もしない
         }
-        if (ids.isEmpty()) ids.add(stationId)
+        // stationId で見つからなかった場合、stationName でフォールバック検索
+        if (ids.isEmpty() && !stationName.isNullOrBlank()) {
+            try {
+                db.rawQuery(
+                    "SELECT station_id FROM stations WHERE name = ?",
+                    arrayOf(stationName)
+                ).use { c ->
+                    while (c.moveToNext()) ids.add(c.getString(0))
+                }
+            } catch (e: Exception) {
+                // 何もしない
+            }
+        }
+        if (ids.isEmpty() && stationId.isNotBlank()) ids.add(stationId)
         return ids
     }
 
@@ -218,9 +233,12 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         stationId: String,
         now: LocalDateTime,
         limit: Int = 25,
-        daysAhead: Int = 7
+        daysAhead: Int = 7,
+        lineName: String? = null,
+        stationName: String? = null
     ): List<Departure> {
-        val ids = groupStationIds(stationId)
+        val ids = groupStationIds(stationId, stationName)
+        if (ids.isEmpty()) return emptyList()
         val result = ArrayList<Departure>()
         val today = now.toLocalDate()
         // 昨日分は「24時を過ぎた深夜便」を拾うために見る
@@ -230,7 +248,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
             if (services.isNotEmpty()) {
                 val midnight = day.atStartOfDay()
                 val minSec = maxOf(0L, Duration.between(midnight, now).seconds)
-                result.addAll(queryDay(ids, midnight, minSec, services, limit))
+                result.addAll(queryDay(ids, midnight, minSec, services, limit, lineName))
                 result.sortBy { it.time }
             }
             // 必要な件数が集まり、次の日の0時より前に収まっていれば打ち切る
@@ -243,34 +261,38 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         return result.take(limit)
     }
 
-    // 駅の直前に出発した便を時系列昇順(古い順: 10分前 -> 6分前 -> 1分前)で最大 limit 件返す
+    // 駅の直前に出発した便(1時間以内)を時系列昇順(古い順: 10分前 -> 6分前 -> 1分前)で最大 limit 件返す
     fun pastDepartures(
         stationId: String,
         now: LocalDateTime,
         limit: Int = 10,
-        windowMinutes: Long = 60
+        windowMinutes: Long = 60,
+        lineName: String? = null,
+        stationName: String? = null
     ): List<Departure> {
-        val ids = groupStationIds(stationId)
+        val ids = groupStationIds(stationId, stationName)
+        if (ids.isEmpty()) return emptyList()
         val result = ArrayList<Departure>()
         val today = now.toLocalDate()
         val midnight = today.atStartOfDay()
         val nowSec = Duration.between(midnight, now).seconds
-        val minSec = maxOf(0L, nowSec - windowMinutes * 60)
+        val safeWindow = windowMinutes.coerceAtMost(60L) // 1時間以内を保証
+        val minSec = maxOf(0L, nowSec - safeWindow * 60)
         val maxSec = nowSec
 
         val services = activeServices(today)
         if (services.isNotEmpty() && minSec < maxSec) {
-            result.addAll(queryPastDay(ids, midnight, minSec, maxSec, services, limit))
+            result.addAll(queryPastDay(ids, midnight, minSec, maxSec, services, limit, lineName))
         }
 
         // 深夜0時をまたいだ過去窓(前日深夜)の検索
-        if (nowSec < windowMinutes * 60) {
+        if (nowSec < safeWindow * 60) {
             val yesterday = today.minusDays(1)
             val yServices = activeServices(yesterday)
             if (yServices.isNotEmpty()) {
                 val yMidnight = yesterday.atStartOfDay()
-                val yMinSec = 86400L - (windowMinutes * 60 - nowSec)
-                result.addAll(queryPastDay(ids, yMidnight, yMinSec, 86400L, yServices, limit))
+                val yMinSec = 86400L - (safeWindow * 60 - nowSec)
+                result.addAll(queryPastDay(ids, yMidnight, yMinSec, 86400L, yServices, limit, lineName))
             }
         }
 
@@ -284,10 +306,12 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         minSec: Long,
         maxSec: Long,
         services: Set<String>,
-        limit: Int
+        limit: Int,
+        lineName: String? = null
     ): List<Departure> {
         val stationPlaceholders = stationIds.joinToString(",") { "?" }
         val placeholders = services.joinToString(",") { "?" }
+        val lineCondition = if (!lineName.isNullOrBlank()) "AND (r.name = ? OR r.name LIKE ?)" else ""
         val sql = """
             SELECT st.dep_sec, r.operator, r.name, r.color, r.route_type,
                    COALESCE(st.headsign, t.headsign), s.platform,
@@ -299,10 +323,15 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
             WHERE st.station_id IN ($stationPlaceholders) AND st.can_board = 1
               AND st.dep_sec >= $minSec AND st.dep_sec < $maxSec
               AND t.service_id IN ($placeholders)
+              $lineCondition
             ORDER BY st.dep_sec DESC
             LIMIT $limit
         """.trimIndent()
-        val args = stationIds.toTypedArray() + services.toTypedArray()
+        val lineArgs = if (!lineName.isNullOrBlank()) {
+            val clean = lineName.trimEnd('…')
+            arrayOf(clean, "$clean%")
+        } else emptyArray()
+        val args = stationIds.toTypedArray() + services.toTypedArray() + lineArgs
 
         val list = ArrayList<Departure>()
         db.rawQuery(sql, args).use { c ->
@@ -312,7 +341,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
                 list.add(
                     Departure(
                         operatorLabel = shorten(c.getString(1) ?: "", 6),
-                        lineName = shorten(c.getString(2) ?: "", 8),
+                        lineName = shorten(c.getString(2) ?: "", 10),
                         lineColor = 0xFF000000L or c.getInt(3).toLong(),
                         headsign = tidyHeadsign(c.getString(5) ?: ""),
                         detail = platformText(platform, isBus),
@@ -329,8 +358,9 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
     }
 
     // 鉄道駅に乗り入れている路線一覧(重複なし)
-    fun stationRailLines(stationId: String): List<StationLine> {
-        val ids = groupStationIds(stationId)
+    fun stationRailLines(stationId: String, stationName: String? = null): List<StationLine> {
+        val ids = groupStationIds(stationId, stationName)
+        if (ids.isEmpty()) return emptyList()
         val stationPlaceholders = ids.joinToString(",") { "?" }
         val kindCondition = if (hasStationKind) "AND s.kind = 'rail'" else ""
         val sql = """
@@ -371,10 +401,12 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         midnight: LocalDateTime,
         minSec: Long,
         services: Set<String>,
-        limit: Int
+        limit: Int,
+        lineName: String? = null
     ): List<Departure> {
         val stationPlaceholders = stationIds.joinToString(",") { "?" }
         val placeholders = services.joinToString(",") { "?" }
+        val lineCondition = if (!lineName.isNullOrBlank()) "AND (r.name = ? OR r.name LIKE ?)" else ""
         val sql = """
             SELECT st.dep_sec, r.operator, r.name, r.color, r.route_type,
                    COALESCE(st.headsign, t.headsign), s.platform,
@@ -385,10 +417,15 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
             JOIN stops s ON s.stop_id = st.stop_id
             WHERE st.station_id IN ($stationPlaceholders) AND st.can_board = 1 AND st.dep_sec >= $minSec
               AND t.service_id IN ($placeholders)
+              $lineCondition
             ORDER BY st.dep_sec
             LIMIT $limit
         """.trimIndent()
-        val args = stationIds.toTypedArray() + services.toTypedArray()
+        val lineArgs = if (!lineName.isNullOrBlank()) {
+            val clean = lineName.trimEnd('…')
+            arrayOf(clean, "$clean%")
+        } else emptyArray()
+        val args = stationIds.toTypedArray() + services.toTypedArray() + lineArgs
 
         val list = ArrayList<Departure>()
         db.rawQuery(sql, args).use { c ->
@@ -398,7 +435,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
                 list.add(
                     Departure(
                         operatorLabel = shorten(c.getString(1) ?: "", 6),
-                        lineName = shorten(c.getString(2) ?: "", 8),
+                        lineName = shorten(c.getString(2) ?: "", 10),
                         lineColor = 0xFF000000L or c.getInt(3).toLong(),
                         headsign = tidyHeadsign(c.getString(5) ?: ""),
                         detail = platformText(platform, isBus),

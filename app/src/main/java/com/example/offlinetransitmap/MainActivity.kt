@@ -483,14 +483,27 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
 
     selectedStation?.let { station ->
         val now = remember(station) { LocalDateTime.now() }
-        val departures = remember(station) {
-            timetable?.departures(station.id, now) ?: sampleDepartures()
+        var selectedLine by remember(station) { mutableStateOf<String?>(null) }
+
+        val departures = remember(station, selectedLine) {
+            timetable?.departures(
+                stationId = station.id,
+                now = now,
+                lineName = selectedLine,
+                stationName = station.name
+            ) ?: (if (selectedLine == null) sampleDepartures() else sampleDepartures().filter { it.lineName == selectedLine })
         }
-        val pastDepartures = remember(station) {
-            timetable?.pastDepartures(station.id, now) ?: samplePastDepartures()
+        val pastDepartures = remember(station, selectedLine) {
+            timetable?.pastDepartures(
+                stationId = station.id,
+                now = now,
+                windowMinutes = 60,
+                lineName = selectedLine,
+                stationName = station.name
+            ) ?: (if (selectedLine == null) samplePastDepartures() else samplePastDepartures().filter { it.lineName == selectedLine })
         }
         val railLines = remember(station) {
-            timetable?.stationRailLines(station.id) ?: sampleStationLines()
+            timetable?.stationRailLines(station.id, station.name) ?: sampleStationLines()
         }
         val note = remember(station) {
             if (timetable != null) {
@@ -504,6 +517,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             departures = departures,
             pastDepartures = pastDepartures,
             railLines = railLines,
+            selectedLine = selectedLine,
+            onSelectLine = { selectedLine = it },
             note = note,
             loadTripStops = { d -> timetable?.tripStops(d) ?: emptyList() },
             onDismiss = { selectedStation = null }

@@ -42,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -95,21 +96,23 @@ fun DepartureSheet(
     departures: List<Departure>,
     pastDepartures: List<Departure> = emptyList(),
     railLines: List<StationLine> = emptyList(),
+    selectedLine: String? = null,
+    onSelectLine: (String?) -> Unit = {},
     note: String? = null,
     loadTripStops: (Departure) -> List<TripStop> = { emptyList() },
     onDismiss: () -> Unit
 ) {
     val now = remember { LocalDateTime.now().truncatedTo(ChronoUnit.MINUTES) }
-    var selectedLine by remember { mutableStateOf<String?>(null) }
     var showPastDepartures by remember { mutableStateOf(false) }
 
-    val effectiveDepartures = remember(departures, selectedLine) {
-        if (selectedLine == null) departures else departures.filter { it.lineName == selectedLine }
+    // 1時間以内(0〜60分前)の便のみを確実に抽出
+    val safePastDepartures = remember(pastDepartures, now) {
+        pastDepartures.filter { dep ->
+            val diff = ChronoUnit.MINUTES.between(dep.time, now)
+            diff in 0..60
+        }
     }
-    val effectivePastDepartures = remember(pastDepartures, selectedLine) {
-        if (selectedLine == null) pastDepartures else pastDepartures.filter { it.lineName == selectedLine }
-    }
-    val sheetItems = remember(effectiveDepartures, now) { buildItems(effectiveDepartures, now) }
+    val sheetItems = remember(departures, now) { buildItems(departures, now) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // 一覧の高さは画面の半分まで(地図が上に見えるようにする)
     val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).dp
@@ -140,8 +143,8 @@ fun DepartureSheet(
                 )
             }
 
-            // 鉄道駅の場合、路線選択チップを水平スクロールで表示(バス停は表示しない)
-            if (railLines.isNotEmpty()) {
+            // 複数路線が乗り入れている駅のみ路線選択チップを表示(単独駅やバス停は今まで通り非表示)
+            if (railLines.size >= 2) {
                 Spacer(Modifier.height(4.dp))
                 LazyRow(
                     modifier = Modifier
@@ -158,7 +161,7 @@ fun DepartureSheet(
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(lineColor)
                                 .clickable {
-                                    selectedLine = if (isSelected) null else line.name
+                                    onSelectLine(if (isSelected) null else line.name)
                                 }
                                 .padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -184,7 +187,7 @@ fun DepartureSheet(
             }
 
             Spacer(Modifier.height(4.dp))
-            if (sheetItems.isEmpty() && effectivePastDepartures.isEmpty()) {
+            if (sheetItems.isEmpty() && safePastDepartures.isEmpty()) {
                 Text(
                     text = "この駅の出発情報がありません(時刻表の有効期間外の可能性があります)",
                     style = MaterialTheme.typography.bodyMedium,
@@ -197,7 +200,7 @@ fun DepartureSheet(
                     .heightIn(max = listMaxHeight)
             ) {
                 // 前に出発した便(アコーディオン展開・折りたたみ)
-                if (pastDepartures.isNotEmpty()) {
+                if (safePastDepartures.isNotEmpty()) {
                     item {
                         PastDeparturesToggleRow(
                             isExpanded = showPastDepartures,
@@ -206,26 +209,14 @@ fun DepartureSheet(
                         HorizontalDivider()
                     }
                     if (showPastDepartures) {
-                        if (effectivePastDepartures.isEmpty()) {
-                            item {
-                                Text(
-                                    text = "直前に出発した便はありません",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
-                                )
-                                HorizontalDivider()
-                            }
-                        } else {
-                            items(effectivePastDepartures) { dep ->
-                                val minutesAgo = ChronoUnit.MINUTES.between(dep.time, now).coerceAtLeast(0)
-                                PastDepartureRow(
-                                    d = dep,
-                                    minutesAgo = minutesAgo,
-                                    onClick = if (dep.tripNo != 0L) ({ selected = dep }) else null
-                                )
-                                HorizontalDivider()
-                            }
+                        items(safePastDepartures) { dep ->
+                            val minutesAgo = ChronoUnit.MINUTES.between(dep.time, now).coerceAtLeast(0)
+                            PastDepartureRow(
+                                d = dep,
+                                minutesAgo = minutesAgo,
+                                onClick = if (dep.tripNo != 0L) ({ selected = dep }) else null
+                            )
+                            HorizontalDivider()
                         }
                     }
                 }
@@ -350,6 +341,7 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(0.65f) // スクショを参考に少し薄めに表示(未来便と明確に区別)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -364,15 +356,23 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
             )
         }
         Column(horizontalAlignment = Alignment.End) {
-            if (minutesAgo < 60) {
-                if (minutesAgo <= 0) {
-                    Text("今すぐ", style = MaterialTheme.typography.titleMedium)
-                } else {
-                    Text("$minutesAgo", style = MaterialTheme.typography.titleLarge)
-                    Text("分前", style = MaterialTheme.typography.labelSmall)
-                }
+            if (minutesAgo <= 0) {
+                Text(
+                    text = "今すぐ",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             } else {
-                Text(formatTime(d.time), style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "$minutesAgo",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "分前",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
