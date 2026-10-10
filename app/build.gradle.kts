@@ -35,6 +35,9 @@ android {
     buildFeatures {
         compose = true
     }
+    androidResources {
+        noCompress += listOf("db", "bundle")
+    }
 }
 
 dependencies {implementation("org.maplibre.gl:android-sdk:13.4.1")

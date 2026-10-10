@@ -321,7 +321,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         if (startNavImmediately) {
                             // ナビ即時開始の場合：選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築して即座にナビ開始
                             val directItin = withContext(Dispatchers.Default) {
-                                val roadRes = roadRouter?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
+                                val router = roadRouter ?: RoadRouter.open(context)
+                                val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
                                 val distM = roadRes?.distanceMeters ?: calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
                                 val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
                                 val path = roadRes?.path ?: listOf(curLoc, dest)
@@ -362,10 +363,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         now = LocalDateTime.now(),
                                         destName = resolvedName,
                                         travelMode = selectedTravelMode,
-                                        roadRouter = roadRouter
+                                        roadRouter = roadRouter ?: RoadRouter.open(context)
                                     )
                                 } else {
-                                    val roadRes = roadRouter?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
+                                    val router = roadRouter ?: RoadRouter.open(context)
+                                    val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
                                     val distM = roadRes?.distanceMeters ?: calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
                                     val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
                                     val path = roadRes?.path ?: listOf(curLoc, dest)
@@ -577,15 +579,16 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationCurrentDuration = walkDurationMinutes(directDist)
                             destinationBicycleDuration = bicycleDurationMinutes(directDist)
                             scope.launch(Dispatchers.Default) {
-                                val roadWalk = roadRouter?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.WALK)
-                                val roadBike = roadRouter?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.BICYCLE)
+                                val router = roadRouter ?: RoadRouter.open(context)
+                                val roadWalk = router?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.WALK)
+                                val roadBike = router?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.BICYCLE)
                                 withContext(Dispatchers.Main) {
                                     if (destinationPoint == Pair(lat, lon)) {
-                                        if (roadWalk != null) {
+                                        if (roadWalk != null && roadWalk.isRoadBased) {
                                             destinationCurrentDistance = roadWalk.distanceMeters
                                             destinationCurrentDuration = roadWalk.durationMinutes
                                         }
-                                        if (roadBike != null) {
+                                        if (roadBike != null && roadBike.isRoadBased) {
                                             destinationBicycleDuration = roadBike.durationMinutes
                                         }
                                     }
@@ -662,15 +665,16 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         val curLoc = searchLocation
                         if (curLoc != null) {
                             scope.launch(Dispatchers.Default) {
-                                val roadWalk = roadRouter?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.WALK)
-                                val roadBike = roadRouter?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.BICYCLE)
+                                val router = roadRouter ?: RoadRouter.open(context)
+                                val roadWalk = router?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.WALK)
+                                val roadBike = router?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.BICYCLE)
                                 withContext(Dispatchers.Main) {
                                     if (destinationPoint == point) {
-                                        if (roadWalk != null) {
+                                        if (roadWalk != null && roadWalk.isRoadBased) {
                                             destinationCurrentDistance = roadWalk.distanceMeters
                                             destinationCurrentDuration = roadWalk.durationMinutes
                                         }
-                                        if (roadBike != null) {
+                                        if (roadBike != null && roadBike.isRoadBased) {
                                             destinationBicycleDuration = roadBike.durationMinutes
                                         }
                                     }

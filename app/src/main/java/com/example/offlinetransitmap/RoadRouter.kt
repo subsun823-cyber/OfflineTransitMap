@@ -32,9 +32,11 @@ fun travelDurationMinutes(meters: Int, mode: TravelMode): Int = when (mode) {
 class RoadRouter private constructor(private val db: SQLiteDatabase) {
 
     companion object {
+        private const val TAG = "RoadRouter"
         private const val DB_NAME = "roads.db"
+        private const val ROADS_DB_VERSION = 4 // DB更新用バージョンコード
         private const val GRID_CELL_DEG = 0.01 // 約1.1km
-        private const val MAX_SNAP_DISTANCE_M = 1200 // 道路ノードまでの最大許容スナップ距離
+        private const val MAX_SNAP_DISTANCE_M = 2500 // 道路ノードまでの最大許容スナップ距離
 
         @Volatile
         private var instance: RoadRouter? = null
@@ -46,6 +48,8 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                 try {
                     val dbDir = context.getExternalFilesDir("roads") ?: context.filesDir
                     val file = File(dbDir, DB_NAME)
+                    val prefs = context.getSharedPreferences("road_router_prefs", Context.MODE_PRIVATE)
+                    val installedVersion = prefs.getInt("roads_db_installed_version", -1)
 
                     val assetStream = try {
                         context.assets.open("bootstrap/$DB_NAME")
@@ -60,16 +64,24 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                             -1L
                         }
 
-                        if (!file.exists() || (assetLength > 0 && file.length() != assetLength)) {
+                        val needsCopy = !file.exists() ||
+                                installedVersion != ROADS_DB_VERSION ||
+                                (assetLength > 0 && file.length() != assetLength)
+
+                        if (needsCopy) {
                             file.parentFile?.mkdirs()
                             val tempFile = File(dbDir, "$DB_NAME.tmp")
+                            if (tempFile.exists()) tempFile.delete()
                             assetStream.use { input ->
                                 FileOutputStream(tempFile).use { output ->
                                     input.copyTo(output)
                                 }
                             }
                             if (file.exists()) file.delete()
-                            tempFile.renameTo(file)
+                            val renamed = tempFile.renameTo(file)
+                            if (renamed) {
+                                prefs.edit().putInt("roads_db_installed_version", ROADS_DB_VERSION).apply()
+                            }
                         } else {
                             assetStream.close()
                         }
@@ -82,6 +94,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                     instance = router
                     return router
                 } catch (e: Exception) {
+                    android.util.Log.e("RoadRouter", "Failed to open road router database", e)
                     return null
                 }
             }
@@ -187,15 +200,11 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
         val startNodeId = startSnap.first
         val goalNodeId = goalSnap.first
 
-        if (startNodeId == goalNodeId) {
-            return directFallback
-        }
-
-        // 探索領域のノードとエッジを読み込み (マージン0.035: 約3.8km)
-        val minLat = minOf(originLat, destLat) - 0.035
-        val maxLat = maxOf(originLat, destLat) + 0.035
-        val minLon = minOf(originLon, destLon) - 0.035
-        val maxLon = maxOf(originLon, destLon) + 0.035
+        // 探索領域のノードとエッジを読み込み (マージン0.05: 約5.5kmで迂回路も確実にカバー)
+        val minLat = minOf(originLat, destLat) - 0.05
+        val maxLat = maxOf(originLat, destLat) + 0.05
+        val minLon = minOf(originLon, destLon) - 0.05
+        val maxLon = maxOf(originLon, destLon) + 0.05
 
         val yMin = (minLat / GRID_CELL_DEG).toInt()
         val yMax = (maxLat / GRID_CELL_DEG).toInt()
@@ -229,6 +238,20 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             }
         }
 
+        if (startNodeId == goalNodeId) {
+            val node = nodesMap[startNodeId]
+            if (node != null) {
+                val p = listOf(Pair(originLat, originLon), Pair(node.lat, node.lon), Pair(destLat, destLon))
+                return RoadRouteResult(
+                    path = p,
+                    distanceMeters = directMeters,
+                    durationMinutes = directDuration,
+                    isRoadBased = true
+                )
+            }
+            return directFallback
+        }
+
         if (!nodesMap.containsKey(startNodeId) || !nodesMap.containsKey(goalNodeId)) {
             return directFallback
         }
@@ -257,9 +280,10 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                 val isWalk = it.getInt(walkCol) == 1
                 val isBike = it.getInt(bikeCol) == 1
 
-                // 両方向通行可能として隣接リストに追加
-                adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike))
-                adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike))
+                if (nodesMap.containsKey(u) && nodesMap.containsKey(v)) {
+                    adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike))
+                    adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike))
+                }
             }
         }
 
