@@ -73,6 +73,22 @@ class DeparturesAndLinesTest {
     }
 
     @Test
+    fun longTrainTypeAndLineName_handledWithoutError() {
+        val longDep = Departure(
+            operatorLabel = "西武鉄道",
+            lineName = "池袋線（有料指定席）",
+            lineColor = 0xFF003399,
+            headsign = "池袋",
+            detail = "特急",
+            time = LocalDateTime.now().plusMinutes(56),
+            trainType = "特急（ラビュー・小江戸・別途料金）"
+        )
+        assertEquals("西武鉄道", longDep.operatorLabel)
+        assertEquals("池袋線（有料指定席）", longDep.lineName)
+        assertEquals("特急（ラビュー・小江戸・別途料金）", longDep.trainType)
+    }
+
+    @Test
     fun tobuStationIcon_existsAndHasValidDimensions() {
         val iconFile = File("src/main/res/drawable-xxxhdpi/map_station_tobu.png")
         assertTrue("Tobu station icon file should exist", iconFile.exists())

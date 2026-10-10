@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -48,6 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.time.LocalDate
@@ -263,6 +265,11 @@ private fun DateHeader(label: String) {
     )
 }
 
+private fun cleanTrainType(type: String): String {
+    val base = type.substringBefore("（").substringBefore("(").trim()
+    return if (base.length > 8) base.take(7) + "…" else base
+}
+
 // 「事業者 / 路線バッジ / ◯◯行き」の1行
 @Composable
 private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
@@ -283,26 +290,31 @@ private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
+                .widthIn(max = 140.dp)
                 .background(Color(d.lineColor), RoundedCornerShape(12.dp))
                 .padding(horizontal = 8.dp, vertical = 1.dp)
         )
+        val shortType = cleanTrainType(d.trainType)
+        if (shortType.isNotBlank()) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = shortType,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         Spacer(Modifier.width(6.dp))
-            if (d.trainType.isNotBlank()) {
-                Text(
-                    text = d.trainType,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 1
-                )
-                Spacer(Modifier.width(6.dp))
-            }
-
-                    Text(
-                    text = d.headsign + if (d.isBus || d.tripNo != 0L) "行き" else "方面",
+        Text(
+            text = d.headsign + if (d.isBus || d.tripNo != 0L) "行き" else "方面",
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
         )
     }
 }
@@ -352,9 +364,12 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
             Text(
                 text = if (d.detail.isBlank()) status else "$status · ${d.detail}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
+        Spacer(Modifier.width(12.dp))
         Column(horizontalAlignment = Alignment.End) {
             if (minutesAgo <= 0) {
                 Text(
@@ -396,9 +411,12 @@ fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
             Text(
                 text = if (d.detail.isBlank()) status else "$status · ${d.detail}",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
+        Spacer(Modifier.width(12.dp))
         Column(horizontalAlignment = Alignment.End) {
             if (within1Hour) {
                 if (minutes <= 0) {
