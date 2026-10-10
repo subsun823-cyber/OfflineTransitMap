@@ -13,7 +13,38 @@
 - JR東日本の手動時刻表は将来の候補。現段階では全時刻表のDB化を開始しない。
 - 2026-10-08のユーザー指示により、リモートへのpushはユーザーが手動で行う運用とし、エージェント側では修正・検証・資料更新後にローカルコミットを作成し、git pushは実行しない方針とする。
 
-## 地図ダウンロード HTTP 404 対策とアセット復元・URL指定・ファイルインポート（2026-10-10、最新）
+## 徒歩・自転車ナビの即時起動改善とroads.db軽量化（2026-10-10、最新）
+
+### 発生していた問題
+1. **ナビ開始時に「案内を準備しています」のまま一生始まらない不具合**:
+   - `RouteSearch.kt` の `directItinerary()` で `isWalk = !isBike` となっていたため、自転車モードで `isWalk = false` となり、`NavigationService` が時刻表のあるバス・電車便と誤認。
+   - `depTime == null` のため `leg.depTime ?: return` で即座にリターンされ、`NavigationState.guidance` が永久に生成されず「案内を準備しています」のまま固まっていた。
+   - また、目的地カードから「ナビ開始」を押した際に公共交通の乗換探索が走り、最寄り駅への電車ルートが選択されてしまったり、フォールバック時にも `isWalk = !isBike` になっていた。
+   - 加えて、`NavigationController.start()` で初期ガイダンスが `null` に初期化され、OSのフォアグラウンドサービス起動遅延や測位待ちの間も「準備中」が表示されていた。
+2. **roads.db のサイズ上限超過（GitHub Push制限）**:
+   - 道路網DB（`roads.db`）が 134MB となり、GitHubの100MB制限を超過していた。
+
+### 対策と修正内容
+1. **道路自力移動レグの `isWalk = true` 徹底と安全な評価ロジック (`RouteSearch.kt`, `MainActivity.kt`, `Navigation.kt`)**:
+   - 自転車・徒歩の道なり直行レグをすべて `isWalk = true` に修正。自力移動レグ（時刻表便ではない）として一貫性を保持。
+   - `NavigationService.evaluate()` の公共交通レグ判定に `depTime != null && arrTime != null && lineName != "自転車"` を加え、万が一時刻表を持たないレグがあっても公共交通待ちロジックに巻き込まれず自力移動ナビとして正常動作するよう多重防御。
+2. **0秒起動：初期ガイダンスの即時生成 (`Navigation.kt`)**:
+   - `computeInitialGuidance(itin, travelMode, location)` を新設。
+   - `NavigationController.start()` 内でフォアグラウンドサービス起動を待たず、即座に画面へ初期ガイダンス（「🚲 目的地へ / 自転車で向かう · 約〇分」等）をセット。「案内を準備しています」の待機表示をゼロ化。
+   - `NavigationService.onStartCommand()` でも通知テキストを「案内を開始しました」にし、サービス起動直後に `evaluate()` を即時実行。
+3. **目的地カードからのダイレクト道路ナビ即時開始 (`MainActivity.kt`)**:
+   - `handleDestinationSearch(startNavImmediately = true)`（目的地カードの「ナビ開始」ボタン）において、重たい乗換検索をスキップし、ユーザーが選択したモード（徒歩 or 自転車）の道なりダイレクトルートを `RoadRouter` で即時生成して即ナビ開始。
+   - 「ルート確認」（`startNavImmediately = false`）の場合は従来通り電車・バス候補を含む公共交通探索結果を提示。
+4. **roads.db の大幅軽量化 (134MB -> 45.07MB)**:
+   - 不要インデックス削除、テキストカラム重複排除、VACUUM 実行により、45.07MB まで大幅圧縮。GitHub の 100MB 制限および 50MB 警告を完全にクリア。
+5. **単体テスト拡充 (`DestinationNavigationTest.kt`)**:
+   - `testDirectBicycleItineraryCreation`（`isWalk = true`）、`testComputeInitialGuidanceBicycle` を追加。
+
+### 検証結果
+- `.\gradlew testDebugUnitTest`: **BUILD SUCCESSFUL** (全テスト合格)
+- `.\gradlew assembleDebug`: **BUILD SUCCESSFUL** (デバッグAPK生成成功)
+
+## 地図ダウンロード HTTP 404 対策とアセット復元・URL指定・ファイルインポート（2026-10-10）
 
 ### 発生していた問題
 - 設定画面で地図を取得しようとした際、GitHub Releases（`transit-data-latest`）に各都県の PMTiles ファイル（`kanagawa.pmtiles` 等）がまだアップロードされていなかったため、`HTTP 404 Not Found` が発生してダウンロードに失敗していた。

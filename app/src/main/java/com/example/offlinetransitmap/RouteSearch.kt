@@ -843,7 +843,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             val isBike = travelMode == TravelMode.BICYCLE
             val modeLabel = if (isBike) "自転車" else "徒歩"
             val directLeg = RouteLeg(
-                isWalk = !isBike,
+                isWalk = true,
                 fromName = "現在地",
                 toName = destName,
                 walkMinutes = directDurationMin,

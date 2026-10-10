@@ -269,6 +269,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         }
     }
     fun startNavigation(itin: Itinerary, mode: TravelMode = TravelMode.WALK) {
+        val effectiveMode = if (itin.routeKey == "bike_direct" || itin.legs.any { it.lineName == "自転車" }) {
+            TravelMode.BICYCLE
+        } else {
+            mode
+        }
         if (!hasLocationPermission) {
             permissionLauncher.launch(locationPermissions)
             Toast.makeText(context, "位置情報を許可してから、もう一度「ナビ開始」を押してください", Toast.LENGTH_LONG).show()
@@ -278,10 +283,10 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             ) != PackageManager.PERMISSION_GRANTED
         ) {
             pendingNavItinerary = itin
-            pendingNavMode = mode
+            pendingNavMode = effectiveMode
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            NavigationController.start(context, itin, mode)
+            NavigationController.start(context, itin, effectiveMode)
         }
     }
 
@@ -300,60 +305,92 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 } else {
                     isSearchingForDestination = true
                     scope.launch {
-                        val candidates = withContext(Dispatchers.Default) {
-                            val resolvedName = if (destinationTitle != "目的地を設定しました" && destinationTitle != "目的地") {
-                                destinationTitle
-                            } else {
-                                destinationStation?.name?.let { "$it 付近" } ?: "目的地"
-                            }
-                            if (searcher != null) {
-                                searcher.findRoutesBetweenCoordinates(
-                                    originLat = curLoc.first,
-                                    originLon = curLoc.second,
-                                    destLat = dest.first,
-                                    destLon = dest.second,
-                                    now = LocalDateTime.now(),
-                                    destName = resolvedName,
-                                    travelMode = selectedTravelMode,
-                                    roadRouter = roadRouter
-                                )
-                            } else {
+                        val resolvedName = if (destinationTitle != "目的地を設定しました" && destinationTitle != "目的地") {
+                            destinationTitle
+                        } else {
+                            destinationStation?.name?.let { "$it 付近" } ?: "目的地"
+                        }
+                        if (startNavImmediately) {
+                            // ナビ即時開始の場合：選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築して即座にナビ開始
+                            val directItin = withContext(Dispatchers.Default) {
                                 val roadRes = roadRouter?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
                                 val distM = roadRes?.distanceMeters ?: calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
                                 val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
                                 val path = roadRes?.path ?: listOf(curLoc, dest)
                                 val isBike = selectedTravelMode == TravelMode.BICYCLE
+                                val modeLabel = if (isBike) "自転車" else "徒歩"
                                 val leg = RouteLeg(
-                                    isWalk = !isBike,
+                                    isWalk = true,
                                     fromName = "現在地",
                                     toName = resolvedName,
                                     walkMinutes = durM,
                                     walkMeters = distM,
-                                    lineName = if (isBike) "自転車" else "徒歩",
-                                    trainType = if (isBike) "自転車" else "徒歩",
+                                    lineName = modeLabel,
+                                    trainType = modeLabel,
                                     path = path
                                 )
-                                listOf(Itinerary(
+                                val now = LocalDateTime.now()
+                                Itinerary(
                                     legs = listOf(leg),
-                                    departure = LocalDateTime.now(),
-                                    arrival = LocalDateTime.now().plusMinutes(durM.toLong()),
+                                    departure = now,
+                                    arrival = now.plusMinutes(durM.toLong()),
                                     transfers = 0,
                                     fare = 0,
                                     knownFare = 0,
                                     routeKey = if (isBike) "bike_direct" else "walk_direct"
-                                ))
+                                )
                             }
-                        }
-                        isSearchingForDestination = false
-                        val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
-                        if (bestItin != null) {
-                            if (startNavImmediately) {
-                                startNavigation(bestItin, selectedTravelMode)
-                            } else {
-                                selectedItinerary = bestItin
-                            }
+                            isSearchingForDestination = false
+                            startNavigation(directItin, selectedTravelMode)
                         } else {
-                            Toast.makeText(context, "目的地への経路が見つかりませんでした", Toast.LENGTH_LONG).show()
+                            // ルート確認の場合：電車・バスを含む公共交通候補も検索して提示
+                            val candidates = withContext(Dispatchers.Default) {
+                                if (searcher != null) {
+                                    searcher.findRoutesBetweenCoordinates(
+                                        originLat = curLoc.first,
+                                        originLon = curLoc.second,
+                                        destLat = dest.first,
+                                        destLon = dest.second,
+                                        now = LocalDateTime.now(),
+                                        destName = resolvedName,
+                                        travelMode = selectedTravelMode,
+                                        roadRouter = roadRouter
+                                    )
+                                } else {
+                                    val roadRes = roadRouter?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
+                                    val distM = roadRes?.distanceMeters ?: calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
+                                    val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
+                                    val path = roadRes?.path ?: listOf(curLoc, dest)
+                                    val isBike = selectedTravelMode == TravelMode.BICYCLE
+                                    val modeLabel = if (isBike) "自転車" else "徒歩"
+                                    val leg = RouteLeg(
+                                        isWalk = true,
+                                        fromName = "現在地",
+                                        toName = resolvedName,
+                                        walkMinutes = durM,
+                                        walkMeters = distM,
+                                        lineName = modeLabel,
+                                        trainType = modeLabel,
+                                        path = path
+                                    )
+                                    listOf(Itinerary(
+                                        legs = listOf(leg),
+                                        departure = LocalDateTime.now(),
+                                        arrival = LocalDateTime.now().plusMinutes(durM.toLong()),
+                                        transfers = 0,
+                                        fare = 0,
+                                        knownFare = 0,
+                                        routeKey = if (isBike) "bike_direct" else "walk_direct"
+                                    ))
+                                }
+                            }
+                            isSearchingForDestination = false
+                            val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
+                            if (bestItin != null) {
+                                selectedItinerary = bestItin
+                            } else {
+                                Toast.makeText(context, "目的地への経路が見つかりませんでした", Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
                 }

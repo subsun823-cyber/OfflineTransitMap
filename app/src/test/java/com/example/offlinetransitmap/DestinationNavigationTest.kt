@@ -101,7 +101,7 @@ class DestinationNavigationTest {
         val bikeMin = bicycleDurationMinutes(dist)
 
         val bikeLeg = RouteLeg(
-            isWalk = false,
+            isWalk = true,
             fromName = "現在地",
             toName = "目的地",
             walkMinutes = bikeMin,
@@ -121,12 +121,46 @@ class DestinationNavigationTest {
         )
 
         assertEquals(1, itin.legs.size)
+        assertTrue(itin.legs[0].isWalk)
         assertEquals("自転車", itin.legs[0].lineName)
         assertEquals("現在地", itin.legs[0].fromName)
         assertEquals("目的地", itin.legs[0].toName)
         assertEquals(dist, itin.legs[0].walkMeters)
         assertEquals(bikeMin, itin.legs[0].walkMinutes)
         assertEquals("bike_direct", itin.routeKey)
+    }
+
+    @Test
+    fun testComputeInitialGuidanceBicycle() {
+        val now = LocalDateTime.now().plusHours(1)
+        val p1 = Pair(35.6896, 139.7006)
+        val p2 = Pair(35.7000, 139.7100)
+        val bikeLeg = RouteLeg(
+            isWalk = true,
+            fromName = "現在地",
+            toName = "池袋駅",
+            walkMinutes = 15,
+            walkMeters = 3000,
+            lineName = "自転車",
+            trainType = "自転車",
+            path = listOf(p1, p2)
+        )
+        val itin = Itinerary(
+            legs = listOf(bikeLeg),
+            departure = LocalDateTime.now(),
+            arrival = now,
+            transfers = 0,
+            fare = 0,
+            knownFare = 0,
+            routeKey = "bike_direct"
+        )
+
+        val guidance = computeInitialGuidance(itin, TravelMode.BICYCLE, null)
+        assertEquals(GuidanceKind.BICYCLE, guidance.kind)
+        assertEquals("池袋駅へ", guidance.title)
+        assertTrue(guidance.subtitle.contains("自転車で向かう"))
+        assertTrue(guidance.subtitle.contains("15分"))
+        assertEquals("目的地に到着", guidance.next)
     }
 }
 

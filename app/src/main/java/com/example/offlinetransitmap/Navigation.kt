@@ -50,6 +50,95 @@ object NavigationState {
     var guidance by mutableStateOf<Guidance?>(null)
 }
 
+// ナビ開始時などに即座に表示するための初期案内
+fun computeInitialGuidance(itin: Itinerary, travelMode: TravelMode, location: Location?): Guidance {
+    val legs = itin.legs
+    val now = LocalDateTime.now()
+    val sec = Duration.between(now, itin.arrival).seconds
+    val remaining = if (sec <= 0) 0L else (sec + 59) / 60
+
+    val busIdx = legs.indices.filter { !legs[it].isWalk && legs[it].depTime != null && legs[it].arrTime != null && legs[it].lineName != "自転車" }
+
+    if (busIdx.isEmpty()) {
+        val destPoint = legs.lastOrNull()?.path?.lastOrNull()
+        val destName = legs.lastOrNull()?.toName ?: "目的地"
+        val isBike = travelMode == TravelMode.BICYCLE || itin.routeKey == "bike_direct" || legs.any { it.lineName == "自転車" }
+        val totalMin = legs.sumOf { it.walkMinutes }
+        val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
+        val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
+        val d: Int? = if (location != null && destPoint != null) {
+            val r = FloatArray(1)
+            Location.distanceBetween(location.latitude, location.longitude, destPoint.first, destPoint.second, r)
+            r[0].toInt()
+        } else {
+            legs.sumOf { it.walkMeters }.takeIf { it > 0 }
+        }
+        return Guidance(
+            kind = modeKind,
+            title = "${destName}へ",
+            subtitle = "$modeVerb · 約${totalMin}分",
+            distanceMeters = d,
+            targetLat = destPoint?.first,
+            targetLon = destPoint?.second,
+            next = "目的地に到着",
+            remainingMinutes = remaining,
+            arrival = itin.arrival
+        )
+    }
+
+    val firstLeg = legs.firstOrNull()
+    if (firstLeg != null && firstLeg.isWalk) {
+        val nextIdx = busIdx.firstOrNull()
+        val nextLeg = if (nextIdx != null) legs[nextIdx] else null
+        val targetPoint = firstLeg.path.lastOrNull()
+        val d: Int? = if (location != null && targetPoint != null) {
+            val r = FloatArray(1)
+            Location.distanceBetween(location.latitude, location.longitude, targetPoint.first, targetPoint.second, r)
+            r[0].toInt()
+        } else {
+            firstLeg.walkMeters.takeIf { it > 0 }
+        }
+        val nextText = if (nextLeg != null && nextLeg.depTime != null) {
+            "その後、${hm(nextLeg.depTime)}発 ${nextLeg.lineName} に乗車"
+        } else {
+            "その後、乗換"
+        }
+        return Guidance(
+            kind = GuidanceKind.WALK,
+            title = "${firstLeg.toName}へ",
+            subtitle = "徒歩で向かう · 約${firstLeg.walkMinutes}分",
+            distanceMeters = d,
+            targetLat = targetPoint?.first,
+            targetLon = targetPoint?.second,
+            next = nextText,
+            remainingMinutes = remaining,
+            arrival = itin.arrival
+        )
+    }
+
+    val curLeg = legs[busIdx.first()]
+    val dep = curLeg.depTime ?: now
+    val head = "${curLeg.lineName} ${if (curLeg.trainType.isBlank()) "" else curLeg.trainType + " "}${curLeg.headsign}行き"
+    val boardPoint = curLeg.path.firstOrNull()
+    val d: Int? = if (location != null && boardPoint != null) {
+        val r = FloatArray(1)
+        Location.distanceBetween(location.latitude, location.longitude, boardPoint.first, boardPoint.second, r)
+        r[0].toInt()
+    } else null
+
+    return Guidance(
+        kind = GuidanceKind.WAIT,
+        title = "${curLeg.fromName}で乗車待ち",
+        subtitle = "${hm(dep)}発 $head",
+        distanceMeters = d,
+        targetLat = boardPoint?.first,
+        targetLon = boardPoint?.second,
+        next = "その後、${curLeg.toName}で降車",
+        remainingMinutes = remaining,
+        arrival = itin.arrival
+    )
+}
+
 // ナビの開始・終了
 object NavigationController {
     fun start(context: Context, itin: Itinerary, travelMode: TravelMode = TravelMode.WALK) {
@@ -57,9 +146,14 @@ object NavigationController {
             Toast.makeText(context, "過去の経路ではナビを開始できません", Toast.LENGTH_LONG).show()
             return
         }
+        val effectiveMode = if (itin.routeKey == "bike_direct" || itin.legs.any { it.lineName == "自転車" }) {
+            TravelMode.BICYCLE
+        } else {
+            travelMode
+        }
         NavigationState.itinerary = itin
-        NavigationState.travelMode = travelMode
-        NavigationState.guidance = null
+        NavigationState.travelMode = effectiveMode
+        NavigationState.guidance = computeInitialGuidance(itin, effectiveMode, NavigationState.location)
         NavigationState.active = true
         try {
             ContextCompat.startForegroundService(
@@ -75,6 +169,7 @@ object NavigationController {
     fun stop(context: Context) {
         context.stopService(Intent(context, NavigationService::class.java))
         NavigationState.active = false
+        NavigationState.guidance = null
     }
 }
 
@@ -138,8 +233,12 @@ class NavigationService : Service() {
         firedAlerts.clear()
         finished.clear()
         createChannels()
-        startAsForeground(buildStatus("ナビを開始しました", "経路の案内を準備しています"))
+        val isBike = NavigationState.travelMode == TravelMode.BICYCLE || itin.routeKey == "bike_direct" || itin.legs.any { it.lineName == "自転車" }
+        val destName = itin.legs.lastOrNull()?.toName ?: "目的地"
+        val statusTitle = if (isBike) "自転車で${destName}へ" else "徒歩で${destName}へ"
+        startAsForeground(buildStatus(statusTitle, "案内を開始しました"))
         requestLocation()
+        evaluate()
         handler.removeCallbacks(ticker)
         handler.post(ticker)
         return START_NOT_STICKY
@@ -320,7 +419,7 @@ class NavigationService : Service() {
         val r = route ?: return
         val legs = r.legs
         val now = LocalDateTime.now()
-        val busIdx = legs.indices.filter { !legs[it].isWalk }
+        val busIdx = legs.indices.filter { !legs[it].isWalk && legs[it].depTime != null && legs[it].arrTime != null && legs[it].lineName != "自転車" }
         val remaining = minutesCeil(Duration.between(now, r.arrival).seconds)
 
         if (busIdx.isEmpty()) {
@@ -336,7 +435,7 @@ class NavigationService : Service() {
                 stopSelf()
                 return
             }
-            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || r.routeKey == "bike_direct"
+            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || r.routeKey == "bike_direct" || legs.any { it.lineName == "自転車" }
             val totalMin = legs.sumOf { it.walkMinutes }
             val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
             val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
