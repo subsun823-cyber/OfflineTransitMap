@@ -394,7 +394,7 @@ fun MapLibreMapView(
         val source = style.getSourceAs<GeoJsonSource>("route") ?: return@LaunchedEffect
         source.setGeoJson(routeOverlay?.geoJson ?: EMPTY_ROUTE_JSON)
         val map = mapState
-        if (routeOverlay != null && map != null && routeOverlay.points.size >= 2) {
+        if (!followMode && routeOverlay != null && map != null && routeOverlay.points.size >= 2) {
             try {
                 val builder = LatLngBounds.Builder()
                 for ((lat, lon) in routeOverlay.points) builder.include(LatLng(lat, lon))

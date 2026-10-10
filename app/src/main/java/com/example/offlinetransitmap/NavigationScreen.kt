@@ -28,6 +28,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,25 +51,125 @@ fun navLineGeoJson(loc: Location?, g: Guidance?): String? {
 private fun distLabel(m: Int): String =
     if (m >= 1000) String.format("%.1f km", m / 1000.0) else "$m m"
 
-// 目標の方向を指す矢印(angle = 上を 0 度として、時計回りの角度)
+// Google Maps風のターンバイターン案内アイコン
 @Composable
-private fun DirectionArrow(angle: Float, modifier: Modifier = Modifier) {
+fun ManeuverIcon(maneuver: ManeuverType, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.size(56.dp)) {
-        rotate(degrees = angle) {
-            val w = size.width
-            val h = size.height
-            val head = Path().apply {
-                moveTo(w * 0.5f, h * 0.06f)
-                lineTo(w * 0.86f, h * 0.50f)
-                lineTo(w * 0.14f, h * 0.50f)
-                close()
+        val w = size.width
+        val h = size.height
+        val strokeW = 7.dp.toPx()
+        val arrowSize = 13.dp.toPx()
+
+        when (maneuver) {
+            ManeuverType.STRAIGHT -> {
+                drawLine(
+                    color = Color.White,
+                    start = Offset(w * 0.5f, h * 0.88f),
+                    end = Offset(w * 0.5f, h * 0.28f),
+                    strokeWidth = strokeW,
+                    cap = StrokeCap.Round
+                )
+                val head = Path().apply {
+                    moveTo(w * 0.5f, h * 0.12f)
+                    lineTo(w * 0.5f - arrowSize, h * 0.12f + arrowSize * 1.3f)
+                    lineTo(w * 0.5f + arrowSize, h * 0.12f + arrowSize * 1.3f)
+                    close()
+                }
+                drawPath(head, Color.White)
             }
-            drawPath(head, Color.White)
-            drawRect(
-                Color.White,
-                topLeft = Offset(w * 0.40f, h * 0.48f),
-                size = Size(w * 0.20f, h * 0.46f)
-            )
+            ManeuverType.TURN_RIGHT -> {
+                val path = Path().apply {
+                    moveTo(w * 0.32f, h * 0.85f)
+                    lineTo(w * 0.32f, h * 0.48f)
+                    quadraticTo(w * 0.32f, h * 0.35f, w * 0.46f, h * 0.35f)
+                    lineTo(w * 0.70f, h * 0.35f)
+                }
+                drawPath(path, Color.White, style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                val head = Path().apply {
+                    moveTo(w * 0.88f, h * 0.35f)
+                    lineTo(w * 0.88f - arrowSize * 1.3f, h * 0.35f - arrowSize)
+                    lineTo(w * 0.88f - arrowSize * 1.3f, h * 0.35f + arrowSize)
+                    close()
+                }
+                drawPath(head, Color.White)
+            }
+            ManeuverType.TURN_LEFT -> {
+                val path = Path().apply {
+                    moveTo(w * 0.68f, h * 0.85f)
+                    lineTo(w * 0.68f, h * 0.48f)
+                    quadraticTo(w * 0.68f, h * 0.35f, w * 0.54f, h * 0.35f)
+                    lineTo(w * 0.30f, h * 0.35f)
+                }
+                drawPath(path, Color.White, style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                val head = Path().apply {
+                    moveTo(w * 0.12f, h * 0.35f)
+                    lineTo(w * 0.12f + arrowSize * 1.3f, h * 0.35f - arrowSize)
+                    lineTo(w * 0.12f + arrowSize * 1.3f, h * 0.35f + arrowSize)
+                    close()
+                }
+                drawPath(head, Color.White)
+            }
+            ManeuverType.SLIGHT_RIGHT -> {
+                val path = Path().apply {
+                    moveTo(w * 0.36f, h * 0.85f)
+                    lineTo(w * 0.36f, h * 0.58f)
+                    quadraticTo(w * 0.38f, h * 0.46f, w * 0.50f, h * 0.40f)
+                    lineTo(w * 0.68f, h * 0.30f)
+                }
+                drawPath(path, Color.White, style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                rotate(degrees = 50f, pivot = Offset(w * 0.78f, h * 0.22f)) {
+                    val head = Path().apply {
+                        val px = w * 0.78f
+                        val py = h * 0.22f
+                        moveTo(px, py - arrowSize * 0.8f)
+                        lineTo(px - arrowSize, py + arrowSize)
+                        lineTo(px + arrowSize, py + arrowSize)
+                        close()
+                    }
+                    drawPath(head, Color.White)
+                }
+            }
+            ManeuverType.SLIGHT_LEFT -> {
+                val path = Path().apply {
+                    moveTo(w * 0.64f, h * 0.85f)
+                    lineTo(w * 0.64f, h * 0.58f)
+                    quadraticTo(w * 0.62f, h * 0.46f, w * 0.50f, h * 0.40f)
+                    lineTo(w * 0.32f, h * 0.30f)
+                }
+                drawPath(path, Color.White, style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                rotate(degrees = -50f, pivot = Offset(w * 0.22f, h * 0.22f)) {
+                    val head = Path().apply {
+                        val px = w * 0.22f
+                        val py = h * 0.22f
+                        moveTo(px, py - arrowSize * 0.8f)
+                        lineTo(px - arrowSize, py + arrowSize)
+                        lineTo(px + arrowSize, py + arrowSize)
+                        close()
+                    }
+                    drawPath(head, Color.White)
+                }
+            }
+            ManeuverType.UTURN -> {
+                val path = Path().apply {
+                    moveTo(w * 0.68f, h * 0.85f)
+                    lineTo(w * 0.68f, h * 0.45f)
+                    quadraticTo(w * 0.68f, h * 0.22f, w * 0.50f, h * 0.22f)
+                    quadraticTo(w * 0.32f, h * 0.22f, w * 0.32f, h * 0.45f)
+                    lineTo(w * 0.32f, h * 0.60f)
+                }
+                drawPath(path, Color.White, style = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                val head = Path().apply {
+                    moveTo(w * 0.32f, h * 0.76f)
+                    lineTo(w * 0.32f - arrowSize, h * 0.76f - arrowSize * 1.3f)
+                    lineTo(w * 0.32f + arrowSize, h * 0.76f - arrowSize * 1.3f)
+                    close()
+                }
+                drawPath(head, Color.White)
+            }
+            ManeuverType.ARRIVE -> {
+                drawCircle(Color.White, radius = w * 0.32f, center = Offset(w * 0.5f, h * 0.5f), style = Stroke(width = strokeW))
+                drawCircle(Color.White, radius = w * 0.14f, center = Offset(w * 0.5f, h * 0.5f))
+            }
         }
     }
 }
@@ -99,18 +202,9 @@ fun NavigationOverlay(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
-                        val lat = guidance?.targetLat
-                        val lon = guidance?.targetLon
                         when (guidance?.kind) {
                             GuidanceKind.WALK, GuidanceKind.BICYCLE -> {
-                                var angle = 0f
-                                if (location != null && lat != null && lon != null) {
-                                    val t = Location("target")
-                                    t.latitude = lat
-                                    t.longitude = lon
-                                    angle = location.bearingTo(t) - mapBearing.toFloat()
-                                }
-                                DirectionArrow(angle)
+                                ManeuverIcon(guidance.maneuver)
                             }
                             GuidanceKind.WAIT -> Text("🚏", fontSize = 36.sp)
                             GuidanceKind.RIDE -> Text("🚌", fontSize = 36.sp)
@@ -214,6 +308,15 @@ fun NavigationOverlay(
                                     fontSize = 18.sp,
                                     modifier = Modifier.padding(bottom = 5.dp)
                                 )
+                                val roadM = guidance.remainingRoadMeters
+                                if (roadM != null) {
+                                    Text(
+                                        text = " · ${distLabel(roadM)}",
+                                        color = Color.White.copy(alpha = 0.9f),
+                                        fontSize = 18.sp,
+                                        modifier = Modifier.padding(bottom = 5.dp, start = 4.dp)
+                                    )
+                                }
                             }
                             Text(
                                 text = "到着 ${hm(guidance.arrival)}",

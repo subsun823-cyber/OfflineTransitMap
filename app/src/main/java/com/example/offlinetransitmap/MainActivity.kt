@@ -200,7 +200,14 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         onDispose { view.keepScreenOn = previous }
     }
     val overlayItin = navItin ?: selectedItinerary
-    val routeOverlay = remember(overlayItin) { overlayItin?.toOverlay() }
+    val remainingPath = NavigationState.remainingPath
+    val routeOverlay = remember(overlayItin, navMode, remainingPath) {
+        if (navMode && remainingPath != null && remainingPath.size >= 2) {
+            remainingRoadOverlay(remainingPath)
+        } else {
+            overlayItin?.toOverlay()
+        }
+    }
     val isDirectRoadNav = navItin?.legs?.all { it.isWalk } == true
     val navLine = if (navMode && !isDirectRoadNav) navLineGeoJson(NavigationState.location, NavigationState.guidance) else null
     var mapBearing by remember { mutableDoubleStateOf(0.0) }

@@ -162,5 +162,60 @@ class DestinationNavigationTest {
         assertTrue(guidance.subtitle.contains("15分"))
         assertEquals("目的地に到着", guidance.next)
     }
+
+    @Test
+    fun testEvaluateRoadTurnByTurn() {
+        val now = LocalDateTime.now().plusMinutes(20)
+        // 北進(35.6800 -> 35.6810)ののち東進(35.6810, 139.7000 -> 35.6810, 139.7010) = 右折
+        val p1 = Pair(35.6800, 139.7000)
+        val p2 = Pair(35.6810, 139.7000)
+        val p3 = Pair(35.6810, 139.7010)
+        val path = listOf(p1, p2, p3)
+
+        val info = evaluateRoadTurnByTurn(
+            path = path,
+            curLat = 35.6800,
+            curLon = 139.7000,
+            destName = "八王子駅",
+            isBike = false,
+            scheduledArrival = now
+        )
+
+        assertEquals(ManeuverType.TURN_RIGHT, info.maneuver)
+        assertTrue(info.title.contains("右折"))
+        assertTrue(info.subtitle.contains("八王子駅"))
+        assertTrue(info.totalRemainingMeters > 0)
+        assertEquals(4, info.remainingPath.size)
+    }
+
+    @Test
+    fun testEvaluateRoadTurnByTurnArrive() {
+        val now = LocalDateTime.now().plusMinutes(5)
+        val p1 = Pair(35.68000, 139.70000)
+        val p2 = Pair(35.68010, 139.70010) // 15m以内
+        val path = listOf(p1, p2)
+
+        val info = evaluateRoadTurnByTurn(
+            path = path,
+            curLat = 35.68005,
+            curLon = 139.70005,
+            destName = "八王子駅",
+            isBike = false,
+            scheduledArrival = now
+        )
+
+        assertEquals(ManeuverType.ARRIVE, info.maneuver)
+        assertTrue(info.title.contains("到着"))
+    }
+
+    @Test
+    fun testRemainingRoadOverlay() {
+        val path = listOf(Pair(35.6800, 139.7000), Pair(35.6810, 139.7010))
+        val overlay = remainingRoadOverlay(path)
+        assertTrue(overlay.geoJson.contains("\"type\":\"LineString\""))
+        assertTrue(overlay.geoJson.contains("139.7"))
+        assertTrue(overlay.geoJson.contains("35.68"))
+        assertEquals(2, overlay.points.size)
+    }
 }
 

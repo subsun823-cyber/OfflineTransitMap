@@ -28,17 +28,29 @@ import java.time.LocalDateTime
 
 enum class GuidanceKind { WALK, BICYCLE, WAIT, RIDE, ARRIVED }
 
+enum class ManeuverType {
+    STRAIGHT,       // 直進・道なり
+    TURN_RIGHT,     // 右折
+    TURN_LEFT,      // 左折
+    SLIGHT_RIGHT,   // 斜め右
+    SLIGHT_LEFT,    // 斜め左
+    UTURN,          // Uターン
+    ARRIVE          // 到着
+}
+
 // ナビ画面に出す、いまの案内
 data class Guidance(
     val kind: GuidanceKind,
     val title: String,
     val subtitle: String,
-    val distanceMeters: Int?,   // 目標までの直線距離
-    val targetLat: Double?,     // 目標(次に向かう停留所など)の位置
+    val distanceMeters: Int?,   // 次の目標・曲がり角までの距離(m)
+    val targetLat: Double?,     // 目標(曲がり角や停留所)の位置
     val targetLon: Double?,
     val next: String,           // 「その後、…」の文
-    val remainingMinutes: Long, // 最終の到着までの残り
-    val arrival: LocalDateTime  // 最終の到着予定
+    val remainingMinutes: Long, // 最終の到着までの残り(分)
+    val arrival: LocalDateTime, // 最終の到着予定
+    val maneuver: ManeuverType = ManeuverType.STRAIGHT, // 次の曲がり角動作
+    val remainingRoadMeters: Int? = null                // 目的地までの総残り道なり距離(m)
 )
 
 // ナビの状態(画面とサービスで共有する)
@@ -48,6 +60,194 @@ object NavigationState {
     var travelMode by mutableStateOf(TravelMode.WALK)
     var location by mutableStateOf<Location?>(null)
     var guidance by mutableStateOf<Guidance?>(null)
+    var remainingPath by mutableStateOf<List<Pair<Double, Double>>?>(null)
+}
+
+fun calcBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val phi1 = Math.toRadians(lat1)
+    val phi2 = Math.toRadians(lat2)
+    val deltaLambda = Math.toRadians(lon2 - lon1)
+    val y = Math.sin(deltaLambda) * Math.cos(phi2)
+    val x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(deltaLambda)
+    val deg = Math.toDegrees(Math.atan2(y, x))
+    return (deg + 360.0) % 360.0
+}
+
+fun angleDiff(b1: Double, b2: Double): Double {
+    var diff = (b2 - b1) % 360.0
+    if (diff > 180.0) diff -= 360.0
+    if (diff < -180.0) diff += 360.0
+    return diff
+}
+
+fun distShortHelper(m: Int?): String = when {
+    m == null -> ""
+    m >= 1000 -> String.format("%.1fkm", m / 1000.0)
+    else -> "${m}m"
+}
+
+data class RoadGuidanceInfo(
+    val maneuver: ManeuverType,
+    val title: String,
+    val subtitle: String,
+    val distToManeuver: Int,
+    val targetLat: Double,
+    val targetLon: Double,
+    val totalRemainingMeters: Int,
+    val remainingMinutes: Long,
+    val arrivalTime: LocalDateTime,
+    val remainingPath: List<Pair<Double, Double>>
+)
+
+// 道路ルートに沿ったリアルタイムターンバイターン計算
+fun evaluateRoadTurnByTurn(
+    path: List<Pair<Double, Double>>,
+    curLat: Double,
+    curLon: Double,
+    destName: String,
+    isBike: Boolean,
+    scheduledArrival: LocalDateTime
+): RoadGuidanceInfo {
+    if (path.isEmpty()) {
+        return RoadGuidanceInfo(
+            maneuver = ManeuverType.STRAIGHT,
+            title = "道なりに進む",
+            subtitle = "$destName · 目的地へ",
+            distToManeuver = 0,
+            targetLat = curLat,
+            targetLon = curLon,
+            totalRemainingMeters = 0,
+            remainingMinutes = 0,
+            arrivalTime = scheduledArrival,
+            remainingPath = emptyList()
+        )
+    }
+
+    var closestIdx = 0
+    var closestDist = Double.MAX_VALUE
+    for (i in path.indices) {
+        val d = calcDistanceMeters(curLat, curLon, path[i].first, path[i].second).toDouble()
+        if (d < closestDist) {
+            closestDist = d
+            closestIdx = i
+        }
+    }
+
+    val curDistToNode = calcDistanceMeters(curLat, curLon, path[closestIdx].first, path[closestIdx].second)
+
+    val remainingPath = if (closestIdx < path.size) {
+        val list = ArrayList<Pair<Double, Double>>()
+        list.add(Pair(curLat, curLon))
+        list.addAll(path.subList(closestIdx, path.size))
+        list
+    } else {
+        listOf(Pair(curLat, curLon), path.last())
+    }
+
+    var totalRemaining = curDistToNode
+    for (i in closestIdx until path.size - 1) {
+        totalRemaining += calcDistanceMeters(path[i].first, path[i].second, path[i + 1].first, path[i + 1].second)
+    }
+
+    val mode = if (isBike) TravelMode.BICYCLE else TravelMode.WALK
+    val remMin = travelDurationMinutes(totalRemaining, mode).toLong()
+    val now = LocalDateTime.now()
+    val arrival = now.plusMinutes(remMin)
+
+    val destPt = path.last()
+    val distToDest = calcDistanceMeters(curLat, curLon, destPt.first, destPt.second)
+    if (totalRemaining <= 50 || distToDest <= 50) {
+        return RoadGuidanceInfo(
+            maneuver = ManeuverType.ARRIVE,
+            title = "まもなく目的地に到着します",
+            subtitle = "$destName · 残り約${totalRemaining}m",
+            distToManeuver = totalRemaining,
+            targetLat = destPt.first,
+            targetLon = destPt.second,
+            totalRemainingMeters = totalRemaining,
+            remainingMinutes = remMin,
+            arrivalTime = arrival,
+            remainingPath = remainingPath
+        )
+    }
+
+    var turnIdx = -1
+    var turnManeuver = ManeuverType.STRAIGHT
+    var distToTurn = curDistToNode
+
+    for (i in closestIdx until path.size - 2) {
+        val segDist = calcDistanceMeters(path[i].first, path[i].second, path[i + 1].first, path[i + 1].second)
+        distToTurn += segDist
+
+        val b1 = calcBearing(path[i].first, path[i].second, path[i + 1].first, path[i + 1].second)
+        val b2 = calcBearing(path[i + 1].first, path[i + 1].second, path[i + 2].first, path[i + 2].second)
+        val diff = angleDiff(b1, b2)
+
+        if (diff in 35.0..140.0) {
+            turnIdx = i + 1
+            turnManeuver = ManeuverType.TURN_RIGHT
+            break
+        } else if (diff in -140.0..-35.0) {
+            turnIdx = i + 1
+            turnManeuver = ManeuverType.TURN_LEFT
+            break
+        } else if (diff in 15.0..35.0) {
+            turnIdx = i + 1
+            turnManeuver = ManeuverType.SLIGHT_RIGHT
+            break
+        } else if (diff in -35.0..-15.0) {
+            turnIdx = i + 1
+            turnManeuver = ManeuverType.SLIGHT_LEFT
+            break
+        } else if (Math.abs(diff) > 140.0) {
+            turnIdx = i + 1
+            turnManeuver = ManeuverType.UTURN
+            break
+        }
+    }
+
+    val actionName = when (turnManeuver) {
+        ManeuverType.TURN_RIGHT -> "右折"
+        ManeuverType.TURN_LEFT -> "左折"
+        ManeuverType.SLIGHT_RIGHT -> "斜め右方向"
+        ManeuverType.SLIGHT_LEFT -> "斜め左方向"
+        ManeuverType.UTURN -> "Uターン"
+        else -> "直進"
+    }
+
+    val targetPoint = if (turnIdx != -1 && turnIdx < path.size) path[turnIdx] else destPt
+
+    val title: String
+    val maneuverDist: Int
+
+    if (turnIdx != -1 && distToTurn <= 3000) {
+        maneuverDist = distToTurn
+        title = when {
+            distToTurn <= 30 -> "まもなく$actionName"
+            distToTurn <= 100 -> "${distToTurn}m先、$actionName"
+            distToTurn <= 1000 -> "${(distToTurn / 10) * 10}m先、$actionName"
+            else -> "約${String.format("%.1f", distToTurn / 1000.0)}km先、$actionName"
+        }
+    } else {
+        turnManeuver = ManeuverType.STRAIGHT
+        maneuverDist = totalRemaining
+        title = "道なりに進む"
+    }
+
+    val subtitle = "${destName}方面 · 残り${distShortHelper(totalRemaining)} · 約${remMin}分"
+
+    return RoadGuidanceInfo(
+        maneuver = turnManeuver,
+        title = title,
+        subtitle = subtitle,
+        distToManeuver = maneuverDist,
+        targetLat = targetPoint.first,
+        targetLon = targetPoint.second,
+        totalRemainingMeters = totalRemaining,
+        remainingMinutes = remMin,
+        arrivalTime = arrival,
+        remainingPath = remainingPath
+    )
 }
 
 // ナビ開始時などに即座に表示するための初期案内
@@ -63,26 +263,55 @@ fun computeInitialGuidance(itin: Itinerary, travelMode: TravelMode, location: Lo
         val destPoint = legs.lastOrNull()?.path?.lastOrNull()
         val destName = legs.lastOrNull()?.toName ?: "目的地"
         val isBike = travelMode == TravelMode.BICYCLE || itin.routeKey == "bike_direct" || legs.any { it.lineName == "自転車" }
+        val fullPath = legs.flatMap { it.path }
+
+        if (location != null && fullPath.size >= 2) {
+            val roadInfo = evaluateRoadTurnByTurn(
+                path = fullPath,
+                curLat = location.latitude,
+                curLon = location.longitude,
+                destName = destName,
+                isBike = isBike,
+                scheduledArrival = itin.arrival
+            )
+            return Guidance(
+                kind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK,
+                title = roadInfo.title,
+                subtitle = roadInfo.subtitle,
+                distanceMeters = roadInfo.distToManeuver,
+                targetLat = roadInfo.targetLat,
+                targetLon = roadInfo.targetLon,
+                next = "目的地に到着",
+                remainingMinutes = roadInfo.remainingMinutes,
+                arrival = roadInfo.arrivalTime,
+                maneuver = roadInfo.maneuver,
+                remainingRoadMeters = roadInfo.totalRemainingMeters
+            )
+        }
+
         val totalMin = legs.sumOf { it.walkMinutes }
         val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
         val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
+        val totalMeters = legs.sumOf { it.walkMeters }
         val d: Int? = if (location != null && destPoint != null) {
             val r = FloatArray(1)
             Location.distanceBetween(location.latitude, location.longitude, destPoint.first, destPoint.second, r)
             r[0].toInt()
         } else {
-            legs.sumOf { it.walkMeters }.takeIf { it > 0 }
+            totalMeters.takeIf { it > 0 }
         }
         return Guidance(
             kind = modeKind,
             title = "${destName}へ",
-            subtitle = "$modeVerb · 約${totalMin}分",
+            subtitle = "$modeVerb · ${destName}方面 · 約${totalMin}分",
             distanceMeters = d,
             targetLat = destPoint?.first,
             targetLon = destPoint?.second,
             next = "目的地に到着",
             remainingMinutes = remaining,
-            arrival = itin.arrival
+            arrival = itin.arrival,
+            maneuver = ManeuverType.STRAIGHT,
+            remainingRoadMeters = totalMeters
         )
     }
 
@@ -153,7 +382,9 @@ object NavigationController {
         }
         NavigationState.itinerary = itin
         NavigationState.travelMode = effectiveMode
-        NavigationState.guidance = computeInitialGuidance(itin, effectiveMode, NavigationState.location)
+        val initGuidance = computeInitialGuidance(itin, effectiveMode, NavigationState.location)
+        NavigationState.guidance = initGuidance
+        NavigationState.remainingPath = itin.legs.flatMap { it.path }
         NavigationState.active = true
         try {
             ContextCompat.startForegroundService(
@@ -170,6 +401,7 @@ object NavigationController {
         context.stopService(Intent(context, NavigationService::class.java))
         NavigationState.active = false
         NavigationState.guidance = null
+        NavigationState.remainingPath = null
     }
 }
 
@@ -430,19 +662,72 @@ class NavigationService : Service() {
                 return
             }
             val d = distanceTo(destPoint)
+            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || r.routeKey == "bike_direct" || legs.any { it.lineName == "自転車" }
+            val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
+            val fullPath = legs.flatMap { it.path }
+
+            if (lastLocation != null && fullPath.size >= 2) {
+                val roadInfo = evaluateRoadTurnByTurn(
+                    path = fullPath,
+                    curLat = lastLocation!!.latitude,
+                    curLon = lastLocation!!.longitude,
+                    destName = destName,
+                    isBike = isBike,
+                    scheduledArrival = r.arrival
+                )
+                NavigationState.remainingPath = roadInfo.remainingPath
+
+                // 到着判定
+                if (roadInfo.totalRemainingMeters <= ARRIVE_WALK_M || (d != null && d <= ARRIVE_WALK_M) || now.isAfter(r.arrival.plusMinutes(10))) {
+                    alert("arrive", "到着しました", "${destName}に到着しました")
+                    stopSelf()
+                    return
+                }
+
+                // 曲がり角接近アラート（50m以内）
+                if (roadInfo.maneuver != ManeuverType.STRAIGHT && roadInfo.maneuver != ManeuverType.ARRIVE && roadInfo.distToManeuver <= 50) {
+                    val alertKey = "turn_${String.format("%.4f", roadInfo.targetLat)}_${String.format("%.4f", roadInfo.targetLon)}"
+                    alert(alertKey, roadInfo.title, "${destName}方面へ")
+                }
+
+                NavigationState.guidance = Guidance(
+                    kind = modeKind,
+                    title = roadInfo.title,
+                    subtitle = roadInfo.subtitle,
+                    distanceMeters = roadInfo.distToManeuver,
+                    targetLat = roadInfo.targetLat,
+                    targetLon = roadInfo.targetLon,
+                    next = "目的地に到着",
+                    remainingMinutes = roadInfo.remainingMinutes,
+                    arrival = roadInfo.arrivalTime,
+                    maneuver = roadInfo.maneuver,
+                    remainingRoadMeters = roadInfo.totalRemainingMeters
+                )
+                showStatus(roadInfo.title, "${roadInfo.subtitle} (残り${distShort(roadInfo.totalRemainingMeters)})")
+                return
+            }
+
+            // 位置情報取得前等のフォールバック
             if ((d != null && d <= ARRIVE_WALK_M) || now.isAfter(r.arrival.plusMinutes(10))) {
                 alert("arrive", "到着しました", "${destName}に到着しました")
                 stopSelf()
                 return
             }
-            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || r.routeKey == "bike_direct" || legs.any { it.lineName == "自転車" }
             val totalMin = legs.sumOf { it.walkMinutes }
-            val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
             val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
             val statusTitle = if (isBike) "自転車で${destName}へ" else "徒歩で${destName}へ"
             NavigationState.guidance = Guidance(
-                modeKind, "${destName}へ", "$modeVerb · 約${totalMin}分",
-                d, destPoint.first, destPoint.second, "目的地に到着", remaining, r.arrival
+                kind = modeKind,
+                title = "${destName}へ",
+                subtitle = "$modeVerb · ${destName}方面 · 約${totalMin}分",
+                distanceMeters = d,
+                targetLat = destPoint.first,
+                targetLon = destPoint.second,
+                next = "目的地に到着",
+                remainingMinutes = remaining,
+                arrival = r.arrival,
+                maneuver = ManeuverType.STRAIGHT,
+                remainingRoadMeters = legs.sumOf { it.walkMeters }
             )
             showStatus(statusTitle, "目的地まで${distShort(d)}")
             return

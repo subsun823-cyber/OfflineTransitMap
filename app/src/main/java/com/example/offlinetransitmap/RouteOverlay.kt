@@ -42,6 +42,14 @@ fun Itinerary.toOverlay(): RouteOverlay {
     return RouteOverlay(collection.toString(), points)
 }
 
+// ナビ走行中、現在地から目的地までの前方の道路ルート線(GeoJSON)
+fun remainingRoadOverlay(path: List<Pair<Double, Double>>): RouteOverlay {
+    if (path.size < 2) return RouteOverlay(EMPTY_ROUTE_JSON, emptyList())
+    val coords = path.joinToString(",") { (lat, lon) -> "[${lon},${lat}]" }
+    val json = "{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\",\"properties\":{\"walk\":true,\"color\":\"#1a73e8\"},\"geometry\":{\"type\":\"LineString\",\"coordinates\":[$coords]}}]}"
+    return RouteOverlay(json, path)
+}
+
 // 地図に目的地マーク(ピン)を出すGeoJSON
 fun destinationGeoJson(point: Pair<Double, Double>?, name: String = "目的地"): String {
     if (point == null) return EMPTY_ROUTE_JSON
