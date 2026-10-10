@@ -43,6 +43,16 @@ class KantoPrefecturesTest {
     }
 
     @Test
+    fun testDownloadUrlWithCustomBase() {
+        val tokyo = KantoPrefectures.findById("tokyo")!!
+        val defaultUrl = KantoPrefectures.getDownloadUrl(tokyo)
+        assertEquals("https://github.com/subsun823-cyber/OfflineTransitMap/releases/download/transit-data-latest/tokyo.pmtiles", defaultUrl)
+
+        val customUrl = KantoPrefectures.getDownloadUrl(tokyo, "https://example.com/maps/")
+        assertEquals("https://example.com/maps/tokyo.pmtiles", customUrl)
+    }
+
+    @Test
     fun testPrefectureCoordinatesCoverKeyStations() {
         // 東京駅
         val tokyo = KantoPrefectures.findById("tokyo")!!

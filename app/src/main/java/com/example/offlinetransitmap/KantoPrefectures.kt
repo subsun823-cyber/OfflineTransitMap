@@ -30,7 +30,12 @@ object KantoPrefectures {
     const val KANTO_CENTER_LAT = 35.86
     const val KANTO_CENTER_LON = 139.65
 
-    private const val DEFAULT_BASE_URL = "https://github.com/subsun823-cyber/OfflineTransitMap/releases/download/transit-data-latest"
+    const val DEFAULT_BASE_URL = "https://github.com/subsun823-cyber/OfflineTransitMap/releases/download/transit-data-latest"
+
+    fun getDownloadUrl(info: PrefectureMapInfo, customBaseUrl: String? = null): String {
+        val base = customBaseUrl?.trim()?.removeSuffix("/")?.takeIf { it.isNotBlank() } ?: DEFAULT_BASE_URL
+        return "$base/${info.fileName}"
+    }
 
     val all: List<PrefectureMapInfo> = listOf(
         PrefectureMapInfo(

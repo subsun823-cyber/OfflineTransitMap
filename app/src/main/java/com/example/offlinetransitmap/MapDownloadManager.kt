@@ -10,6 +10,8 @@ import java.net.URL
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
+import android.net.Uri
+
 sealed class MapDownloadResult {
     data class Success(val file: File, val sizeBytes: Long) : MapDownloadResult()
     data class Failure(val message: String) : MapDownloadResult()
@@ -32,6 +34,7 @@ object MapDownloadManager {
 
     /**
      * 特定の都県の地図ファイルをダウンロードして保存する。
+     * アプリ同梱アセットがある場合（東京都など）は、ネットワークを経由せず即座に展開・復元する。
      */
     suspend fun downloadPrefecture(
         context: Context,
@@ -44,6 +47,42 @@ object MapDownloadManager {
         if (!targetDir.exists()) targetDir.mkdirs()
 
         val partFile = File(targetDir, "${target.name}.part")
+
+        // 1. 同梱アセットがある場合（カスタムURL未指定時）はアセットから直接復元して404を回避
+        val assetPath = "bootstrap/${info.fileName}"
+        val hasAsset = customUrl == null && runCatching {
+            context.assets.open(assetPath).use { it.available() > 0 }
+        }.getOrDefault(false)
+
+        if (hasAsset) {
+            try {
+                context.assets.open(assetPath).use { input ->
+                    partFile.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var bytesCopied = 0L
+                        val totalLength = info.approximateSizeMb * 1024L * 1024L
+                        while (true) {
+                            val bytes = input.read(buffer)
+                            if (bytes < 0) break
+                            output.write(buffer, 0, bytes)
+                            bytesCopied += bytes
+                            val percent = if (totalLength > 0) ((bytesCopied * 100.0) / totalLength).toInt().coerceIn(0, 99) else 50
+                            onProgress(percent)
+                        }
+                        output.fd.sync()
+                    }
+                }
+                validateMapFile(partFile)
+                Files.move(partFile.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                onProgress(100)
+                return@withContext MapDownloadResult.Success(target, target.length())
+            } catch (e: Exception) {
+                partFile.delete()
+                // アセット展開に失敗した場合はネットワーク取得へフォールバック
+            }
+        }
+
+        // 2. ネットワークからのダウンロード
         val downloadUrl = customUrl ?: info.downloadUrl
 
         try {
@@ -68,6 +107,9 @@ object MapDownloadManager {
                     connection = conn
                     inputStream = conn.inputStream
                     return@repeat
+                } else if (status == 404) {
+                    conn.disconnect()
+                    throw IllegalStateException("配布元に地図ファイル（${info.fileName}）がまだ公開されていません (HTTP 404)。「URLを指定」からダウンロードURLを設定するか、「ファイルから追加」をご利用ください。")
                 } else {
                     conn.disconnect()
                     throw IllegalStateException("ダウンロードに失敗しました (HTTP $status)")
@@ -111,6 +153,58 @@ object MapDownloadManager {
         } catch (e: Exception) {
             partFile.delete()
             MapDownloadResult.Failure(e.message ?: "ダウンロードエラー")
+        }
+    }
+
+    /**
+     * 端末内のファイル（Uri）から都県の地図ファイルをインポートして保存する。
+     */
+    suspend fun importMapFile(
+        context: Context,
+        info: PrefectureMapInfo,
+        uri: Uri,
+        onProgress: (percent: Int) -> Unit = {}
+    ): MapDownloadResult = withContext(Dispatchers.IO) {
+        val target = KantoPrefectures.getFile(context, info)
+        val targetDir = target.parentFile ?: return@withContext MapDownloadResult.Failure("保存先ディレクトリが取得できません")
+        if (!targetDir.exists()) targetDir.mkdirs()
+
+        val partFile = File(targetDir, "${target.name}.part")
+        try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+                ?: return@withContext MapDownloadResult.Failure("指定されたファイルを開けませんでした")
+
+            val fileSize = context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: 0L
+            val totalLength = if (fileSize > 0) fileSize else (info.approximateSizeMb * 1024L * 1024L)
+
+            inputStream.use { input ->
+                partFile.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var bytesCopied = 0L
+                    var lastPercent = -1
+
+                    while (true) {
+                        val bytes = input.read(buffer)
+                        if (bytes < 0) break
+                        output.write(buffer, 0, bytes)
+                        bytesCopied += bytes
+                        val percent = if (totalLength > 0) ((bytesCopied * 100.0) / totalLength).toInt().coerceIn(0, 99) else 50
+                        if (percent != lastPercent) {
+                            onProgress(percent)
+                            lastPercent = percent
+                        }
+                    }
+                    output.fd.sync()
+                }
+            }
+
+            validateMapFile(partFile)
+            Files.move(partFile.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            onProgress(100)
+            MapDownloadResult.Success(target, target.length())
+        } catch (e: Exception) {
+            partFile.delete()
+            MapDownloadResult.Failure(e.message ?: "インポートエラー")
         }
     }
 

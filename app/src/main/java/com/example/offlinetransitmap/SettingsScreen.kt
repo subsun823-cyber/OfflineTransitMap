@@ -40,6 +40,13 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.PaddingValues
+
 data class PrefectureDownloadState(
     val info: PrefectureMapInfo,
     val isDownloaded: Boolean,
@@ -61,10 +68,11 @@ fun SettingsScreen(
     var mapDownloadPercent by remember { mutableStateOf(0) }
     var mapActionMessage by remember { mutableStateOf<String?>(null) }
 
-    var updateStatusMessage by remember { mutableStateOf<String?>(null) }
-    var availableUpdate by remember { mutableStateOf<TransitManifest?>(null) }
-    var isCheckingOrUpdating by remember { mutableStateOf(false) }
-    var updateProgressPercent by remember { mutableStateOf(0) }
+    var urlDialogPrefecture by remember { mutableStateOf<PrefectureMapInfo?>(null) }
+    var inputCustomUrl by remember { mutableStateOf("") }
+    var showBaseUrlDialog by remember { mutableStateOf(false) }
+    var inputBaseUrl by remember { mutableStateOf("") }
+    var importTargetPrefecture by remember { mutableStateOf<PrefectureMapInfo?>(null) }
 
     suspend fun refreshPrefectureStates() {
         prefectureStates = withContext(Dispatchers.IO) {
@@ -96,6 +104,40 @@ fun SettingsScreen(
             listOf("地図" to mapStatus, "時刻表" to timetableStatus)
         }
     }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        val pref = importTargetPrefecture
+        importTargetPrefecture = null
+        if (uri != null && pref != null) {
+            downloadingPrefectureId = pref.id
+            mapDownloadPercent = 0
+            mapActionMessage = "${pref.name}をインポート中…"
+            scope.launch {
+                val result = MapDownloadManager.importMapFile(context, pref, uri) { p ->
+                    mapDownloadPercent = p
+                }
+                when (result) {
+                    is MapDownloadResult.Success -> {
+                        mapActionMessage = "${pref.name}の地図をインポートしました"
+                        refreshPrefectureStates()
+                        refreshSavedData()
+                        onMapUpdated()
+                    }
+                    is MapDownloadResult.Failure -> {
+                        mapActionMessage = "${pref.name}のインポートに失敗しました: ${result.message}"
+                    }
+                }
+                downloadingPrefectureId = null
+            }
+        }
+    }
+
+    var updateStatusMessage by remember { mutableStateOf<String?>(null) }
+    var availableUpdate by remember { mutableStateOf<TransitManifest?>(null) }
+    var isCheckingOrUpdating by remember { mutableStateOf(false) }
+    var updateProgressPercent by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) {
         refreshPrefectureStates()
@@ -167,8 +209,9 @@ fun SettingsScreen(
                             Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                                 Text(pref.name, style = MaterialTheme.typography.bodyLarge)
                                 val statusText = when {
-                                    isDownloading -> "ダウンロード中… ($mapDownloadPercent%)"
+                                    isDownloading -> "処理中… ($mapDownloadPercent%)"
                                     state.isDownloaded -> "保存済み（%.1f MB）".format(state.sizeBytes / 1024.0 / 1024.0)
+                                    pref.id == "tokyo" -> "未保存（アプリ内から即座に復元可能）"
                                     else -> "未保存（目安: 約${pref.approximateSizeMb} MB）"
                                 }
                                 SettingNote(statusText)
@@ -178,6 +221,29 @@ fun SettingsScreen(
                                         progress = { mapDownloadPercent / 100f },
                                         modifier = Modifier.fillMaxWidth()
                                     )
+                                } else if (!state.isDownloaded && pref.id != "tokyo") {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        TextButton(
+                                            onClick = {
+                                                urlDialogPrefecture = pref
+                                                inputCustomUrl = KantoPrefectures.getDownloadUrl(pref, preferences.customMapBaseUrl)
+                                            },
+                                            modifier = Modifier.height(32.dp),
+                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                        ) {
+                                            Text("URL指定", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                importTargetPrefecture = pref
+                                                filePickerLauncher.launch("*/*")
+                                            },
+                                            modifier = Modifier.height(32.dp),
+                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                        ) {
+                                            Text("ファイル選択", style = MaterialTheme.typography.labelMedium)
+                                        }
+                                    }
                                 }
                             }
 
@@ -203,20 +269,23 @@ fun SettingsScreen(
                                     onClick = {
                                         downloadingPrefectureId = pref.id
                                         mapDownloadPercent = 0
-                                        mapActionMessage = "${pref.name}をダウンロード中…"
+                                        val customUrl = if (preferences.customMapBaseUrl.isNotBlank()) {
+                                            KantoPrefectures.getDownloadUrl(pref, preferences.customMapBaseUrl)
+                                        } else null
+                                        mapActionMessage = "${pref.name}を取得中…"
                                         scope.launch {
-                                            val result = MapDownloadManager.downloadPrefecture(context, pref) { p ->
+                                            val result = MapDownloadManager.downloadPrefecture(context, pref, customUrl) { p ->
                                                 mapDownloadPercent = p
                                             }
                                             when (result) {
                                                 is MapDownloadResult.Success -> {
-                                                    mapActionMessage = "${pref.name}のダウンロードが完了しました"
+                                                    mapActionMessage = "${pref.name}の取得が完了しました"
                                                     refreshPrefectureStates()
                                                     refreshSavedData()
                                                     onMapUpdated()
                                                 }
                                                 is MapDownloadResult.Failure -> {
-                                                    mapActionMessage = "${pref.name}のダウンロードに失敗しました: ${result.message}"
+                                                    mapActionMessage = "${pref.name}の取得に失敗しました:\n${result.message}"
                                                 }
                                             }
                                             downloadingPrefectureId = null
@@ -234,6 +303,26 @@ fun SettingsScreen(
                     if (mapActionMessage != null) {
                         Spacer(Modifier.height(8.dp))
                         SettingNote(requireNotNull(mapActionMessage))
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val activeBaseUrl = preferences.customMapBaseUrl.ifBlank { KantoPrefectures.DEFAULT_BASE_URL }
+                        Column(modifier = Modifier.weight(1f)) {
+                            SettingNote("配信元URL: $activeBaseUrl")
+                        }
+                        TextButton(
+                            onClick = {
+                                inputBaseUrl = preferences.customMapBaseUrl
+                                showBaseUrlDialog = true
+                            }
+                        ) {
+                            Text("URL変更")
+                        }
                     }
                 }
             }
@@ -342,6 +431,99 @@ fun SettingsScreen(
                 }
             }
             item { Spacer(Modifier.height(16.dp)) }
+        }
+
+        if (showBaseUrlDialog) {
+            AlertDialog(
+                onDismissRequest = { showBaseUrlDialog = false },
+                title = { Text("地図の配信元ベースURL設定") },
+                text = {
+                    Column {
+                        Text("全都県の地図ファイルが配置されているベースURLを設定します。空欄にすると既定のURLに戻ります。")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = inputBaseUrl,
+                            onValueChange = { inputBaseUrl = it },
+                            label = { Text("ベースURL") },
+                            placeholder = { Text(KantoPrefectures.DEFAULT_BASE_URL) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            onChange(preferences.copy(customMapBaseUrl = inputBaseUrl.trim()))
+                            showBaseUrlDialog = false
+                        }
+                    ) {
+                        Text("保存")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBaseUrlDialog = false }) {
+                        Text("キャンセル")
+                    }
+                }
+            )
+        }
+
+        urlDialogPrefecture?.let { pref ->
+            AlertDialog(
+                onDismissRequest = { urlDialogPrefecture = null },
+                title = { Text("${pref.name}のURL指定ダウンロード") },
+                text = {
+                    Column {
+                        Text("PMTiles ファイル（${pref.fileName}）のダウンロードURLを入力してください。")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = inputCustomUrl,
+                            onValueChange = { inputCustomUrl = it },
+                            label = { Text("ダウンロードURL") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val urlToDownload = inputCustomUrl.trim()
+                            urlDialogPrefecture = null
+                            if (urlToDownload.isNotBlank()) {
+                                downloadingPrefectureId = pref.id
+                                mapDownloadPercent = 0
+                                mapActionMessage = "${pref.name}をダウンロード中…"
+                                scope.launch {
+                                    val result = MapDownloadManager.downloadPrefecture(context, pref, urlToDownload) { p ->
+                                        mapDownloadPercent = p
+                                    }
+                                    when (result) {
+                                        is MapDownloadResult.Success -> {
+                                            mapActionMessage = "${pref.name}のダウンロードが完了しました"
+                                            refreshPrefectureStates()
+                                            refreshSavedData()
+                                            onMapUpdated()
+                                        }
+                                        is MapDownloadResult.Failure -> {
+                                            mapActionMessage = "${pref.name}のダウンロードに失敗しました:\n${result.message}"
+                                        }
+                                    }
+                                    downloadingPrefectureId = null
+                                }
+                            }
+                        }
+                    ) {
+                        Text("ダウンロード")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { urlDialogPrefecture = null }) {
+                        Text("キャンセル")
+                    }
+                }
+            )
         }
     }
 }

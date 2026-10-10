@@ -25,7 +25,8 @@ data class AppPreferences(
     val showPoiIcons: Boolean = true,
     val keepScreenOnDuringNavigation: Boolean = false,
     val autoCheckTransitUpdates: Boolean = true,
-    val customManifestUrl: String = ""
+    val customManifestUrl: String = "",
+    val customMapBaseUrl: String = ""
 )
 
 // 小さな設定だけを保存する。地図・時刻表データには触れない。
@@ -37,7 +38,8 @@ class AppSettings(private val storage: SharedPreferences) {
             showPoiIcons = storage.getBoolean("poi_icons", true),
             keepScreenOnDuringNavigation = storage.getBoolean("navigation_screen_on", false),
             autoCheckTransitUpdates = storage.getBoolean("auto_check_transit_updates", true),
-            customManifestUrl = storage.getString("transit_manifest_url", "") ?: ""
+            customManifestUrl = storage.getString("transit_manifest_url", "") ?: "",
+            customMapBaseUrl = storage.getString("map_base_url", "") ?: ""
         )
     )
         private set
@@ -50,6 +52,7 @@ class AppSettings(private val storage: SharedPreferences) {
             .putBoolean("navigation_screen_on", preferences.keepScreenOnDuringNavigation)
             .putBoolean("auto_check_transit_updates", preferences.autoCheckTransitUpdates)
             .putString("transit_manifest_url", preferences.customManifestUrl)
+            .putString("map_base_url", preferences.customMapBaseUrl)
             .apply()
         value = preferences
     }
