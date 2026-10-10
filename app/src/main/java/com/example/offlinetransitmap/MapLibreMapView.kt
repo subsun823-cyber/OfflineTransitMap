@@ -209,6 +209,8 @@ fun MapLibreMapView(
     followMode: Boolean = false,
     navLineJson: String? = null,
     destinationPoint: Pair<Double, Double>? = null,
+    destinationName: String = "目的地",
+    targetCameraPoint: Pair<Double, Double>? = null,
     mapReloadKey: Int = 0,
     onFollowLostChange: (Boolean) -> Unit = {},
     onBearingChange: (Double) -> Unit = {},
@@ -274,8 +276,19 @@ fun MapLibreMapView(
     LaunchedEffect(loadedStyle, stationsGeoJson) {
         loadedStyle?.getSourceAs<GeoJsonSource>("stations")?.setGeoJson(stationsGeoJson)
     }
-    LaunchedEffect(loadedStyle, destinationPoint) {
-        loadedStyle?.getSourceAs<GeoJsonSource>("destination")?.setGeoJson(destinationGeoJson(destinationPoint))
+    LaunchedEffect(loadedStyle, destinationPoint, destinationName) {
+        loadedStyle?.getSourceAs<GeoJsonSource>("destination")?.setGeoJson(destinationGeoJson(destinationPoint, destinationName))
+    }
+    LaunchedEffect(targetCameraPoint, mapState) {
+        val target = targetCameraPoint ?: return@LaunchedEffect
+        val map = mapState ?: return@LaunchedEffect
+        map.animateCamera(
+            CameraUpdateFactory.newLatLngZoom(
+                LatLng(target.first, target.second),
+                15.5
+            ),
+            800
+        )
     }
     LaunchedEffect(appearance, darkTheme, preferences.showPoiNames, preferences.showPoiIcons) {
         appearance?.apply(darkTheme, preferences)

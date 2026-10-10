@@ -14,23 +14,33 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.DisposableEffect
@@ -156,8 +166,18 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     // 結果から選ばれた経路(地図に線を出し、詳細パネルを表示する)
     var selectedItinerary by remember { mutableStateOf<Itinerary?>(null) }
 
-    // 任意の場所を長押ししたときの目的地
+    // 施設・場所・駅・バス停の検索
+    val placeSearcher = remember(timetable) { PlaceSearcher(timetable?.db) }
+    var showPlaceSearch by remember { mutableStateOf(false) }
+
+    // 目的地の状態（施設名、カテゴリ、アイコン、距離、所要時間など）
     var destinationPoint by remember { mutableStateOf<Pair<Double, Double>?>(null) }
+    var destinationTitle by remember { mutableStateOf("目的地") }
+    var destinationCategoryLabel by remember { mutableStateOf<String?>(null) }
+    var destinationIconEmoji by remember { mutableStateOf("📍") }
+    var destinationCurrentDistance by remember { mutableStateOf<Int?>(null) }
+    var destinationCurrentDuration by remember { mutableStateOf<Int?>(null) }
+    var targetCameraPoint by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var destinationStation by remember { mutableStateOf<StationEntry?>(null) }
     var destinationDistance by remember { mutableStateOf<Int?>(null) }
     var isSearchingForDestination by remember { mutableStateOf(false) }
@@ -188,11 +208,17 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         showSearch = true
     }
 
+    // 施設検索画面の戻る操作
+    BackHandler(enabled = showPlaceSearch) { showPlaceSearch = false }
+
     // 目的地カードが開いているときの戻る操作
-    BackHandler(enabled = destinationPoint != null && selectedItinerary == null && !navMode && !showSettings) {
+    BackHandler(enabled = destinationPoint != null && selectedItinerary == null && !navMode && !showSettings && !showPlaceSearch) {
         destinationPoint = null
         destinationStation = null
         destinationDistance = null
+        destinationCurrentDistance = null
+        destinationCurrentDuration = null
+        targetCameraPoint = null
     }
 
     BackHandler(enabled = showSettings) { showSettings = false }
@@ -263,13 +289,18 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     isSearchingForDestination = true
                     scope.launch {
                         val candidates = withContext(Dispatchers.Default) {
+                            val resolvedName = if (destinationTitle != "目的地を設定しました" && destinationTitle != "目的地") {
+                                destinationTitle
+                            } else {
+                                destinationStation?.name?.let { "$it 付近" } ?: "目的地"
+                            }
                             searcher.findRoutesBetweenCoordinates(
                                 originLat = curLoc.first,
                                 originLon = curLoc.second,
                                 destLat = dest.first,
                                 destLon = dest.second,
                                 now = LocalDateTime.now(),
-                                destName = destinationStation?.name?.let { "$it 付近" } ?: "目的地"
+                                destName = resolvedName
                             )
                         }
                         isSearchingForDestination = false
@@ -303,15 +334,62 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     title = { Text("設定") },
                     navigationIcon = { TextButton(onClick = { showSettings = false }) { Text("戻る") } }
                 )
-            } else if (!navMode) {
-                CenterAlignedTopAppBar(
-                    title = { Text("オフライン乗換マップ") },
-                    actions = { TextButton(onClick = { showSettings = true }) { Text("設定") } }
-                )
+            } else if (!navMode && !showPlaceSearch && !showSearch) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 2.dp
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .clickable {
+                                    searchLocation = if (hasLocationPermission) lastKnownLatLon(context) else null
+                                    showPlaceSearch = true
+                                },
+                            shape = RoundedCornerShape(24.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "検索",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                Text(
+                                    text = "施設・場所、駅・バス停を検索",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                    maxLines = 1
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(onClick = { showSettings = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "設定",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
         },
         floatingActionButton = {
-            if (!showSettings && !showSearch && selectedItinerary == null && !navMode && destinationPoint == null) {
+            if (!showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null && !navMode && destinationPoint == null) {
                 Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -343,7 +421,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             }
                         }
                     ) {
-                        Icon(Icons.Default.Search, contentDescription = "検索")
+                        Icon(Icons.Default.Search, contentDescription = "経路検索")
                     }
                 }
             }
@@ -366,6 +444,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 followMode = navMode,
                 navLineJson = navLine,
                 destinationPoint = destinationPoint,
+                destinationName = destinationTitle,
+                targetCameraPoint = targetCameraPoint,
                 mapReloadKey = mapReloadKey,
                 onFollowLostChange = { followLost = it },
                 onBearingChange = { mapBearing = it },
@@ -374,6 +454,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationPoint = null
                         destinationStation = null
                         destinationDistance = null
+                        destinationCurrentDistance = null
+                        destinationCurrentDuration = null
+                        targetCameraPoint = null
                         selectedStation = SelectedStation(id, name)
                     }
                 },
@@ -382,15 +465,31 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationPoint = null
                         destinationStation = null
                         destinationDistance = null
+                        destinationCurrentDistance = null
+                        destinationCurrentDuration = null
+                        targetCameraPoint = null
                     }
                 },
                 onMapLongClick = { lat, lon ->
-                    if (!navMode && !showSettings && !showSearch) {
+                    if (!navMode && !showSettings && !showSearch && !showPlaceSearch) {
                         selectedStation = null
                         selectedItinerary = null
                         destinationPoint = Pair(lat, lon)
+                        destinationTitle = "目的地を設定しました"
+                        destinationCategoryLabel = null
+                        destinationIconEmoji = "📍"
                         destinationStation = null
                         destinationDistance = null
+                        targetCameraPoint = null
+                        val curLoc = if (hasLocationPermission) lastKnownLatLon(context) else null
+                        if (curLoc != null) {
+                            val curDist = calcDistanceMeters(curLoc.first, curLoc.second, lat, lon)
+                            destinationCurrentDistance = curDist
+                            destinationCurrentDuration = walkDurationMinutes(curDist)
+                        } else {
+                            destinationCurrentDistance = null
+                            destinationCurrentDuration = null
+                        }
                         scope.launch(Dispatchers.Default) {
                             val nearest = searcher?.nearestStation(lat, lon)
                             val dist = if (nearest != null) calcDistanceMeters(lat, lon, nearest.lat, nearest.lon) else null
@@ -405,9 +504,14 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 }
             )
             destinationPoint?.let { point ->
-                if (!navMode && !showSettings && !showSearch && selectedItinerary == null) {
+                if (!navMode && !showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null) {
                     DestinationCard(
                         point = point,
+                        title = destinationTitle,
+                        categoryLabel = destinationCategoryLabel,
+                        iconEmoji = destinationIconEmoji,
+                        currentLocationDistanceMeters = destinationCurrentDistance,
+                        currentLocationDurationMinutes = destinationCurrentDuration,
                         nearestStation = destinationStation,
                         nearestDistanceMeters = destinationDistance,
                         isSearching = isSearchingForDestination,
@@ -417,10 +521,44 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationPoint = null
                             destinationStation = null
                             destinationDistance = null
+                            destinationCurrentDistance = null
+                            destinationCurrentDuration = null
+                            targetCameraPoint = null
                         },
                         modifier = Modifier.align(Alignment.BottomCenter)
                     )
                 }
+            }
+            if (showPlaceSearch && !navMode && !showSettings) {
+                PlaceSearchScreen(
+                    searcher = placeSearcher,
+                    currentLocation = searchLocation,
+                    onSelectPlace = { res ->
+                        showPlaceSearch = false
+                        selectedStation = null
+                        selectedItinerary = null
+                        val p = res.place
+                        val point = Pair(p.lat, p.lon)
+                        destinationPoint = point
+                        destinationTitle = p.name
+                        destinationCategoryLabel = if (p.detail.isNotBlank()) "${p.category.label} · ${p.detail}" else p.category.label
+                        destinationIconEmoji = p.category.iconEmoji
+                        destinationCurrentDistance = res.distanceMeters
+                        destinationCurrentDuration = res.durationMinutes
+                        targetCameraPoint = point
+                        scope.launch(Dispatchers.Default) {
+                            val nearest = searcher?.nearestStation(p.lat, p.lon)
+                            val dist = if (nearest != null) calcDistanceMeters(p.lat, p.lon, nearest.lat, nearest.lon) else null
+                            withContext(Dispatchers.Main) {
+                                if (destinationPoint == point) {
+                                    destinationStation = nearest
+                                    destinationDistance = dist
+                                }
+                            }
+                        }
+                    },
+                    onClose = { showPlaceSearch = false }
+                )
             }
             if (showSearch && searcher != null && !navMode && !showSettings) {
                 RouteSearchScreen(
@@ -451,6 +589,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationPoint = null
                             destinationStation = null
                             destinationDistance = null
+                            destinationCurrentDistance = null
+                            destinationCurrentDuration = null
+                            targetCameraPoint = null
                         }
                     )
                 }
@@ -467,6 +608,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationPoint = null
                         destinationStation = null
                         destinationDistance = null
+                        destinationCurrentDistance = null
+                        destinationCurrentDuration = null
+                        targetCameraPoint = null
                     }
                 )
             }
