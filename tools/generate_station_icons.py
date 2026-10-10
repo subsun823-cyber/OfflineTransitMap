@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Generate all combination station icons for OfflineTransitMap."""
 import os
-from PySide6.QtGui import QImage, QPainter, QColor, QPainterPath
-from PySide6.QtCore import Qt
+from PySide6.QtGui import QImage, QPainter, QColor, QPainterPath, QBrush
+from PySide6.QtCore import Qt, QRectF
 
 DRAWABLE_DIR = 'app/src/main/res/drawable-xxxhdpi'
 os.makedirs(DRAWABLE_DIR, exist_ok=True)
@@ -15,7 +15,6 @@ painter = QPainter(toei_img)
 painter.setRenderHint(QPainter.Antialiasing, True)
 painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
-# Path definition of Tokyo ginkgo leaf from SVG (500x500 scaled to 70x70)
 path = QPainterPath()
 s = 70.0 / 500.0
 ox = 5.0
@@ -38,12 +37,37 @@ painter.end()
 toei_img.save(toei_path)
 print(f'Saved {toei_path}')
 
+# 2. Ensure map_station_seibu.png exists from ダウンロード.png
+seibu_path = os.path.join(DRAWABLE_DIR, 'map_station_seibu.png')
+src_seibu_logo = 'ダウンロード.png'
+if os.path.exists(src_seibu_logo):
+    src_img = QImage(src_seibu_logo).convertToFormat(QImage.Format_ARGB32)
+    seibu_img = QImage(80, 80, QImage.Format_ARGB32)
+    seibu_img.fill(QColor(0, 0, 0, 0))
+    p = QPainter(seibu_img)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+    circle_path = QPainterPath()
+    circle_path.addEllipse(QRectF(1.0, 1.0, 78.0, 78.0))
+    p.setClipPath(circle_path)
+    p.fillPath(circle_path, QBrush(QColor('#ffffff')))
+
+    margin = 6.0
+    p.drawImage(QRectF(margin, margin, 80.0 - 2 * margin, 80.0 - 2 * margin), src_img)
+    p.end()
+    seibu_img.save(seibu_path)
+    print(f'Saved {seibu_path}')
+else:
+    seibu_img = QImage(seibu_path)
+
 # Load base 80x80 icons
 icons = {
     'jr': QImage(os.path.join(DRAWABLE_DIR, 'map_station_jr_east.png')),
     'private': QImage(os.path.join(DRAWABLE_DIR, 'map_station_rail.png')),
     'metro': QImage(os.path.join(DRAWABLE_DIR, 'map_station_tokyo_metro.png')),
     'toei': toei_img,
+    'seibu': seibu_img,
 }
 
 def create_combined(icon_keys):
@@ -64,20 +88,36 @@ def create_combined(icon_keys):
     return res
 
 combinations = {
-    # 2-operator combos
-    'map_station_rail_both.png': ['jr', 'private'], # keep existing or regenerate for consistency
+    # 2-operator combos (generic private)
+    'map_station_rail_both.png': ['jr', 'private'],
     'map_station_rail_jr_metro.png': ['jr', 'metro'],
     'map_station_rail_jr_toei.png': ['jr', 'toei'],
     'map_station_rail_private_metro.png': ['private', 'metro'],
     'map_station_rail_private_toei.png': ['private', 'toei'],
     'map_station_rail_metro_toei.png': ['metro', 'toei'],
-    # 3-operator combos
+
+    # 3-operator combos (generic private)
     'map_station_rail_jr_private_metro.png': ['jr', 'private', 'metro'],
     'map_station_rail_jr_private_toei.png': ['jr', 'private', 'toei'],
     'map_station_rail_jr_metro_toei.png': ['jr', 'metro', 'toei'],
     'map_station_rail_private_metro_toei.png': ['private', 'metro', 'toei'],
-    # 4-operator combos
+
+    # 4-operator combos (generic private)
     'map_station_rail_jr_private_metro_toei.png': ['jr', 'private', 'metro', 'toei'],
+
+    # Seibu combos (2-operator)
+    'map_station_rail_jr_seibu.png': ['jr', 'seibu'],
+    'map_station_rail_seibu_metro.png': ['seibu', 'metro'],
+    'map_station_rail_seibu_toei.png': ['seibu', 'toei'],
+    'map_station_rail_seibu_private.png': ['seibu', 'private'],
+
+    # Seibu combos (3-operator)
+    'map_station_rail_jr_seibu_metro.png': ['jr', 'seibu', 'metro'],
+    'map_station_rail_jr_seibu_toei.png': ['jr', 'seibu', 'toei'],
+    'map_station_rail_seibu_metro_toei.png': ['seibu', 'metro', 'toei'],
+
+    # Seibu combos (4-operator)
+    'map_station_rail_jr_seibu_metro_toei.png': ['jr', 'seibu', 'metro', 'toei'],
 }
 
 for fname, keys in combinations.items():
