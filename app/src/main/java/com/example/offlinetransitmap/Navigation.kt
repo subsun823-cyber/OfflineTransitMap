@@ -26,7 +26,7 @@ import androidx.core.content.ContextCompat
 import java.time.Duration
 import java.time.LocalDateTime
 
-enum class GuidanceKind { WALK, WAIT, RIDE, ARRIVED }
+enum class GuidanceKind { WALK, BICYCLE, WAIT, RIDE, ARRIVED }
 
 // ナビ画面に出す、いまの案内
 data class Guidance(
@@ -45,18 +45,20 @@ data class Guidance(
 object NavigationState {
     var active by mutableStateOf(false)
     var itinerary by mutableStateOf<Itinerary?>(null)
+    var travelMode by mutableStateOf(TravelMode.WALK)
     var location by mutableStateOf<Location?>(null)
     var guidance by mutableStateOf<Guidance?>(null)
 }
 
 // ナビの開始・終了
 object NavigationController {
-    fun start(context: Context, itin: Itinerary) {
+    fun start(context: Context, itin: Itinerary, travelMode: TravelMode = TravelMode.WALK) {
         if (!itin.arrival.isAfter(LocalDateTime.now())) {
             Toast.makeText(context, "過去の経路ではナビを開始できません", Toast.LENGTH_LONG).show()
             return
         }
         NavigationState.itinerary = itin
+        NavigationState.travelMode = travelMode
         NavigationState.guidance = null
         NavigationState.active = true
         try {
@@ -334,12 +336,16 @@ class NavigationService : Service() {
                 stopSelf()
                 return
             }
-            val totalWalkMin = legs.sumOf { it.walkMinutes }
+            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || r.routeKey == "bike_direct"
+            val totalMin = legs.sumOf { it.walkMinutes }
+            val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
+            val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
+            val statusTitle = if (isBike) "自転車で${destName}へ" else "徒歩で${destName}へ"
             NavigationState.guidance = Guidance(
-                GuidanceKind.WALK, "${destName}へ", "徒歩で向かう · 約${totalWalkMin}分",
+                modeKind, "${destName}へ", "$modeVerb · 約${totalMin}分",
                 d, destPoint.first, destPoint.second, "目的地に到着", remaining, r.arrival
             )
-            showStatus("徒歩で${destName}へ", "目的地まで${distShort(d)}")
+            showStatus(statusTitle, "目的地まで${distShort(d)}")
             return
         }
 

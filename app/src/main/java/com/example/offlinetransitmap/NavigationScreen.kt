@@ -102,7 +102,7 @@ fun NavigationOverlay(
                         val lat = guidance?.targetLat
                         val lon = guidance?.targetLon
                         when (guidance?.kind) {
-                            GuidanceKind.WALK -> {
+                            GuidanceKind.WALK, GuidanceKind.BICYCLE -> {
                                 var angle = 0f
                                 if (location != null && lat != null && lon != null) {
                                     val t = Location("target")

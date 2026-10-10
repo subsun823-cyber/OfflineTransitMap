@@ -1,6 +1,7 @@
 package com.example.offlinetransitmap
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +39,9 @@ fun DestinationCard(
     iconEmoji: String = "📍",
     currentLocationDistanceMeters: Int? = null,
     currentLocationDurationMinutes: Int? = null,
+    currentLocationBicycleDurationMinutes: Int? = null,
+    selectedTravelMode: TravelMode = TravelMode.WALK,
+    onTravelModeChange: (TravelMode) -> Unit = {},
     nearestStation: StationEntry? = null,
     nearestDistanceMeters: Int? = null,
     isSearching: Boolean,
@@ -94,11 +98,65 @@ fun DestinationCard(
 
             Spacer(Modifier.height(8.dp))
 
+            // 移動モード切替 (徒歩 / 自転車)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val isWalkSelected = selectedTravelMode == TravelMode.WALK
+                val isBikeSelected = selectedTravelMode == TravelMode.BICYCLE
+
+                // 徒歩チップ
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .background(
+                            color = if (isWalkSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .clickable { onTravelModeChange(TravelMode.WALK) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "🚶 徒歩",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isWalkSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isWalkSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // 自転車チップ
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .background(
+                            color = if (isBikeSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .clickable { onTravelModeChange(TravelMode.BICYCLE) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "🚲 自転車",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isBikeSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isBikeSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
             // 現在地からの距離・所要時間（情報がある場合）
             if (currentLocationDistanceMeters != null) {
                 val distText = formatDistance(currentLocationDistanceMeters)
                 val walkMin = currentLocationDurationMinutes ?: walkDurationMinutes(currentLocationDistanceMeters)
-                val durText = formatDuration(walkMin)
+                val bikeMin = currentLocationBicycleDurationMinutes ?: bicycleDurationMinutes(currentLocationDistanceMeters)
+                val currentDur = if (selectedTravelMode == TravelMode.BICYCLE) bikeMin else walkMin
+                val modePrefix = if (selectedTravelMode == TravelMode.BICYCLE) "🚲 自転車 約" else "🚶 徒歩 約"
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -124,7 +182,7 @@ fun DestinationCard(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "($durText)",
+                        text = "($modePrefix${currentDur}分)",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

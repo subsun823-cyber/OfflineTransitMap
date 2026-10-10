@@ -172,6 +172,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     // 施設・場所・駅・バス停の検索
     val poiDb = remember { PoiDatabase.open(context) }
     val placeSearcher = remember(timetable, poiDb) { PlaceSearcher(timetable?.db, poiDb) }
+    val roadRouter = remember { RoadRouter.open(context) }
     var showPlaceSearch by remember { mutableStateOf(false) }
 
     // 目的地の状態（施設名、カテゴリ、アイコン、距離、所要時間など）
@@ -181,6 +182,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var destinationIconEmoji by remember { mutableStateOf("📍") }
     var destinationCurrentDistance by remember { mutableStateOf<Int?>(null) }
     var destinationCurrentDuration by remember { mutableStateOf<Int?>(null) }
+    var destinationBicycleDuration by remember { mutableStateOf<Int?>(null) }
+    var selectedTravelMode by remember { mutableStateOf(TravelMode.WALK) }
     var targetCameraPoint by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var destinationStation by remember { mutableStateOf<StationEntry?>(null) }
     var destinationDistance by remember { mutableStateOf<Int?>(null) }
@@ -222,6 +225,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         destinationDistance = null
         destinationCurrentDistance = null
         destinationCurrentDuration = null
+        destinationBicycleDuration = null
+        selectedTravelMode = TravelMode.WALK
         targetCameraPoint = null
     }
 
@@ -250,18 +255,20 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
 
     // ナビの開始。Android 13以降は、通知の許可が必要
     var pendingNavItinerary by remember { mutableStateOf<Itinerary?>(null) }
+    var pendingNavMode by remember { mutableStateOf(TravelMode.WALK) }
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         val itin = pendingNavItinerary
+        val mode = pendingNavMode
         pendingNavItinerary = null
         if (granted && itin != null) {
-            NavigationController.start(context, itin)
+            NavigationController.start(context, itin, mode)
         } else {
             Toast.makeText(context, "通知が許可されていないため、ナビを開始できません", Toast.LENGTH_LONG).show()
         }
     }
-    val startNavigation: (Itinerary) -> Unit = { itin ->
+    fun startNavigation(itin: Itinerary, mode: TravelMode = TravelMode.WALK) {
         if (!hasLocationPermission) {
             permissionLauncher.launch(locationPermissions)
             Toast.makeText(context, "位置情報を許可してから、もう一度「ナビ開始」を押してください", Toast.LENGTH_LONG).show()
@@ -271,17 +278,18 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             ) != PackageManager.PERMISSION_GRANTED
         ) {
             pendingNavItinerary = itin
+            pendingNavMode = mode
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            NavigationController.start(context, itin)
+            NavigationController.start(context, itin, mode)
         }
     }
 
     val handleDestinationSearch: (startNavImmediately: Boolean) -> Unit = { startNavImmediately ->
         val dest = destinationPoint
         if (dest != null) {
-            if (searcher == null) {
-                Toast.makeText(context, "経路検索には、新しい timetable.db が必要です", Toast.LENGTH_LONG).show()
+            if (searcher == null && roadRouter == null) {
+                Toast.makeText(context, "経路検索には、新しいデータが必要です", Toast.LENGTH_LONG).show()
             } else if (!hasLocationPermission) {
                 permissionLauncher.launch(locationPermissions)
                 Toast.makeText(context, "現在地を取得するため、位置情報を許可してください", Toast.LENGTH_SHORT).show()
@@ -298,20 +306,49 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             } else {
                                 destinationStation?.name?.let { "$it 付近" } ?: "目的地"
                             }
-                            searcher.findRoutesBetweenCoordinates(
-                                originLat = curLoc.first,
-                                originLon = curLoc.second,
-                                destLat = dest.first,
-                                destLon = dest.second,
-                                now = LocalDateTime.now(),
-                                destName = resolvedName
-                            )
+                            if (searcher != null) {
+                                searcher.findRoutesBetweenCoordinates(
+                                    originLat = curLoc.first,
+                                    originLon = curLoc.second,
+                                    destLat = dest.first,
+                                    destLon = dest.second,
+                                    now = LocalDateTime.now(),
+                                    destName = resolvedName,
+                                    travelMode = selectedTravelMode,
+                                    roadRouter = roadRouter
+                                )
+                            } else {
+                                val roadRes = roadRouter?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
+                                val distM = roadRes?.distanceMeters ?: calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
+                                val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
+                                val path = roadRes?.path ?: listOf(curLoc, dest)
+                                val isBike = selectedTravelMode == TravelMode.BICYCLE
+                                val leg = RouteLeg(
+                                    isWalk = !isBike,
+                                    fromName = "現在地",
+                                    toName = resolvedName,
+                                    walkMinutes = durM,
+                                    walkMeters = distM,
+                                    lineName = if (isBike) "自転車" else "徒歩",
+                                    trainType = if (isBike) "自転車" else "徒歩",
+                                    path = path
+                                )
+                                listOf(Itinerary(
+                                    legs = listOf(leg),
+                                    departure = LocalDateTime.now(),
+                                    arrival = LocalDateTime.now().plusMinutes(durM.toLong()),
+                                    transfers = 0,
+                                    fare = 0,
+                                    knownFare = 0,
+                                    routeKey = if (isBike) "bike_direct" else "walk_direct"
+                                ))
+                            }
                         }
                         isSearchingForDestination = false
-                        val bestItin = searcher.rank(candidates, SortMode.FASTEST).firstOrNull() ?: candidates.firstOrNull()
+                        val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
                         if (bestItin != null) {
                             if (startNavImmediately) {
-                                startNavigation(bestItin)
+                                startNavigation(bestItin, selectedTravelMode)
                             } else {
                                 selectedItinerary = bestItin
                             }
@@ -458,6 +495,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationDistance = null
                         destinationCurrentDistance = null
                         destinationCurrentDuration = null
+                        destinationBicycleDuration = null
+                        selectedTravelMode = TravelMode.WALK
                         targetCameraPoint = null
                         selectedStation = SelectedStation(id, name)
                     }
@@ -469,6 +508,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationDistance = null
                         destinationCurrentDistance = null
                         destinationCurrentDuration = null
+                        destinationBicycleDuration = null
+                        selectedTravelMode = TravelMode.WALK
                         targetCameraPoint = null
                     }
                 },
@@ -483,14 +524,32 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationStation = null
                         destinationDistance = null
                         targetCameraPoint = null
+                        selectedTravelMode = TravelMode.WALK
                         val curLoc = if (hasLocationPermission) lastKnownLatLon(context) else null
                         if (curLoc != null) {
-                            val curDist = calcDistanceMeters(curLoc.first, curLoc.second, lat, lon)
-                            destinationCurrentDistance = curDist
-                            destinationCurrentDuration = walkDurationMinutes(curDist)
+                            val directDist = calcDistanceMeters(curLoc.first, curLoc.second, lat, lon)
+                            destinationCurrentDistance = directDist
+                            destinationCurrentDuration = walkDurationMinutes(directDist)
+                            destinationBicycleDuration = bicycleDurationMinutes(directDist)
+                            scope.launch(Dispatchers.Default) {
+                                val roadWalk = roadRouter?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.WALK)
+                                val roadBike = roadRouter?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.BICYCLE)
+                                withContext(Dispatchers.Main) {
+                                    if (destinationPoint == Pair(lat, lon)) {
+                                        if (roadWalk != null) {
+                                            destinationCurrentDistance = roadWalk.distanceMeters
+                                            destinationCurrentDuration = roadWalk.durationMinutes
+                                        }
+                                        if (roadBike != null) {
+                                            destinationBicycleDuration = roadBike.durationMinutes
+                                        }
+                                    }
+                                }
+                            }
                         } else {
                             destinationCurrentDistance = null
                             destinationCurrentDuration = null
+                            destinationBicycleDuration = null
                         }
                         scope.launch(Dispatchers.Default) {
                             val nearest = searcher?.nearestStation(lat, lon)
@@ -514,6 +573,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         iconEmoji = destinationIconEmoji,
                         currentLocationDistanceMeters = destinationCurrentDistance,
                         currentLocationDurationMinutes = destinationCurrentDuration,
+                        currentLocationBicycleDurationMinutes = destinationBicycleDuration,
+                        selectedTravelMode = selectedTravelMode,
+                        onTravelModeChange = { selectedTravelMode = it },
                         nearestStation = destinationStation,
                         nearestDistanceMeters = destinationDistance,
                         isSearching = isSearchingForDestination,
@@ -525,6 +587,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationDistance = null
                             destinationCurrentDistance = null
                             destinationCurrentDuration = null
+                            destinationBicycleDuration = null
+                            selectedTravelMode = TravelMode.WALK
                             targetCameraPoint = null
                         },
                         modifier = Modifier.align(Alignment.BottomCenter)
@@ -547,7 +611,27 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationIconEmoji = p.category.iconEmoji
                         destinationCurrentDistance = res.distanceMeters
                         destinationCurrentDuration = res.durationMinutes
+                        destinationBicycleDuration = res.distanceMeters?.let { bicycleDurationMinutes(it) }
+                        selectedTravelMode = TravelMode.WALK
                         targetCameraPoint = point
+                        val curLoc = searchLocation
+                        if (curLoc != null) {
+                            scope.launch(Dispatchers.Default) {
+                                val roadWalk = roadRouter?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.WALK)
+                                val roadBike = roadRouter?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.BICYCLE)
+                                withContext(Dispatchers.Main) {
+                                    if (destinationPoint == point) {
+                                        if (roadWalk != null) {
+                                            destinationCurrentDistance = roadWalk.distanceMeters
+                                            destinationCurrentDuration = roadWalk.durationMinutes
+                                        }
+                                        if (roadBike != null) {
+                                            destinationBicycleDuration = roadBike.durationMinutes
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         scope.launch(Dispatchers.Default) {
                             val nearest = searcher?.nearestStation(p.lat, p.lon)
                             val dist = if (nearest != null) calcDistanceMeters(p.lat, p.lon, nearest.lat, nearest.lon) else null

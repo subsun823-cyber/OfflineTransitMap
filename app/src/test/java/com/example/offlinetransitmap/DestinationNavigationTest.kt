@@ -74,4 +74,59 @@ class DestinationNavigationTest {
         assertEquals(walkMin, itin.legs[0].walkMinutes)
         assertEquals(now.plusMinutes(walkMin.toLong()), itin.arrival)
     }
+
+    @Test
+    fun testBicycleDurationMinutes() {
+        // 250m -> 約1分
+        assertEquals(1, bicycleDurationMinutes(250))
+        // 1000m (1km) -> 約4分 (徒歩だと約13分)
+        assertEquals(4, bicycleDurationMinutes(1000))
+        // 3000m (3km) -> 約12分
+        assertEquals(12, bicycleDurationMinutes(3000))
+        // 0m -> 最低1分
+        assertEquals(1, bicycleDurationMinutes(0))
+
+        // travelDurationMinutes ヘルパー
+        assertEquals(walkDurationMinutes(1000), travelDurationMinutes(1000, TravelMode.WALK))
+        assertEquals(bicycleDurationMinutes(1000), travelDurationMinutes(1000, TravelMode.BICYCLE))
+        assertTrue(travelDurationMinutes(1000, TravelMode.BICYCLE) < travelDurationMinutes(1000, TravelMode.WALK))
+    }
+
+    @Test
+    fun testDirectBicycleItineraryCreation() {
+        val now = LocalDateTime.of(2026, 10, 10, 12, 0)
+        val p1 = Pair(35.6896, 139.7006)
+        val p2 = Pair(35.7000, 139.7100)
+        val dist = calcDistanceMeters(p1.first, p1.second, p2.first, p2.second)
+        val bikeMin = bicycleDurationMinutes(dist)
+
+        val bikeLeg = RouteLeg(
+            isWalk = false,
+            fromName = "現在地",
+            toName = "目的地",
+            walkMinutes = bikeMin,
+            walkMeters = dist,
+            lineName = "自転車",
+            trainType = "自転車",
+            path = listOf(p1, p2)
+        )
+        val itin = Itinerary(
+            legs = listOf(bikeLeg),
+            departure = now,
+            arrival = now.plusMinutes(bikeMin.toLong()),
+            transfers = 0,
+            fare = 0,
+            knownFare = 0,
+            routeKey = "bike_direct"
+        )
+
+        assertEquals(1, itin.legs.size)
+        assertEquals("自転車", itin.legs[0].lineName)
+        assertEquals("現在地", itin.legs[0].fromName)
+        assertEquals("目的地", itin.legs[0].toName)
+        assertEquals(dist, itin.legs[0].walkMeters)
+        assertEquals(bikeMin, itin.legs[0].walkMinutes)
+        assertEquals("bike_direct", itin.routeKey)
+    }
 }
+
