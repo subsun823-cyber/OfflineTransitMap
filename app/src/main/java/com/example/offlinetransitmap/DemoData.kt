@@ -57,6 +57,12 @@ private val sampleLines = listOf(
     SampleLine("バス", "八05系統", 0xFF2E8B57, "八王子駅", "2番のりば")
 )
 
+data class StationLine(
+    val name: String,
+    val color: Long,
+    val operator: String
+)
+
 // 表示確認用のサンプル(実際の時刻表ではありません)
 // 現在時刻から25時間先までの25件。1時間以上先と、日付をまたぐ便を含みます。
 fun sampleDepartures(): List<Departure> {
@@ -74,7 +80,33 @@ fun sampleDepartures(): List<Departure> {
             lineColor = s.color,
             headsign = s.head,
             detail = s.detail,
-            time = base.plusMinutes(minutes.toLong())
+            time = base.plusMinutes(minutes.toLong()),
+            isBus = s.op == "バス"
         )
     }
+}
+
+// 直前に出発した便のサンプル(古い順で並べる: 10分前 -> 6分前 -> 1分前)
+fun samplePastDepartures(): List<Departure> {
+    val base = LocalDateTime.now().truncatedTo(ChronoUnit.MINUTES)
+    val offsets = listOf(10, 10, 6, 4, 2, 1) // 分前
+    return offsets.mapIndexed { i, minutesAgo ->
+        val s = sampleLines[i % sampleLines.size]
+        Departure(
+            operatorLabel = s.op,
+            lineName = s.line,
+            lineColor = s.color,
+            headsign = s.head,
+            detail = s.detail,
+            time = base.minusMinutes(minutesAgo.toLong()),
+            isBus = s.op == "バス"
+        )
+    }
+}
+
+fun sampleStationLines(): List<StationLine> {
+    return sampleLines
+        .filter { it.op != "バス" }
+        .map { StationLine(name = it.line, color = it.color, operator = it.op) }
+        .distinctBy { it.name }
 }

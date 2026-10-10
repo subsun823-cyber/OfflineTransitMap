@@ -61,7 +61,7 @@ if os.path.exists(src_seibu_logo):
 else:
     seibu_img = QImage(seibu_path)
 
-# 3. Ensure map_station_tobu.png exists (Tobu Railway Future Blue "T" badge)
+# 3. Ensure map_station_tobu.png exists (Tobu Railway Future Blue "T" badge matching Google Maps)
 tobu_path = os.path.join(DRAWABLE_DIR, 'map_station_tobu.png')
 tobu_img = QImage(80, 80, QImage.Format_ARGB32)
 tobu_img.fill(QColor(0, 0, 0, 0))
@@ -69,27 +69,61 @@ p_t = QPainter(tobu_img)
 p_t.setRenderHint(QPainter.Antialiasing, True)
 p_t.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
-c_path = QPainterPath()
-c_path.addEllipse(QRectF(1.0, 1.0, 78.0, 78.0))
-p_t.setClipPath(c_path)
-p_t.fillPath(c_path, QBrush(QColor('#ffffff')))
+# White rounded rectangle
+s = 80.0 / 90.0
+rect_path = QPainterPath()
+rect_path.addRoundedRect(QRectF(11.0 * s, 11.0 * s, 68.0 * s, 68.0 * s), 16.0 * s, 16.0 * s)
+p_t.fillPath(rect_path, QBrush(QColor('#ffffff')))
 
-path_t = QPainterPath()
-path_t.moveTo(66.449, 42.754)
-path_t.lineTo(65.48, 45.43)
-path_t.lineTo(58.483, 45.43)
-path_t.lineTo(52.768, 61.126)
-path_t.lineTo(48.127, 61.126)
-path_t.lineTo(53.836, 45.43)
-path_t.lineTo(46.827, 45.43)
-path_t.lineTo(47.799, 42.754)
-path_t.closeSubpath()
+# Vector shapes for Tobu symbol matching Google Maps exact geometry
+tobu_blue = QColor('#005BAA')
+p_t.setBrush(QBrush(tobu_blue))
+p_t.setPen(Qt.NoPen)
 
-scale_t = 2.4
-p_t.translate(40.0, 40.0)
-p_t.scale(scale_t, scale_t)
-p_t.translate(-56.638, -51.94)
-p_t.fillPath(path_t, QBrush(QColor('#005BAB')))
+def pt(x, y):
+    return x * s, y * s
+
+# T symbol (crossbar + italic stem)
+p_t_body = QPainterPath()
+p_t_body.moveTo(*pt(31.5, 34.5))
+p_t_body.lineTo(*pt(62.5, 34.5))
+p_t_body.lineTo(*pt(60.8, 38.2))
+p_t_body.lineTo(*pt(47.2, 38.2))
+p_t_body.lineTo(*pt(36.0, 63.5))
+p_t_body.lineTo(*pt(29.5, 63.5))
+p_t_body.lineTo(*pt(40.7, 38.2))
+p_t_body.lineTo(*pt(29.8, 38.2))
+p_t_body.closeSubpath()
+p_t.fillPath(p_t_body, QBrush(tobu_blue))
+
+# Top-left diagonal bar
+p_tl = QPainterPath()
+p_tl.moveTo(*pt(49.0, 15.0))
+p_tl.lineTo(*pt(45.0, 26.5))
+p_tl.lineTo(*pt(42.0, 26.5))
+p_tl.lineTo(*pt(46.0, 15.0))
+p_tl.closeSubpath()
+p_t.fillPath(p_tl, QBrush(tobu_blue))
+
+# Bottom-right diagonal bar
+p_br = QPainterPath()
+p_br.moveTo(*pt(58.0, 46.5))
+p_br.lineTo(*pt(45.5, 75.5))
+p_br.lineTo(*pt(49.2, 75.5))
+p_br.lineTo(*pt(61.8, 46.5))
+p_br.closeSubpath()
+p_t.fillPath(p_br, QBrush(tobu_blue))
+
+# Left horizontal bar
+p_lh = QPainterPath()
+p_lh.addRect(QRectF(*pt(14.5, 45.5), 13.0 * s, 3.8 * s))
+p_t.fillPath(p_lh, QBrush(tobu_blue))
+
+# Right horizontal bar
+p_rh = QPainterPath()
+p_rh.addRect(QRectF(*pt(65.5, 23.5), 10.5 * s, 3.8 * s))
+p_t.fillPath(p_rh, QBrush(tobu_blue))
+
 p_t.end()
 tobu_img.save(tobu_path)
 print(f'Saved {tobu_path}')

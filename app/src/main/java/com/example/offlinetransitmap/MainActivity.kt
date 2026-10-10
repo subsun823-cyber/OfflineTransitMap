@@ -482,8 +482,15 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     }
 
     selectedStation?.let { station ->
+        val now = remember(station) { LocalDateTime.now() }
         val departures = remember(station) {
-            timetable?.departures(station.id, LocalDateTime.now()) ?: sampleDepartures()
+            timetable?.departures(station.id, now) ?: sampleDepartures()
+        }
+        val pastDepartures = remember(station) {
+            timetable?.pastDepartures(station.id, now) ?: samplePastDepartures()
+        }
+        val railLines = remember(station) {
+            timetable?.stationRailLines(station.id) ?: sampleStationLines()
         }
         val note = remember(station) {
             if (timetable != null) {
@@ -495,6 +502,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         DepartureSheet(
             stationName = station.name,
             departures = departures,
+            pastDepartures = pastDepartures,
+            railLines = railLines,
             note = note,
             loadTripStops = { d -> timetable?.tripStops(d) ?: emptyList() },
             onDismiss = { selectedStation = null }

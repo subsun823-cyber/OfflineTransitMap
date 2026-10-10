@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -18,11 +19,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -35,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
@@ -85,12 +93,23 @@ private fun formatTime(t: LocalDateTime): String =
 fun DepartureSheet(
     stationName: String,
     departures: List<Departure>,
+    pastDepartures: List<Departure> = emptyList(),
+    railLines: List<StationLine> = emptyList(),
     note: String? = null,
     loadTripStops: (Departure) -> List<TripStop> = { emptyList() },
     onDismiss: () -> Unit
 ) {
     val now = remember { LocalDateTime.now().truncatedTo(ChronoUnit.MINUTES) }
-    val sheetItems = remember(departures) { buildItems(departures, now) }
+    var selectedLine by remember { mutableStateOf<String?>(null) }
+    var showPastDepartures by remember { mutableStateOf(false) }
+
+    val effectiveDepartures = remember(departures, selectedLine) {
+        if (selectedLine == null) departures else departures.filter { it.lineName == selectedLine }
+    }
+    val effectivePastDepartures = remember(pastDepartures, selectedLine) {
+        if (selectedLine == null) pastDepartures else pastDepartures.filter { it.lineName == selectedLine }
+    }
+    val sheetItems = remember(effectiveDepartures, now) { buildItems(effectiveDepartures, now) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // 一覧の高さは画面の半分まで(地図が上に見えるようにする)
     val listMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.5f).dp
@@ -120,8 +139,52 @@ fun DepartureSheet(
                     modifier = Modifier.padding(horizontal = 24.dp)
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            if (sheetItems.isEmpty()) {
+
+            // 鉄道駅の場合、路線選択チップを水平スクロールで表示(バス停は表示しない)
+            if (railLines.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(railLines) { line ->
+                        val isSelected = selectedLine == line.name
+                        val lineColor = Color(line.color)
+                        val textColor = if (lineColor.luminance() > 0.6f) Color.Black else Color.White
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(lineColor)
+                                .clickable {
+                                    selectedLine = if (isSelected) null else line.name
+                                }
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = line.name,
+                                color = textColor,
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            if (isSelected) {
+                                Spacer(Modifier.width(6.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "選択解除",
+                                    tint = textColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            if (sheetItems.isEmpty() && effectivePastDepartures.isEmpty()) {
                 Text(
                     text = "この駅の出発情報がありません(時刻表の有効期間外の可能性があります)",
                     style = MaterialTheme.typography.bodyMedium,
@@ -133,6 +196,40 @@ fun DepartureSheet(
                     .weight(1f, fill = false)
                     .heightIn(max = listMaxHeight)
             ) {
+                // 前に出発した便(アコーディオン展開・折りたたみ)
+                if (pastDepartures.isNotEmpty()) {
+                    item {
+                        PastDeparturesToggleRow(
+                            isExpanded = showPastDepartures,
+                            onClick = { showPastDepartures = !showPastDepartures }
+                        )
+                        HorizontalDivider()
+                    }
+                    if (showPastDepartures) {
+                        if (effectivePastDepartures.isEmpty()) {
+                            item {
+                                Text(
+                                    text = "直前に出発した便はありません",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                                )
+                                HorizontalDivider()
+                            }
+                        } else {
+                            items(effectivePastDepartures) { dep ->
+                                val minutesAgo = ChronoUnit.MINUTES.between(dep.time, now).coerceAtLeast(0)
+                                PastDepartureRow(
+                                    d = dep,
+                                    minutesAgo = minutesAgo,
+                                    onClick = if (dep.tripNo != 0L) ({ selected = dep }) else null
+                                )
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                }
+
                 items(sheetItems) { item ->
                     when (item) {
                         is SheetItem.Header -> DateHeader(item.label)
@@ -220,6 +317,68 @@ private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun PastDeparturesToggleRow(
+    isExpanded: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = if (isExpanded) "前に出発した便を非表示" else "前に出発した便",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
+fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = null) {
+    val status = "定刻に出発済み"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            LineTitle(d)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = if (d.detail.isBlank()) status else "$status · ${d.detail}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            if (minutesAgo < 60) {
+                if (minutesAgo <= 0) {
+                    Text("今すぐ", style = MaterialTheme.typography.titleMedium)
+                } else {
+                    Text("$minutesAgo", style = MaterialTheme.typography.titleLarge)
+                    Text("分前", style = MaterialTheme.typography.labelSmall)
+                }
+            } else {
+                Text(formatTime(d.time), style = MaterialTheme.typography.titleLarge)
+            }
+        }
+    }
+}
+
+@Composable
 fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
     val within1Hour = minutes < 60
     val status = if (within1Hour) "定刻" else "定刻出発予定"
@@ -243,7 +402,7 @@ fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
         Column(horizontalAlignment = Alignment.End) {
             if (within1Hour) {
                 if (minutes <= 0) {
-                    Text("まもなく", style = MaterialTheme.typography.titleSmall)
+                    Text("今すぐ", style = MaterialTheme.typography.titleMedium)
                 } else {
                     Text("$minutes", style = MaterialTheme.typography.titleLarge)
                     Text("分後", style = MaterialTheme.typography.labelSmall)

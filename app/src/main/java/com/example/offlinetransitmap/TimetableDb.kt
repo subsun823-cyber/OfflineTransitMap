@@ -243,6 +243,129 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         return result.take(limit)
     }
 
+    // 駅の直前に出発した便を時系列昇順(古い順: 10分前 -> 6分前 -> 1分前)で最大 limit 件返す
+    fun pastDepartures(
+        stationId: String,
+        now: LocalDateTime,
+        limit: Int = 10,
+        windowMinutes: Long = 60
+    ): List<Departure> {
+        val ids = groupStationIds(stationId)
+        val result = ArrayList<Departure>()
+        val today = now.toLocalDate()
+        val midnight = today.atStartOfDay()
+        val nowSec = Duration.between(midnight, now).seconds
+        val minSec = maxOf(0L, nowSec - windowMinutes * 60)
+        val maxSec = nowSec
+
+        val services = activeServices(today)
+        if (services.isNotEmpty() && minSec < maxSec) {
+            result.addAll(queryPastDay(ids, midnight, minSec, maxSec, services, limit))
+        }
+
+        // 深夜0時をまたいだ過去窓(前日深夜)の検索
+        if (nowSec < windowMinutes * 60) {
+            val yesterday = today.minusDays(1)
+            val yServices = activeServices(yesterday)
+            if (yServices.isNotEmpty()) {
+                val yMidnight = yesterday.atStartOfDay()
+                val yMinSec = 86400L - (windowMinutes * 60 - nowSec)
+                result.addAll(queryPastDay(ids, yMidnight, yMinSec, 86400L, yServices, limit))
+            }
+        }
+
+        result.sortBy { it.time }
+        return result.takeLast(limit)
+    }
+
+    private fun queryPastDay(
+        stationIds: List<String>,
+        midnight: LocalDateTime,
+        minSec: Long,
+        maxSec: Long,
+        services: Set<String>,
+        limit: Int
+    ): List<Departure> {
+        val stationPlaceholders = stationIds.joinToString(",") { "?" }
+        val placeholders = services.joinToString(",") { "?" }
+        val sql = """
+            SELECT st.dep_sec, r.operator, r.name, r.color, r.route_type,
+                   COALESCE(st.headsign, t.headsign), s.platform,
+                   st.trip, st.seq, $trainTypeColumn
+            FROM stop_times st
+            JOIN trips t ON t.trip_no = st.trip
+            JOIN routes r ON r.route_id = t.route_id
+            JOIN stops s ON s.stop_id = st.stop_id
+            WHERE st.station_id IN ($stationPlaceholders) AND st.can_board = 1
+              AND st.dep_sec >= $minSec AND st.dep_sec < $maxSec
+              AND t.service_id IN ($placeholders)
+            ORDER BY st.dep_sec DESC
+            LIMIT $limit
+        """.trimIndent()
+        val args = stationIds.toTypedArray() + services.toTypedArray()
+
+        val list = ArrayList<Departure>()
+        db.rawQuery(sql, args).use { c ->
+            while (c.moveToNext()) {
+                val isBus = c.getInt(4) == 3
+                val platform: String? = c.getString(6)
+                list.add(
+                    Departure(
+                        operatorLabel = shorten(c.getString(1) ?: "", 6),
+                        lineName = shorten(c.getString(2) ?: "", 8),
+                        lineColor = 0xFF000000L or c.getInt(3).toLong(),
+                        headsign = tidyHeadsign(c.getString(5) ?: ""),
+                        detail = platformText(platform, isBus),
+                        time = midnight.plusSeconds(c.getLong(0)),
+                        isBus = isBus,
+                        tripNo = c.getLong(7),
+                        seq = c.getInt(8),
+                        trainType = c.getString(9) ?: ""
+                    )
+                )
+            }
+        }
+        return list
+    }
+
+    // 鉄道駅に乗り入れている路線一覧(重複なし)
+    fun stationRailLines(stationId: String): List<StationLine> {
+        val ids = groupStationIds(stationId)
+        val stationPlaceholders = ids.joinToString(",") { "?" }
+        val kindCondition = if (hasStationKind) "AND s.kind = 'rail'" else ""
+        val sql = """
+            SELECT DISTINCT r.name, r.color, r.operator
+            FROM stations s
+            JOIN stop_times st ON st.station_id = s.station_id
+            JOIN trips t ON t.trip_no = st.trip
+            JOIN routes r ON r.route_id = t.route_id
+            WHERE s.station_id IN ($stationPlaceholders)
+              AND r.route_type IN (0, 1, 2)
+              $kindCondition
+            ORDER BY r.operator, r.name
+        """.trimIndent()
+        val lines = ArrayList<StationLine>()
+        try {
+            db.rawQuery(sql, ids.toTypedArray()).use { c ->
+                while (c.moveToNext()) {
+                    val name = c.getString(0) ?: ""
+                    if (name.isNotBlank()) {
+                        lines.add(
+                            StationLine(
+                                name = shorten(name, 10),
+                                color = 0xFF000000L or c.getInt(1).toLong(),
+                                operator = shorten(c.getString(2) ?: "", 8)
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("TimetableDb", "stationRailLines failed", e)
+        }
+        return lines.distinctBy { it.name }
+    }
+
     private fun queryDay(
         stationIds: List<String>,
         midnight: LocalDateTime,
