@@ -64,8 +64,9 @@ private val PROTOMAPS_BACKGROUND_LAYERS = listOf(
 private val COMMON_ROUTE_LAYERS = listOf(
     """{"id": "route-casing", "type": "line", "source": "route", "filter": ["==", ["get", "walk"], false], "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#ffffff", "line-width": 9}}""",
     """{"id": "route-bus", "type": "line", "source": "route", "filter": ["==", ["get", "walk"], false], "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": ["get", "color"], "line-width": 5.5}}""",
-    """{"id": "route-walk", "type": "line", "source": "route", "filter": ["==", ["get", "walk"], true], "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#1a73e8", "line-width": 6, "line-dasharray": [0.01, 2]}}""",
-    """{"id": "nav-line", "type": "line", "source": "nav-line", "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#1a73e8", "line-width": 6, "line-dasharray": [0.01, 2]}}""",
+    """{"id": "route-walk-casing", "type": "line", "source": "route", "filter": ["==", ["get", "walk"], true], "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#ffffff", "line-width": 8.5}}""",
+    """{"id": "route-walk", "type": "line", "source": "route", "filter": ["==", ["get", "walk"], true], "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#1a73e8", "line-width": 5.5}}""",
+    """{"id": "nav-line", "type": "line", "source": "nav-line", "layout": {"line-cap": "round", "line-join": "round"}, "paint": {"line-color": "#1a73e8", "line-width": 5, "line-dasharray": [0.01, 2]}}""",
     """{"id": "destination-circle-pulse", "type": "circle", "source": "destination", "paint": {"circle-radius": 14, "circle-color": "#ea4335", "circle-opacity": 0.25}}""",
     """{"id": "destination-circle", "type": "circle", "source": "destination", "paint": {"circle-radius": 7, "circle-color": "#ea4335", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2.5}}""",
     """{"id": "destination-name", "type": "symbol", "source": "destination", "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 12, "text-max-width": 8, "text-anchor": "top", "text-offset": [0, 0.9]}, "paint": {"text-color": "#c5221f", "text-halo-color": "#ffffff", "text-halo-width": 2.0}}"""

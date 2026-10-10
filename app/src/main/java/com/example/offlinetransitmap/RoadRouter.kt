@@ -104,9 +104,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
         val toNode: Int,
         val distMeters: Int,
         val isWalk: Boolean,
-        val isBike: Boolean,
-        val polyline: String,
-        val isForward: Boolean // 順方向か逆方向か
+        val isBike: Boolean
     )
 
     private data class SearchState(
@@ -118,13 +116,13 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             this.estimatedTotal.compareTo(other.estimatedTotal)
     }
 
-    // 最寄りの道路ノードを検索
+    // 最寄りの道路ノードを検索 (周囲25グリッド探索)
     fun findNearestNode(lat: Double, lon: Double): Pair<Int, Int>? {
         val y = (lat / GRID_CELL_DEG).toInt()
         val x = (lon / GRID_CELL_DEG).toInt()
-        val gridKeys = ArrayList<Int>(9)
-        for (dy in -1..1) {
-            for (dx in -1..1) {
+        val gridKeys = ArrayList<Int>(25)
+        for (dy in -2..2) {
+            for (dx in -2..2) {
                 gridKeys.add((((y + dy) and 0xFFFF) shl 16) or ((x + dx) and 0xFFFF))
             }
         }
@@ -154,7 +152,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             }
         }
 
-        return if (bestId != -1 && bestDist <= MAX_SNAP_DISTANCE_M) {
+        return if (bestId != -1 && bestDist <= 2500) {
             Pair(bestId, bestDist)
         } else {
             null
@@ -193,11 +191,11 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             return directFallback
         }
 
-        // 探索領域のノードとエッジを読み込み
-        val minLat = minOf(originLat, destLat) - 0.015
-        val maxLat = maxOf(originLat, destLat) + 0.015
-        val minLon = minOf(originLon, destLon) - 0.015
-        val maxLon = maxOf(originLon, destLon) + 0.015
+        // 探索領域のノードとエッジを読み込み (マージン0.035: 約3.8km)
+        val minLat = minOf(originLat, destLat) - 0.035
+        val maxLat = maxOf(originLat, destLat) + 0.035
+        val minLon = minOf(originLon, destLon) - 0.035
+        val maxLon = maxOf(originLon, destLon) + 0.035
 
         val yMin = (minLat / GRID_CELL_DEG).toInt()
         val yMax = (maxLat / GRID_CELL_DEG).toInt()
@@ -240,7 +238,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
         // 領域内のエッジを隣接リストに展開
         val modeColumn = if (mode == TravelMode.BICYCLE) "is_bike" else "is_walk"
         val edgeCursor = db.rawQuery(
-            "SELECT u, v, dist_m, is_walk, is_bike, polyline FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
+            "SELECT u, v, dist_m, is_walk, is_bike FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
             null
         )
 
@@ -251,7 +249,6 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             val distCol = it.getColumnIndexOrThrow("dist_m")
             val walkCol = it.getColumnIndexOrThrow("is_walk")
             val bikeCol = it.getColumnIndexOrThrow("is_bike")
-            val polyCol = it.getColumnIndexOrThrow("polyline")
 
             while (it.moveToNext()) {
                 val u = it.getInt(uCol)
@@ -259,11 +256,10 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                 val d = it.getInt(distCol)
                 val isWalk = it.getInt(walkCol) == 1
                 val isBike = it.getInt(bikeCol) == 1
-                val poly = it.getString(polyCol)
 
                 // 両方向通行可能として隣接リストに追加
-                adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike, poly, isForward = true))
-                adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike, poly, isForward = false))
+                adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike))
+                adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike))
             }
         }
 
@@ -310,33 +306,25 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             return directFallback
         }
 
-        // 経路の復元
-        val reconstructedEdges = ArrayList<GraphEdge>()
+        // 経路の復元 (通過ノード列を復元)
+        val pathNodes = ArrayList<Int>()
         var curr = goalNodeId
+        pathNodes.add(curr)
         while (curr != startNodeId) {
             val p = prev[curr] ?: break
-            reconstructedEdges.add(p.second)
             curr = p.first
+            pathNodes.add(curr)
         }
-        reconstructedEdges.reverse()
+        pathNodes.reverse()
 
-        // 完全なポリラインの構築
+        // 道路座標列の構築
         val fullPath = ArrayList<Pair<Double, Double>>()
         fullPath.add(Pair(originLat, originLon))
 
-        for (edge in reconstructedEdges) {
-            val pts = parsePolyline(edge.polyline)
-            if (pts.isNotEmpty()) {
-                if (edge.isForward) {
-                    fullPath.addAll(pts)
-                } else {
-                    fullPath.addAll(pts.reversed())
-                }
-            } else {
-                val node = nodesMap[edge.toNode]
-                if (node != null) {
-                    fullPath.add(Pair(node.lat, node.lon))
-                }
+        for (nid in pathNodes) {
+            val node = nodesMap[nid]
+            if (node != null) {
+                fullPath.add(Pair(node.lat, node.lon))
             }
         }
 
@@ -368,22 +356,5 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             durationMinutes = totalDuration,
             isRoadBased = true
         )
-    }
-
-    private fun parsePolyline(polyStr: String): List<Pair<Double, Double>> {
-        if (polyStr.isBlank()) return emptyList()
-        val parts = polyStr.split(";")
-        val list = ArrayList<Pair<Double, Double>>(parts.size)
-        for (part in parts) {
-            val comma = part.indexOf(',')
-            if (comma > 0) {
-                val lat = part.substring(0, comma).toDoubleOrNull()
-                val lon = part.substring(comma + 1).toDoubleOrNull()
-                if (lat != null && lon != null) {
-                    list.add(Pair(lat, lon))
-                }
-            }
-        }
-        return list
     }
 }
