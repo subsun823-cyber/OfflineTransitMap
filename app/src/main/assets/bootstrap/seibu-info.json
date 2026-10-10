@@ -1,0 +1,17 @@
+{
+  "operator": "西武鉄道",
+  "railways": 12,
+  "stations": 105,
+  "rawDepartureEvents": 46467,
+  "trips": 7213,
+  "stopTimesRows": 51872,
+  "receivedFares": 1000,
+  "supplementedFares": 1810,
+  "calendarStart": "2026-03-14",
+  "calendarEnd": "2027-12-31",
+  "size": 16818176,
+  "sha256": "7aa2bef0fd4cb5c79e9dd19ffa10b7ad28759a8691de1b13757dafff0c198ccb",
+  "compressedSize": 1897404,
+  "bundleSha256": "7ab7d8111dd79742eef52dc6562c4da6bef9d006400dc50e431c689bf042cb92",
+  "note": "西武鉄道：全12路線（105駅）の全発車時刻（46467件、7213便）および普通旅客運賃（提供データ 1000件・補完 1810区間）を完全収録。特急（ラビュー・小江戸）・拝島ライナー・S-TRAIN等の指定席は別途特急券・座席指定券が必要です。祝日ダイヤ対応（2027年末まで）。"
+}

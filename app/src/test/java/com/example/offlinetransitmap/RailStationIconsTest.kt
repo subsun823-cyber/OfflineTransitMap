@@ -12,11 +12,14 @@ class RailStationIconsTest {
 
     @Test fun privateRailwaysUseTrainSymbol() {
         assertEquals("station-rail", railStationIcon(setOf("京王電鉄", "小田急電鉄")))
+        assertEquals("station-rail", railStationIcon(setOf("西武鉄道")))
     }
 
     @Test fun sharedStationUsesJrAndTrainSymbols() {
         assertEquals("station-rail-both", railStationIcon(setOf("京王電鉄", "JR東日本")))
+        assertEquals("station-rail-both", railStationIcon(setOf("西武鉄道", "JR東日本")))
     }
+
 
     @Test fun duplicateJrAliasesDoNotAddASecondSymbol() {
         assertEquals("station-jr-east", railStationIcon(setOf("JR東日本", "東日本旅客鉄道株式会社", " ")))

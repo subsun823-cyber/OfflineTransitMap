@@ -88,7 +88,14 @@ internal object OfflineDataSetup {
             progress("地下鉄・私鉄・バスの駅・バス停・時刻表を準備中…")
             val target = targets.getValue("timetable")
             if (target.exists() && target.length() > 0) KeioDatabase.validate(target)
-            for ((assetName, prefix) in listOf("keio" to "ODPT_KEIO:", "keio-bus" to KeioDatabase.BUS_PREFIX, "odakyu" to KeioDatabase.ODAKYU_PREFIX, "tokyometro" to KeioDatabase.TOKYO_METRO_PREFIX)) {
+            for ((assetName, prefix) in listOf(
+                "keio" to "ODPT_KEIO:",
+                "keio-bus" to KeioDatabase.BUS_PREFIX,
+                "odakyu" to KeioDatabase.ODAKYU_PREFIX,
+                "tokyometro" to KeioDatabase.TOKYO_METRO_PREFIX,
+                "seibu" to KeioDatabase.SEIBU_PREFIX
+            )) {
+
                 val info = JSONObject(context.assets.open("bootstrap/$assetName-info.json").bufferedReader().use { it.readText() })
                 val version = info.getString("sha256")
                 if (!target.exists() || target.length() == 0L || KeioDatabase.version(target, "$assetName.version") != version) {

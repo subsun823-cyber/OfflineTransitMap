@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 import build_keio_bus_data
 import build_keio_data
 import build_tokyometro_data
+import build_seibu_data
 
 DEFAULT_MANIFEST_NAME = "transit-manifest.json"
 DEFAULT_RELEASE_TAG = "transit-data-latest"
@@ -336,9 +337,11 @@ def build_integrated_timetable(
     odakyu_seed_path: Path | None = None,
     odakyu_version: str = "",
     tokyometro_seed_path: Path | None = None,
-    tokyometro_version: str = ""
+    tokyometro_version: str = "",
+    seibu_seed_path: Path | None = None,
+    seibu_version: str = ""
 ):
-    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train, Keio bus, Odakyu, and Tokyo Metro seeds."""
+    """Takes base timetable.db (JR + Nishi Tokyo Bus) and merges Keio train, Keio bus, Odakyu, Tokyo Metro, and Seibu seeds."""
     output_db_path.parent.mkdir(parents=True, exist_ok=True)
     if output_db_path.resolve() != base_timetable.resolve():
         shutil.copyfile(base_timetable, output_db_path)
@@ -394,6 +397,20 @@ def build_integrated_timetable(
         )
     else:
         print("Notice: Tokyo Metro Rail seed not provided; keeping existing Tokyo Metro records if present.")
+
+    # 5. Merge Seibu Rail if seed available
+    if seibu_seed_path and seibu_seed_path.exists():
+        print(f"Merging Seibu Rail seed into {output_db_path}...")
+        merge_seed_into_db(
+            output_db_path,
+            seibu_seed_path,
+            prefix="ODPT_SEIBU:",
+            version=seibu_version,
+            version_key="seibu.version"
+        )
+    else:
+        print("Notice: Seibu Rail seed not provided; keeping existing Seibu records if present.")
+
 
     # 4. Integrity & summary
     conn = sqlite3.connect(str(output_db_path))
@@ -485,7 +502,10 @@ def main():
                         help='Odakyu Rail bundle')
     parser.add_argument('--tokyometro-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/tokyometro.bundle',
                         help='Tokyo Metro Rail bundle')
+    parser.add_argument('--seibu-bundle', type=Path, default=ROOT / 'app/src/main/assets/bootstrap/seibu.bundle',
+                        help='Seibu Rail bundle')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'build/transit-dist',
+
                         help='Output directory for generated release artifacts')
     parser.add_argument('--download-url-base', type=str,
                         default='https://github.com/subsun823-cyber/OfflineTransitMap/releases/download/transit-data-latest',
@@ -582,7 +602,23 @@ def main():
         info_path=tokyometro_info_path
     )
 
-    # 6. Build integrated DB
+    # 6. Resolve Seibu Rail seed
+    seibu_rail_seed_file = args.output_dir / "seibu-rail-seed.db"
+    seibu_version = ""
+    if args.seibu_bundle and args.seibu_bundle.exists():
+        raw_seibu = gzip.decompress(args.seibu_bundle.read_bytes())
+        seibu_rail_seed_file.write_bytes(raw_seibu)
+        seibu_info_path = ROOT / 'app/src/main/assets/bootstrap/seibu-info.json'
+        if seibu_info_path.exists():
+            seibu_info = json.loads(seibu_info_path.read_text(encoding='utf-8'))
+            seibu_version = seibu_info.get('sha256', '')
+        else:
+            seibu_version = hashlib.sha256(raw_seibu).hexdigest()
+    else:
+        print("Notice: No Seibu Rail bundle found; existing records in base DB will be retained.")
+        seibu_rail_seed_file = None
+
+    # 7. Build integrated DB
     output_db = args.output_dir / "timetable.db"
     print(f"Integrating into {output_db}...")
     stats = build_integrated_timetable(
@@ -595,8 +631,11 @@ def main():
         odakyu_version=odakyu_version,
         tokyometro_seed_path=tokyometro_rail_seed_file,
         tokyometro_version=tokyometro_version,
+        seibu_seed_path=seibu_rail_seed_file,
+        seibu_version=seibu_version,
         output_db_path=output_db
     )
+
     print(f"Integrated DB ready: {stats['trips']} trips, validity {stats['valid_from']}..{stats['valid_to']}")
 
     # 4. Compress to gzip
