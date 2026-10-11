@@ -9,6 +9,7 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
 
     companion object {
         private const val DB_NAME = "pois.db"
+        private const val POIS_DB_VERSION = 2 // Y座標反転修正・正規座標版
         @Volatile
         private var instance: PoiDatabase? = null
 
@@ -19,6 +20,8 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
                 try {
                     val dbDir = context.getExternalFilesDir("pois") ?: context.filesDir
                     val file = File(dbDir, DB_NAME)
+                    val prefs = context.getSharedPreferences("poi_prefs", Context.MODE_PRIVATE)
+                    val installedVersion = prefs.getInt("pois_db_installed_version", -1)
 
                     // assets に pois.db があるか確認
                     var assetStream = try {
@@ -34,8 +37,12 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
                             -1L
                         }
 
-                        // ファイルが存在しない、またはサイズが一致しない場合はコピー
-                        if (!file.exists() || (assetLength > 0 && file.length() != assetLength)) {
+                        // ファイルが存在しない、バージョンが古い、またはサイズが一致しない場合はコピー
+                        val needsCopy = !file.exists() ||
+                                installedVersion != POIS_DB_VERSION ||
+                                (assetLength > 0 && file.length() != assetLength)
+
+                        if (needsCopy) {
                             file.parentFile?.mkdirs()
                             val tempFile = File(dbDir, "$DB_NAME.tmp")
                             assetStream.use { input ->
@@ -45,6 +52,7 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
                             }
                             if (file.exists()) file.delete()
                             tempFile.renameTo(file)
+                            prefs.edit().putInt("pois_db_installed_version", POIS_DB_VERSION).apply()
                         } else {
                             assetStream.close()
                         }

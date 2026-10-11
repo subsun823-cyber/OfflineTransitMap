@@ -348,19 +348,35 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
 
                 var edgeCost = edge.distMeters * classFactor
 
-                // 直進性・右左折ペナルティ（無駄な曲がり角・ジグザグの抑制）
+                // 直進性・右左折ペナルティ（無駄な曲がり角・ジグザグ・頻繁な右左折の強力な抑制）
                 if (prev.containsKey(u)) {
                     val fromNodeId = prev[u]!!.first
+                    val prevEdge = prev[u]!!.second
                     val fromNode = nodesMap[fromNodeId]
                     if (fromNode != null) {
                         val b1 = calcBearing(fromNode.lat, fromNode.lon, uNode.lat, uNode.lon)
                         val b2 = calcBearing(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
                         val diff = kotlin.math.abs(angleDiff(b1, b2))
-                        if (diff > 40.0) {
-                            // 40度以上の明確な右左折には小ペナルティ(8m〜16m相当)を加算
-                            val turnPenalty = (diff / 90.0) * 10.0
-                            edgeCost += turnPenalty
+
+                        var isConsecutive = false
+                        if (diff > 35.0 && prev.containsKey(fromNodeId)) {
+                            val fromFromNodeId = prev[fromNodeId]!!.first
+                            val fromFromNode = nodesMap[fromFromNodeId]
+                            if (fromFromNode != null) {
+                                val b0 = calcBearing(fromFromNode.lat, fromFromNode.lon, fromNode.lat, fromNode.lon)
+                                isConsecutive = kotlin.math.abs(angleDiff(b0, b1)) > 35.0
+                            }
                         }
+
+                        val turnPenalty = computeTurnPenalty(
+                            angleDiffDeg = diff,
+                            prevEdgeDistMeters = prevEdge.distMeters.toDouble(),
+                            isConsecutiveTurn = isConsecutive,
+                            prevRoadClass = prevEdge.roadClass,
+                            currRoadClass = edge.roadClass,
+                            mode = mode
+                        )
+                        edgeCost += turnPenalty
                     }
                 }
 
@@ -432,3 +448,53 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
         )
     }
 }
+
+internal fun computeTurnPenalty(
+    angleDiffDeg: Double,
+    prevEdgeDistMeters: Double,
+    isConsecutiveTurn: Boolean,
+    prevRoadClass: Int,
+    currRoadClass: Int,
+    mode: TravelMode
+): Double {
+    if (angleDiffDeg <= 35.0) return 0.0
+
+    var penalty = if (mode == TravelMode.BICYCLE) {
+        when {
+            angleDiffDeg >= 130.0 -> 120.0 + (angleDiffDeg - 130.0) * 0.8
+            angleDiffDeg >= 85.0 -> 50.0 + (angleDiffDeg - 85.0) * 0.5
+            angleDiffDeg >= 55.0 -> 32.0 + (angleDiffDeg - 55.0) * 0.6
+            else -> 18.0 + (angleDiffDeg - 35.0) * 0.7
+        }
+    } else {
+        when {
+            angleDiffDeg >= 130.0 -> 70.0 + (angleDiffDeg - 130.0) * 0.5
+            angleDiffDeg >= 85.0 -> 30.0 + (angleDiffDeg - 85.0) * 0.3
+            angleDiffDeg >= 55.0 -> 20.0 + (angleDiffDeg - 55.0) * 0.33
+            else -> 10.0 + (angleDiffDeg - 35.0) * 0.5
+        }
+    }
+
+    // 頻繁な曲がり（短区間での連続ターン）ペナルティ: 70m未満ですぐまた曲がるのを強力に抑制
+    if (prevEdgeDistMeters < 70.0) {
+        penalty += if (mode == TravelMode.BICYCLE) 55.0 else 35.0
+    }
+
+    // 2連続ターン累積ペナルティ: 直前でも曲がっていた場合
+    if (isConsecutiveTurn) {
+        penalty += if (mode == TravelMode.BICYCLE) 60.0 else 40.0
+    }
+
+    // 大通りからの離脱ペナルティ: 大通り走行中はできるだけ直進維持
+    if (prevRoadClass <= 2 && currRoadClass >= 4) {
+        penalty += if (mode == TravelMode.BICYCLE) 30.0 else 18.0
+    }
+
+    // 細街路・生活道路での右左折ペナルティ
+    if (currRoadClass >= 6 || prevRoadClass >= 6) {
+        penalty += if (mode == TravelMode.BICYCLE) 25.0 else 15.0
+    }
+
+    return penalty
+}
+

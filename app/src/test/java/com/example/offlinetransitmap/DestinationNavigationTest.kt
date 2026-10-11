@@ -217,5 +217,72 @@ class DestinationNavigationTest {
         assertTrue(overlay.geoJson.contains("35.68"))
         assertEquals(2, overlay.points.size)
     }
+
+    @Test
+    fun testComputeTurnPenaltyStraight() {
+        // 直進 (角度差 15度) はペナルティ 0
+        val p = computeTurnPenalty(
+            angleDiffDeg = 15.0,
+            prevEdgeDistMeters = 100.0,
+            isConsecutiveTurn = false,
+            prevRoadClass = 1,
+            currRoadClass = 1,
+            mode = TravelMode.BICYCLE
+        )
+        assertEquals(0.0, p, 0.001)
+    }
+
+    @Test
+    fun testComputeTurnPenaltySingleTurn() {
+        // 90度直角ターン (単発、長区間後)
+        val p = computeTurnPenalty(
+            angleDiffDeg = 90.0,
+            prevEdgeDistMeters = 150.0,
+            isConsecutiveTurn = false,
+            prevRoadClass = 4,
+            currRoadClass = 4,
+            mode = TravelMode.BICYCLE
+        )
+        // 50 + (90 - 85) * 0.5 = 52.5m
+        assertEquals(52.5, p, 0.001)
+    }
+
+    @Test
+    fun testComputeTurnPenaltyFrequentAndConsecutiveTurns() {
+        // 頻繁な曲がり (直前区間40mで短区間、かつ2連続ターン、細街路)
+        val p = computeTurnPenalty(
+            angleDiffDeg = 90.0,
+            prevEdgeDistMeters = 40.0,
+            isConsecutiveTurn = true,
+            prevRoadClass = 6,
+            currRoadClass = 6,
+            mode = TravelMode.BICYCLE
+        )
+        // 基本 52.5 + 短区間 55.0 + 連続 60.0 + 細街路 25.0 = 192.5m
+        assertTrue("頻繁な連続ターンには強力な累積ペナルティが課されること: $p", p >= 180.0)
+    }
+
+    @Test
+    fun testComputeTurnPenaltyMajorRoadKeep() {
+        // 大通り (roadClass 1) から細街路 (roadClass 4) への離脱ターン
+        val pLeave = computeTurnPenalty(
+            angleDiffDeg = 90.0,
+            prevEdgeDistMeters = 150.0,
+            isConsecutiveTurn = false,
+            prevRoadClass = 1,
+            currRoadClass = 4,
+            mode = TravelMode.BICYCLE
+        )
+        // 大通り同士 (roadClass 1 -> 1) のターン
+        val pKeep = computeTurnPenalty(
+            angleDiffDeg = 90.0,
+            prevEdgeDistMeters = 150.0,
+            isConsecutiveTurn = false,
+            prevRoadClass = 1,
+            currRoadClass = 1,
+            mode = TravelMode.BICYCLE
+        )
+        assertTrue("大通りから生活道路への離脱には追加ペナルティがあること", pLeave > pKeep)
+    }
 }
 
