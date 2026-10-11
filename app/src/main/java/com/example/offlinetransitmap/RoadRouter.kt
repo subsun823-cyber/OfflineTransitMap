@@ -34,7 +34,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
     companion object {
         private const val TAG = "RoadRouter"
         private const val DB_NAME = "roads.db"
-        private const val ROADS_DB_VERSION = 6 // DB更新用バージョンコード (z=14タイル・カーブ100%保持版)
+        private const val ROADS_DB_VERSION = 7 // DB更新用バージョンコード (Y座標反転バグ解消・正確な実道追従版)
         private const val GRID_CELL_DEG = 0.01 // 約1.1km
         private const val MAX_SNAP_DISTANCE_M = 2500 // 道路ノードまでの最大許容スナップ距離
 
