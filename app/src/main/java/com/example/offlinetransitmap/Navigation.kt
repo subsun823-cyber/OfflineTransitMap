@@ -494,6 +494,7 @@ class NavigationService : Service() {
         private const val CHANNEL_STATUS = "nav_status"
         private const val CHANNEL_ALERT = "nav_alert"
         private const val NOTIF_STATUS = 1001
+        private const val NOTIF_ALERT = 1002 // お知らせ通知用ID（1件のみ保持して上書き・適宜消去）
         private const val ACTION_STOP = "com.example.offlinetransitmap.NAV_STOP"
         private const val TICK_MS = 10_000L
         private const val ARRIVE_M = 120      // 降りる停留所に着いたとみなす距離(m)
@@ -507,7 +508,6 @@ class NavigationService : Service() {
     private var lastLocation: Location? = null
     private val firedAlerts = HashSet<String>()
     private val finished = HashSet<Int>()
-    private var nextAlertId = 2000
     private var lastRerouteTimeMs = 0L
     private var isReroutingInProgress = false
 
@@ -635,6 +635,7 @@ class NavigationService : Service() {
         } catch (e: Exception) {
             // 何もしない
         }
+        dismissAlert()
         NavigationState.isRerouting = false
         NavigationState.active = false
         super.onDestroy()
@@ -718,7 +719,7 @@ class NavigationService : Service() {
         getSystemService(NotificationManager::class.java).notify(NOTIF_STATUS, buildStatus(title, text))
     }
 
-    // 音や振動つきのお知らせ(同じ key では1回だけ)
+    // 音や振動つきのお知らせ(同じ key では1回だけ、通知が溜まらないよう最新1件に上書き)
     private fun alert(key: String, title: String, text: String) {
         if (!firedAlerts.add(key)) return
         val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
@@ -731,7 +732,13 @@ class NavigationService : Service() {
             .setAutoCancel(true)
             .setContentIntent(openAppIntent())
             .build()
-        getSystemService(NotificationManager::class.java).notify(nextAlertId++, n)
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ALERT, n)
+    }
+
+    private fun dismissAlert() {
+        try {
+            getSystemService(NotificationManager::class.java).cancel(NOTIF_ALERT)
+        } catch (e: Exception) {}
     }
 
     private fun distanceTo(point: Pair<Double, Double>?): Int? {
@@ -856,6 +863,9 @@ class NavigationService : Service() {
                 if (roadInfo.maneuver != ManeuverType.STRAIGHT && roadInfo.maneuver != ManeuverType.ARRIVE && roadInfo.distToManeuver <= 50) {
                     val alertKey = "turn_${String.format("%.4f", roadInfo.targetLat)}_${String.format("%.4f", roadInfo.targetLon)}"
                     alert(alertKey, roadInfo.title, "${destName}方面へ")
+                } else if (roadInfo.distToManeuver > 70 || roadInfo.maneuver == ManeuverType.STRAIGHT) {
+                    // 曲がり角を通過して直進に入ったら古い曲がり角通知を自動消去
+                    dismissAlert()
                 }
 
                 val title = if (NavigationState.isRerouting) "ルートを再探索中..." else roadInfo.title

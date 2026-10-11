@@ -112,9 +112,16 @@ for zxy, data in all_tiles(src):
     for f in pois:
         props = f.get('properties', {})
         name = props.get('name')
-        if not name or len(name.strip()) == 0:
-            continue
         kind = props.get('kind', 'poi')
+        if not kind or kind == 'poi':
+            kind = props.get('pmap:kind', 'poi')
+
+        if not name or len(name.strip()) == 0:
+            if kind == 'level_crossing':
+                name = '（名称未設定の踏切）'
+            else:
+                continue
+
         if kind in ['bus_stop', 'bus_station']:
             continue
             

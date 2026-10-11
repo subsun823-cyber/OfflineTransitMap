@@ -618,10 +618,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         val curLoc = if (hasLocationPermission) lastKnownLatLon(context) else null
                         val dist = curLoc?.let { calcDistanceMeters(it.first, it.second, lat, lon) }
                         val sun = SunPositionCalculator.calculate(lat, lon)
-                        val memo = CrossingRepository.loadMemo(context, id)
+                        val resolvedId = CrossingRepository.resolveCrossingId(poiDb?.db, id, lat, lon)
+                        val memo = CrossingRepository.loadMemo(context, resolvedId)
                         val line = CrossingRepository.resolveRailwayLine(name, lat, lon, timetable?.db)
                         selectedCrossing = LevelCrossingItem(
-                            id = id,
+                            id = resolvedId,
                             name = name,
                             lat = lat,
                             lon = lon,

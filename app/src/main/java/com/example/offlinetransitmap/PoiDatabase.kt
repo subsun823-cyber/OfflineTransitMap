@@ -9,7 +9,7 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
 
     companion object {
         private const val DB_NAME = "pois.db"
-        private const val POIS_DB_VERSION = 2 // Y座標反転修正・正規座標版
+        private const val POIS_DB_VERSION = 3 // 名称未設定踏切対応版
         @Volatile
         private var instance: PoiDatabase? = null
 

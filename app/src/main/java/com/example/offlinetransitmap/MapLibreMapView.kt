@@ -285,15 +285,21 @@ fun MapLibreMapView(
                     val crossingLayers = arrayOf("crossings-highlight-symbol", "crossings-highlight-circle", *protoLayers)
                     val crossingFeature = map.queryRenderedFeatures(area, *crossingLayers).firstOrNull()
                     if (crossingFeature != null) {
-                        val cId = crossingFeature.getStringProperty("id") ?: "crossing_${latLng.latitude}_${latLng.longitude}"
+                        val geom = crossingFeature.geometry()
+                        val pLat: Double
+                        val pLon: Double
+                        if (geom is org.maplibre.geojson.Point) {
+                            pLat = geom.latitude()
+                            pLon = geom.longitude()
+                        } else {
+                            pLat = latLng.latitude
+                            pLon = latLng.longitude
+                        }
+                        val rawId = crossingFeature.getStringProperty("id")
+                        val cId = if (!rawId.isNullOrBlank()) rawId else String.format(java.util.Locale.US, "crossing_%.5f_%.5f", pLat, pLon)
                         val rawName = crossingFeature.getStringProperty("name")
                         val cName = if (!rawName.isNullOrBlank()) rawName else "（名称未設定の踏切）"
-                        val geom = crossingFeature.geometry()
-                        if (geom is org.maplibre.geojson.Point) {
-                            currentOnCrossingClick(cId, cName, geom.latitude(), geom.longitude())
-                        } else {
-                            currentOnCrossingClick(cId, cName, latLng.latitude, latLng.longitude)
-                        }
+                        currentOnCrossingClick(cId, cName, pLat, pLon)
                         return@addOnMapClickListener true
                     }
 

@@ -75,7 +75,7 @@ fun NearbyCrossingsDialog(
         }
     }
 
-    LaunchedEffect(searchQuery, userLocation, refreshTrigger) {
+    LaunchedEffect(searchQuery, userLocation, refreshTrigger, selectedTab) {
         isLoading = true
         loadData()
         isLoading = false

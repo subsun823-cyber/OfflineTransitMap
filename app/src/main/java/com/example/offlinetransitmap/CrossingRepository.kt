@@ -127,6 +127,29 @@ object CrossingRepository {
     }
 
     /**
+     * 踏切IDの正規化・解決
+     * 地図タップ等で rawId がベクタータイル座標キーの場合、近接座標 (約35m以内) にある pois.db の level_crossing ID (poi_xxx) を解決
+     */
+    fun resolveCrossingId(db: SQLiteDatabase?, rawId: String, lat: Double, lon: Double): String {
+        if (db == null) return rawId
+        if (rawId.startsWith("poi_")) return rawId
+        try {
+            val delta = 0.00035 // 約35m
+            val cursor = db.rawQuery(
+                "SELECT id FROM pois WHERE kind = 'level_crossing' AND lat BETWEEN ? AND ? AND lon BETWEEN ? AND ? LIMIT 1",
+                arrayOf((lat - delta).toString(), (lat + delta).toString(), (lon - delta).toString(), (lon + delta).toString())
+            )
+            cursor.use { c ->
+                if (c.moveToNext()) {
+                    val id = c.getString(0)
+                    if (!id.isNullOrBlank()) return id
+                }
+            }
+        } catch (e: Exception) {}
+        return rawId
+    }
+
+    /**
      * 全踏切を取得
      */
     fun getAllCrossings(
@@ -396,7 +419,7 @@ object CrossingRepository {
             put("bestLightingTime", memo.bestLightingTime)
             put("notes", memo.notes)
         }
-        prefs.edit().putString(crossingId, json.toString()).apply()
+        prefs.edit().putString(crossingId, json.toString()).commit()
     }
 
     /**
