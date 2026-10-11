@@ -96,6 +96,7 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
             "郵便局", "ゆうびんきょく" -> "post_office"
             "交番", "警察" -> "police"
             "学校", "小学校", "中学校", "高校", "大学" -> "school"
+            "踏切", "ふみきり" -> "level_crossing"
             else -> null
         }
 
@@ -122,9 +123,10 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
                             val name = c.getString(1)
                             val lat = c.getDouble(2)
                             val lon = c.getDouble(3)
+                            val kind = c.getString(4)
                             val catStr = c.getString(5)
                             val detail = c.getString(6)
-                            val cat = runCatching { PlaceCategory.valueOf(catStr) }.getOrDefault(PlaceCategory.FACILITY)
+                            val cat = if (kind == "level_crossing") PlaceCategory.CROSSING else runCatching { PlaceCategory.valueOf(catStr) }.getOrDefault(PlaceCategory.FACILITY)
                             if (categoryFilter == null || cat == categoryFilter) {
                                 results.add(PlaceItem(id, name, "", lat, lon, cat, detail))
                             }
@@ -170,9 +172,10 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
                         val name = c.getString(1)
                         val lat = c.getDouble(2)
                         val lon = c.getDouble(3)
+                        val kind = c.getString(4)
                         val catStr = c.getString(5)
                         val detail = c.getString(6)
-                        val cat = runCatching { PlaceCategory.valueOf(catStr) }.getOrDefault(PlaceCategory.FACILITY)
+                        val cat = if (kind == "level_crossing") PlaceCategory.CROSSING else runCatching { PlaceCategory.valueOf(catStr) }.getOrDefault(PlaceCategory.FACILITY)
                         if (categoryFilter == null || cat == categoryFilter) {
                             results.add(PlaceItem(id, name, "", lat, lon, cat, detail))
                         }
@@ -193,9 +196,10 @@ class PoiDatabase private constructor(val db: SQLiteDatabase) {
                             val name = c.getString(1)
                             val lat = c.getDouble(2)
                             val lon = c.getDouble(3)
+                            val kind = c.getString(4)
                             val catStr = c.getString(5)
                             val detail = c.getString(6)
-                            val cat = runCatching { PlaceCategory.valueOf(catStr) }.getOrDefault(PlaceCategory.FACILITY)
+                            val cat = if (kind == "level_crossing") PlaceCategory.CROSSING else runCatching { PlaceCategory.valueOf(catStr) }.getOrDefault(PlaceCategory.FACILITY)
                             if (categoryFilter == null || cat == categoryFilter) {
                                 results.add(PlaceItem(id, name, "", lat, lon, cat, detail))
                             }

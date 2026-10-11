@@ -104,7 +104,9 @@ private fun expandLayerForPrefecture(templateJson: String, prefId: String): Stri
 internal fun offlineMultiStyleJson(
     downloadedPrefectures: List<Pair<PrefectureMapInfo, File>>,
     stationsGeoJson: String,
-    stationMinZoom: Double
+    stationMinZoom: Double,
+    crossingsGeoJson: String? = null,
+    highlightCrossings: Boolean = false
 ): String {
     val sourcesJson = buildString {
         append("{\n")
@@ -115,6 +117,8 @@ internal fun offlineMultiStyleJson(
             append("\n")
         }
         append("""    "stations": { "type": "geojson", "data": $stationsGeoJson },""")
+        append("\n")
+        append("""    "crossings": { "type": "geojson", "data": ${crossingsGeoJson ?: """{"type":"FeatureCollection","features":[]}"""} },""")
         append("\n")
         append("""    "route": { "type": "geojson", "data": { "type": "FeatureCollection", "features": [] } },""")
         append("\n")
@@ -141,6 +145,11 @@ internal fun offlineMultiStyleJson(
         }
         for (tmpl in commonStationLayers(stationMinZoom)) {
             add("    " + tmpl)
+        }
+        if (highlightCrossings) {
+            add("""    {"id": "crossings-highlight-circle", "type": "circle", "source": "crossings", "minzoom": 11, "paint": {"circle-radius": 7, "circle-color": "#ffb300", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2}}""")
+            add("""    {"id": "crossings-highlight-symbol", "type": "symbol", "source": "crossings", "minzoom": 11, "layout": {"icon-image": "poi-level-crossing", "icon-size": 0.85, "icon-allow-overlap": true}}""")
+            add("""    {"id": "crossings-highlight-name", "type": "symbol", "source": "crossings", "minzoom": 13, "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.9]}, "paint": {"text-color": "#b26a00", "text-halo-color": "#ffffff", "text-halo-width": 1.5}}""")
         }
     }.joinToString(",\n")
 
@@ -212,10 +221,12 @@ fun MapLibreMapView(
     destinationPoint: Pair<Double, Double>? = null,
     destinationName: String = "目的地",
     targetCameraPoint: Pair<Double, Double>? = null,
+    crossingsGeoJson: String? = null,
     mapReloadKey: Int = 0,
     onFollowLostChange: (Boolean) -> Unit = {},
     onBearingChange: (Double) -> Unit = {},
     onStationClick: (id: String, name: String) -> Unit = { _, _ -> },
+    onCrossingClick: (id: String, name: String, lat: Double, lon: Double) -> Unit = { _, _, _, _ -> },
     onMapClick: (lat: Double, lon: Double) -> Unit = { _, _ -> },
     onMapLongClick: (lat: Double, lon: Double) -> Unit = { _, _ -> }
 ) {
@@ -224,12 +235,19 @@ fun MapLibreMapView(
     var loadedStyle by remember { mutableStateOf<Style?>(null) }
 
     val currentOnStationClick by rememberUpdatedState(onStationClick)
+    val currentOnCrossingClick by rememberUpdatedState(onCrossingClick)
     val currentOnMapClick by rememberUpdatedState(onMapClick)
     val currentOnMapLongClick by rememberUpdatedState(onMapLongClick)
 
     fun loadStyleForMap(map: MapLibreMap) {
         val downloaded = KantoPrefectures.getDownloadedList(context).map { it to KantoPrefectures.getFile(context, it) }
-        val styleJson = offlineMultiStyleJson(downloaded, stationsGeoJson, stationMinZoom)
+        val styleJson = offlineMultiStyleJson(
+            downloadedPrefectures = downloaded,
+            stationsGeoJson = stationsGeoJson,
+            stationMinZoom = stationMinZoom,
+            crossingsGeoJson = crossingsGeoJson,
+            highlightCrossings = preferences.hobbyCrossingMode && preferences.hobbyHighlightCrossings
+        )
         map.setStyle(Style.Builder().fromJson(styleJson).withPoiIcons(context)) { style -> loadedStyle = style }
     }
 
@@ -248,10 +266,26 @@ fun MapLibreMapView(
                     .zoom(if (downloaded.isNotEmpty()) 9.5 else 11.0)
                     .build()
 
-                // 駅・バス停のマークまたは地図をタップしたときの処理
+                // 駅・バス停・踏切のマークまたは地図をタップしたときの処理
                 map.addOnMapClickListener { latLng ->
                     val p = map.projection.toScreenLocation(latLng)
                     val area = RectF(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
+
+                    // 1. 踏切のタップ判定（趣味モード時）
+                    val crossingFeature = map.queryRenderedFeatures(area, "crossings-highlight-symbol", "crossings-highlight-circle").firstOrNull()
+                    if (crossingFeature != null) {
+                        val cId = crossingFeature.getStringProperty("id") ?: ""
+                        val cName = crossingFeature.getStringProperty("name") ?: "踏切"
+                        val geom = crossingFeature.geometry()
+                        if (geom is org.maplibre.geojson.Point) {
+                            currentOnCrossingClick(cId, cName, geom.latitude(), geom.longitude())
+                        } else {
+                            currentOnCrossingClick(cId, cName, latLng.latitude, latLng.longitude)
+                        }
+                        return@addOnMapClickListener true
+                    }
+
+                    // 2. 駅・バス停のタップ判定
                     val feature = map.queryRenderedFeatures(area, "stations-rail", "stations").firstOrNull()
                     val id = feature?.getStringProperty("id") ?: ""
                     val name = feature?.getStringProperty("name")
@@ -277,8 +311,17 @@ fun MapLibreMapView(
     LaunchedEffect(loadedStyle, stationsGeoJson) {
         loadedStyle?.getSourceAs<GeoJsonSource>("stations")?.setGeoJson(stationsGeoJson)
     }
+    LaunchedEffect(loadedStyle, crossingsGeoJson) {
+        if (crossingsGeoJson != null) {
+            loadedStyle?.getSourceAs<GeoJsonSource>("crossings")?.setGeoJson(crossingsGeoJson)
+        }
+    }
     LaunchedEffect(loadedStyle, destinationPoint, destinationName) {
         loadedStyle?.getSourceAs<GeoJsonSource>("destination")?.setGeoJson(destinationGeoJson(destinationPoint, destinationName))
+    }
+    LaunchedEffect(preferences.hobbyCrossingMode, preferences.hobbyHighlightCrossings) {
+        val map = mapState ?: return@LaunchedEffect
+        loadStyleForMap(map)
     }
     LaunchedEffect(targetCameraPoint, mapState) {
         val target = targetCameraPoint ?: return@LaunchedEffect

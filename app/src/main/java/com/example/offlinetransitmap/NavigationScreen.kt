@@ -649,6 +649,7 @@ fun NavigationOverlay(
     followLost: Boolean,
     onRecenter: () -> Unit,
     onStop: () -> Unit,
+    nearbyCrossing: LevelCrossingItem? = null,
     modifier: Modifier = Modifier
 ) {
     val speedKmh = if (location != null && location.hasSpeed()) {
@@ -660,12 +661,58 @@ fun NavigationOverlay(
 
     Box(modifier = modifier.fillMaxSize()) {
         // 上部: ターンバイターン案内カード
-        TopManeuverCard(
-            guidance = guidance,
+        Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(12.dp)
-        )
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TopManeuverCard(guidance = guidance)
+
+            // 趣味モード: 踏切接近アラートバナー
+            if (nearbyCrossing != null) {
+                Surface(
+                    color = Color(0xF21A1608),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.2.dp, Color(0xFFFFB300)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text("⚠️", fontSize = 22.sp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "まもなく踏切: ${nearbyCrossing.name}",
+                                    color = Color(0xFFFFD54F),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                                nearbyCrossing.distanceMeters?.let { d ->
+                                    Text(
+                                        text = "（あと${d}m）",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                            nearbyCrossing.sunPosition?.let { sun ->
+                                Text(
+                                    text = "☀️ 光線: ${sun.azimuthDirectionName} (${"%.0f".format(sun.azimuthDegrees)}°) · ${sun.lightCondition}",
+                                    color = Color(0xFFE0E0E0),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // 下部エリア (速度計 + 再センタリング + ダッシュボード)
         Column(

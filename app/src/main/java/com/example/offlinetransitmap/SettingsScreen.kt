@@ -188,6 +188,66 @@ fun SettingsScreen(
                 }
             }
             item {
+                var showCrossingSpotsDialog by remember { mutableStateOf(false) }
+                SettingsGroup("趣味モード") {
+                    SettingSwitch(
+                        "踏切撮影アシスト", "踏切巡りや鉄道写真のロケハン・撮影に役立つ専用機能を有効にします",
+                        preferences.hobbyCrossingMode
+                    ) { onChange(preferences.copy(hobbyCrossingMode = it)) }
+
+                    if (preferences.hobbyCrossingMode) {
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalDivider()
+                        SettingSwitch(
+                            "地図上で踏切を強調表示", "広域ズームでも踏切アイコンを目立たせてロケハンを容易にします",
+                            preferences.hobbyHighlightCrossings
+                        ) { onChange(preferences.copy(hobbyHighlightCrossings = it)) }
+
+                        HorizontalDivider()
+                        SettingSwitch(
+                            "太陽光線（順光・逆光）ガイド", "現在時刻の太陽方位・仰角をリアルタイム計算し、光線状態を案内します",
+                            preferences.hobbySunGuide
+                        ) { onChange(preferences.copy(hobbySunGuide = it)) }
+
+                        HorizontalDivider()
+                        SettingSwitch(
+                            "踏切接近アラート", "移動中やナビ中に踏切（150m以内）に近づいた際に通知します",
+                            preferences.hobbyCrossingAlert
+                        ) { onChange(preferences.copy(hobbyCrossingAlert = it)) }
+
+                        HorizontalDivider()
+                        SettingSwitch(
+                            "撮影構図ファインダー枠", "画面に一眼レフ（3:2）フレームと三分割構図グリッドを表示します",
+                            preferences.hobbyCompositionGrid
+                        ) { onChange(preferences.copy(hobbyCompositionGrid = it)) }
+
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = { showCrossingSpotsDialog = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🚥 周辺の踏切スポット・ロケハン一覧を開く")
+                        }
+                    } else {
+                        SettingNote("有効にすると、地図上の踏切強調・太陽光線コンパス・接近アラート・構図枠などが利用できます。")
+                    }
+                }
+
+                if (showCrossingSpotsDialog) {
+                    val poiDb = remember { PoiDatabase.open(context) }
+                    val curLoc = remember { lastKnownLatLon(context) }
+                    NearbyCrossingsDialog(
+                        poiDatabase = poiDb,
+                        userLocation = curLoc,
+                        onSelectCrossing = {
+                            showCrossingSpotsDialog = false
+                            // 選択時は設定画面を閉じる等ができるように後ほど統合
+                        },
+                        onDismiss = { showCrossingSpotsDialog = false }
+                    )
+                }
+            }
+            item {
                 SettingsGroup("オフライン地図（関東各都県）") {
                     val totalMb = prefectureStates.filter { it.isDownloaded }.sumOf { it.sizeBytes } / 1024.0 / 1024.0
                     val downloadedCount = prefectureStates.count { it.isDownloaded }

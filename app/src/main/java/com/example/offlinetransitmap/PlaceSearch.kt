@@ -13,7 +13,8 @@ enum class PlaceCategory(val label: String, val iconEmoji: String) {
     LEISURE("レジャー", "🎡"),
     PARK("公園", "🌳"),
     FACILITY("施設・公共", "🏛️"),
-    TRANSPORT("交通拠点", "✈️")
+    TRANSPORT("交通拠点", "✈️"),
+    CROSSING("踏切", "🚥")
 }
 
 data class PlaceItem(

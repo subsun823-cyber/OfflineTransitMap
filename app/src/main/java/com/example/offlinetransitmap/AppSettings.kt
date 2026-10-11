@@ -26,7 +26,13 @@ data class AppPreferences(
     val keepScreenOnDuringNavigation: Boolean = false,
     val autoCheckTransitUpdates: Boolean = true,
     val customManifestUrl: String = "",
-    val customMapBaseUrl: String = ""
+    val customMapBaseUrl: String = "",
+    // 趣味モード（踏切撮影）
+    val hobbyCrossingMode: Boolean = false,
+    val hobbyHighlightCrossings: Boolean = true,
+    val hobbySunGuide: Boolean = true,
+    val hobbyCrossingAlert: Boolean = true,
+    val hobbyCompositionGrid: Boolean = false
 )
 
 // 小さな設定だけを保存する。地図・時刻表データには触れない。
@@ -39,7 +45,12 @@ class AppSettings(private val storage: SharedPreferences) {
             keepScreenOnDuringNavigation = storage.getBoolean("navigation_screen_on", false),
             autoCheckTransitUpdates = storage.getBoolean("auto_check_transit_updates", true),
             customManifestUrl = storage.getString("transit_manifest_url", "") ?: "",
-            customMapBaseUrl = storage.getString("map_base_url", "") ?: ""
+            customMapBaseUrl = storage.getString("map_base_url", "") ?: "",
+            hobbyCrossingMode = storage.getBoolean("hobby_crossing_mode", false),
+            hobbyHighlightCrossings = storage.getBoolean("hobby_highlight_crossings", true),
+            hobbySunGuide = storage.getBoolean("hobby_sun_guide", true),
+            hobbyCrossingAlert = storage.getBoolean("hobby_crossing_alert", true),
+            hobbyCompositionGrid = storage.getBoolean("hobby_composition_grid", false)
         )
     )
         private set
@@ -53,6 +64,11 @@ class AppSettings(private val storage: SharedPreferences) {
             .putBoolean("auto_check_transit_updates", preferences.autoCheckTransitUpdates)
             .putString("transit_manifest_url", preferences.customManifestUrl)
             .putString("map_base_url", preferences.customMapBaseUrl)
+            .putBoolean("hobby_crossing_mode", preferences.hobbyCrossingMode)
+            .putBoolean("hobby_highlight_crossings", preferences.hobbyHighlightCrossings)
+            .putBoolean("hobby_sun_guide", preferences.hobbySunGuide)
+            .putBoolean("hobby_crossing_alert", preferences.hobbyCrossingAlert)
+            .putBoolean("hobby_composition_grid", preferences.hobbyCompositionGrid)
             .apply()
         value = preferences
     }

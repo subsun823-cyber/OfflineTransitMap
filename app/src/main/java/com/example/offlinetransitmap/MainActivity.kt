@@ -72,6 +72,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import java.time.LocalDateTime
 
@@ -106,7 +107,7 @@ private data class SelectedStation(val id: String, val name: String)
 
 // 端末が最後に取得した現在地(緯度, 経度)。無ければ null
 @SuppressLint("MissingPermission")
-private fun lastKnownLatLon(context: Context): Pair<Double, Double>? {
+internal fun lastKnownLatLon(context: Context): Pair<Double, Double>? {
     val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
     var best: Location? = null
     for (p in listOf(
@@ -175,6 +176,26 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val roadRouter = remember { RoadRouter.open(context) }
     var showPlaceSearch by remember { mutableStateOf(false) }
 
+    // 趣味モード（踏切撮影）の状態
+    var selectedCrossing by remember { mutableStateOf<LevelCrossingItem?>(null) }
+    var showCrossingListDialog by remember { mutableStateOf(false) }
+    var nearbyCrossingAlert by remember { mutableStateOf<LevelCrossingItem?>(null) }
+
+    val crossingsGeoJson by produceState<String?>(
+        initialValue = null,
+        key1 = poiDb,
+        key2 = preferences.hobbyCrossingMode,
+        key3 = preferences.hobbyHighlightCrossings
+    ) {
+        if (preferences.hobbyCrossingMode && preferences.hobbyHighlightCrossings && poiDb != null) {
+            value = withContext(Dispatchers.IO) {
+                CrossingRepository.getCrossingsGeoJson(poiDb.db)
+            }
+        } else {
+            value = null
+        }
+    }
+
     // 目的地の状態（施設名、カテゴリ、アイコン、距離、所要時間など）
     var destinationPoint by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var destinationTitle by remember { mutableStateOf("目的地") }
@@ -213,6 +234,31 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var mapBearing by remember { mutableDoubleStateOf(0.0) }
     var followLost by remember { mutableStateOf(false) }
 
+    // ナビ中の踏切接近監視（150m以内）
+    val navLoc = NavigationState.location
+    LaunchedEffect(navLoc, navMode, preferences.hobbyCrossingMode, preferences.hobbyCrossingAlert) {
+        if (navMode && navLoc != null && preferences.hobbyCrossingMode && preferences.hobbyCrossingAlert) {
+            withContext(Dispatchers.Default) {
+                val db = poiDb?.db
+                if (db != null) {
+                    val nearby = CrossingRepository.getNearbyCrossings(
+                        db = db,
+                        userLat = navLoc.latitude,
+                        userLon = navLoc.longitude,
+                        context = context,
+                        limit = 1
+                    ).firstOrNull()
+                    val alert = if (nearby != null && (nearby.distanceMeters ?: Int.MAX_VALUE) <= 150) nearby else null
+                    withContext(Dispatchers.Main) {
+                        nearbyCrossingAlert = alert
+                    }
+                }
+            }
+        } else {
+            nearbyCrossingAlert = null
+        }
+    }
+
     // 「現在地に戻る」が押された回数(増えるたびに地図側が現在地へ移動する)
     var recenterRequest by remember { mutableIntStateOf(0) }
     var mapReloadKey by remember { mutableIntStateOf(0) }
@@ -225,6 +271,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
 
     // 施設検索画面の戻る操作
     BackHandler(enabled = showPlaceSearch) { showPlaceSearch = false }
+
+    // 踏切詳細カードの戻る操作
+    BackHandler(enabled = selectedCrossing != null && !navMode && !showSettings && !showPlaceSearch) {
+        selectedCrossing = null
+    }
 
     // 目的地カードが開いているときの戻る操作
     BackHandler(enabled = destinationPoint != null && selectedItinerary == null && !navMode && !showSettings && !showPlaceSearch) {
@@ -459,6 +510,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         }
                     },
                     actions = {
+                        if (preferences.hobbyCrossingMode) {
+                            IconButton(onClick = { showCrossingListDialog = true }) {
+                                Text("🚥", fontSize = 20.sp)
+                            }
+                        }
                         IconButton(onClick = { showSettings = true }) {
                             Icon(
                                 imageVector = Icons.Default.Settings,
@@ -475,11 +531,21 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             }
         },
         floatingActionButton = {
-            if (!showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null && !navMode && destinationPoint == null) {
+            if (!showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null && !navMode && destinationPoint == null && selectedCrossing == null) {
                 Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // 趣味モード: 構図グリッドのトグルボタン
+                    if (preferences.hobbyCrossingMode) {
+                        SmallFloatingActionButton(
+                            onClick = {
+                                settings.update(preferences.copy(hobbyCompositionGrid = !preferences.hobbyCompositionGrid))
+                            }
+                        ) {
+                            Text(if (preferences.hobbyCompositionGrid) "📐" else "📷", fontSize = 16.sp)
+                        }
+                    }
                     // 現在地に戻る
                     SmallFloatingActionButton(
                         onClick = {
@@ -532,11 +598,40 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 destinationPoint = destinationPoint,
                 destinationName = destinationTitle,
                 targetCameraPoint = targetCameraPoint,
+                crossingsGeoJson = crossingsGeoJson,
                 mapReloadKey = mapReloadKey,
                 onFollowLostChange = { followLost = it },
                 onBearingChange = { mapBearing = it },
+                onCrossingClick = { id, name, lat, lon ->
+                    if (!navMode) {
+                        destinationPoint = null
+                        destinationStation = null
+                        destinationDistance = null
+                        destinationCurrentDistance = null
+                        destinationCurrentDuration = null
+                        destinationBicycleDuration = null
+                        selectedStation = null
+                        selectedItinerary = null
+                        targetCameraPoint = Pair(lat, lon)
+                        val curLoc = if (hasLocationPermission) lastKnownLatLon(context) else null
+                        val dist = curLoc?.let { calcDistanceMeters(it.first, it.second, lat, lon) }
+                        val sun = SunPositionCalculator.calculate(lat, lon)
+                        val memo = CrossingRepository.loadMemo(context, id)
+                        selectedCrossing = LevelCrossingItem(
+                            id = id,
+                            name = name,
+                            lat = lat,
+                            lon = lon,
+                            detail = "踏切",
+                            distanceMeters = dist,
+                            sunPosition = sun,
+                            memo = memo
+                        )
+                    }
+                },
                 onStationClick = { id, name ->
                     if (!navMode) {
+                        selectedCrossing = null
                         destinationPoint = null
                         destinationStation = null
                         destinationDistance = null
@@ -549,19 +644,23 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     }
                 },
                 onMapClick = { _, _ ->
-                    if (!navMode && selectedItinerary == null && destinationPoint != null) {
-                        destinationPoint = null
-                        destinationStation = null
-                        destinationDistance = null
-                        destinationCurrentDistance = null
-                        destinationCurrentDuration = null
-                        destinationBicycleDuration = null
-                        selectedTravelMode = TravelMode.WALK
-                        targetCameraPoint = null
+                    if (!navMode && selectedItinerary == null) {
+                        selectedCrossing = null
+                        if (destinationPoint != null) {
+                            destinationPoint = null
+                            destinationStation = null
+                            destinationDistance = null
+                            destinationCurrentDistance = null
+                            destinationCurrentDuration = null
+                            destinationBicycleDuration = null
+                            selectedTravelMode = TravelMode.WALK
+                            targetCameraPoint = null
+                        }
                     }
                 },
                 onMapLongClick = { lat, lon ->
                     if (!navMode && !showSettings && !showSearch && !showPlaceSearch) {
+                        selectedCrossing = null
                         selectedStation = null
                         selectedItinerary = null
                         destinationPoint = Pair(lat, lon)
@@ -643,6 +742,37 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     )
                 }
             }
+            selectedCrossing?.let { crossing ->
+                if (!navMode && !showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null) {
+                    CrossingDetailCard(
+                        crossing = crossing,
+                        onStartNavWalk = {
+                            selectedTravelMode = TravelMode.WALK
+                            destinationPoint = Pair(crossing.lat, crossing.lon)
+                            destinationTitle = crossing.name
+                            handleDestinationSearch(true)
+                            selectedCrossing = null
+                        },
+                        onStartNavBike = {
+                            selectedTravelMode = TravelMode.BICYCLE
+                            destinationPoint = Pair(crossing.lat, crossing.lon)
+                            destinationTitle = crossing.name
+                            handleDestinationSearch(true)
+                            selectedCrossing = null
+                        },
+                        onSaveMemo = { memo ->
+                            CrossingRepository.saveMemo(context, crossing.id, memo)
+                            selectedCrossing = crossing.copy(memo = memo)
+                        },
+                        onClose = { selectedCrossing = null },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
+            }
+            // 撮影構図ファインダー枠（趣味モード）
+            if (preferences.hobbyCrossingMode && preferences.hobbyCompositionGrid && !showSettings && !showSearch && !showPlaceSearch) {
+                CompositionGridOverlay()
+            }
             if (showPlaceSearch && !navMode && !showSettings) {
                 PlaceSearchScreen(
                     searcher = placeSearcher,
@@ -651,6 +781,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         showPlaceSearch = false
                         selectedStation = null
                         selectedItinerary = null
+                        selectedCrossing = null
                         val p = res.place
                         val point = Pair(p.lat, p.lon)
                         destinationPoint = point
@@ -738,6 +869,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     mapBearing = mapBearing,
                     followLost = followLost,
                     onRecenter = { recenterRequest++ },
+                    nearbyCrossing = nearbyCrossingAlert,
                     onStop = {
                         NavigationController.stop(context)
                         destinationPoint = null
@@ -755,6 +887,23 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     onChange = settings::update,
                     dataNote = dataNote,
                     onMapUpdated = { mapReloadKey++ }
+                )
+            }
+
+            if (showCrossingListDialog) {
+                val curLoc = remember { lastKnownLatLon(context) }
+                NearbyCrossingsDialog(
+                    poiDatabase = poiDb,
+                    userLocation = curLoc,
+                    onSelectCrossing = { item ->
+                        showCrossingListDialog = false
+                        selectedStation = null
+                        selectedItinerary = null
+                        destinationPoint = null
+                        targetCameraPoint = Pair(item.lat, item.lon)
+                        selectedCrossing = item
+                    },
+                    onDismiss = { showCrossingListDialog = false }
                 )
             }
         }
