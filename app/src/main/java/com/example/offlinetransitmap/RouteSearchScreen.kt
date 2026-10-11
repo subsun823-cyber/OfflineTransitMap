@@ -303,7 +303,7 @@ fun RouteSearchScreen(
                     }
                     item {
                         Text(
-                            "カードをタップすると、地図に経路を表示します。料金は大人・データ上の運賃の合計です(IC割引・小児運賃は含みません)。「料金不明」は運賃データのない区間を含みます。",
+                            "カードをタップすると、地図に経路を表示します。料金は大人・普通運賃の合計です（JR線の電車特定区間・山手線内・通算運賃の自動計算に対応。IC割引・小児運賃は含みません）。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(vertical = 8.dp)

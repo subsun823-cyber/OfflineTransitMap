@@ -228,8 +228,12 @@ fun RouteDetailPanel(
                                             modifier = Modifier.weight(1f)
                                         )
                                     }
+                                    val fareText = leg.fare?.let {
+                                        val note = if (!leg.fareNote.isNullOrBlank()) " (${leg.fareNote})" else ""
+                                        "${it}円$note"
+                                    } ?: "料金不明"
                                     Text(
-                                        text = "約${minutes}分 · " + (leg.fare?.let { "${it}円" } ?: "料金不明"),
+                                        text = "約${minutes}分 · $fareText",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

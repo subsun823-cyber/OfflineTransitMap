@@ -33,7 +33,8 @@ data class RouteLeg(
     val platform: String = "",
     val fare: Int? = null,
     val path: List<Pair<Double, Double>> = emptyList(),
-    val trainType: String = ""
+    val trainType: String = "",
+    val fareNote: String? = null
 )
 
 enum class SortMode { FASTEST, FEWEST_TRANSFERS, CHEAPEST }
@@ -706,12 +707,21 @@ class RouteSearcher(private val db: SQLiteDatabase) {
     private fun buildItinerary(data: SearchData, raw: List<RawLeg>, base: LocalDateTime): Itinerary? {
         val legs = ArrayList<RouteLeg>()
         val keyParts = ArrayList<String>()
-        var known = 0
-        var fareUnknown = false
         var rideCount = 0
         var firstRideDep: LocalDateTime? = null
         var lastRideArr: LocalDateTime? = null
         var firstWalkMin = 0
+
+        // 乗車レグごとの運賃情報
+        data class LegFareMeta(
+            val legIndex: Int,
+            val isJr: Boolean,
+            val jrKm: Int,
+            val isYamanote: Boolean,
+            val individualFare: Int?
+        )
+        val rideFareMetas = ArrayList<LegFareMeta>()
+
         for ((i, leg) in raw.withIndex()) {
             if (leg.isWalk) {
                 val from = net.stations[leg.a]
@@ -731,15 +741,29 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 keyParts.add("w")
             } else {
                 val info = legInfo(data.tripNo[leg.a], data.rowSeq[leg.b]) ?: return null
-                val fare = fareOf(info.routeId, data.rowStop[leg.b], data.rowStop[leg.c])
-                if (fare == null) fareUnknown = true else known += fare
+                val fromSt = data.rowStation[leg.b]
+                val toSt = data.rowStation[leg.c]
+                val legStations = (leg.b..leg.c).map { r -> net.stations[data.rowStation[r]] }
+
+                var fare = fareOf(info.routeId, data.rowStop[leg.b], data.rowStop[leg.c])
+                val isJr = JrFareCalculator.isJrRoute(info.routeId, info.operatorLabel)
+                var jrKm = 0
+                var isYm = false
+                if (fare == null && isJr) {
+                    jrKm = JrFareCalculator.estimateOperatingKm(legStations)
+                    isYm = JrFareCalculator.isAllYamanote(legStations)
+                    fare = JrFareCalculator.calculateFare(jrKm, isYm)
+                }
+
                 val dep = base.plusSeconds(data.rowDep[leg.b].toLong())
                 val arr = base.plusSeconds(data.rowArr[leg.c].toLong())
                 if (firstRideDep == null) firstRideDep = dep
                 lastRideArr = arr
                 rideCount++
-                val fromSt = data.rowStation[leg.b]
-                val toSt = data.rowStation[leg.c]
+
+                val legIdx = legs.size
+                rideFareMetas.add(LegFareMeta(legIdx, isJr, jrKm, isYm, fare))
+
                 legs.add(
                     RouteLeg(
                         isWalk = false,
@@ -767,13 +791,62 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val lastArr = lastRideArr ?: return null
         val tail = raw.last()
         val arrival = if (tail.isWalk) base.plusSeconds(tail.c.toLong()) else lastArr
+
+        // 旅程全体の運賃計算（JR連続乗車時の通算運賃適用）
+        var totalFare = 0
+        var fareUnknown = false
+        val currentJrGroup = ArrayList<LegFareMeta>()
+
+        fun flushJrGroup() {
+            if (currentJrGroup.isEmpty()) return
+            if (currentJrGroup.size == 1) {
+                val single = currentJrGroup[0]
+                if (single.individualFare != null) {
+                    totalFare += single.individualFare
+                } else {
+                    fareUnknown = true
+                }
+            } else {
+                // 連続する複数のJR乗車区間 -> 通算営業キロで通算運賃を計算
+                val totalKm = currentJrGroup.sumOf { it.jrKm }
+                val allYm = currentJrGroup.all { it.isYamanote }
+                val throughFare = JrFareCalculator.calculateFare(totalKm, allYm)
+                totalFare += throughFare
+                for (item in currentJrGroup) {
+                    val original = legs[item.legIndex]
+                    legs[item.legIndex] = original.copy(fareNote = "JR通算")
+                }
+            }
+            currentJrGroup.clear()
+        }
+
+        var prevRideLegIdx: Int? = null
+        for (meta in rideFareMetas) {
+            val isConsecutive = prevRideLegIdx != null && (meta.legIndex == prevRideLegIdx + 1)
+            if (meta.isJr) {
+                if (currentJrGroup.isNotEmpty() && !isConsecutive) {
+                    flushJrGroup()
+                }
+                currentJrGroup.add(meta)
+            } else {
+                flushJrGroup()
+                if (meta.individualFare != null) {
+                    totalFare += meta.individualFare
+                } else {
+                    fareUnknown = true
+                }
+            }
+            prevRideLegIdx = meta.legIndex
+        }
+        flushJrGroup()
+
         return Itinerary(
             legs = legs,
             departure = dep0.minusMinutes(firstWalkMin.toLong()),
             arrival = arrival,
             transfers = rideCount - 1,
-            fare = if (fareUnknown) null else known,
-            knownFare = known,
+            fare = if (fareUnknown) null else totalFare,
+            knownFare = totalFare,
             routeKey = keyParts.joinToString("|")
         )
     }
