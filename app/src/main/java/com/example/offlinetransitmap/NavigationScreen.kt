@@ -689,9 +689,10 @@ private fun TrainLcdTopCard(
     val lineName = trainLeg?.lineName ?: "電車"
     val trainType = trainLeg?.trainType?.ifBlank { "各停" } ?: "普通"
     val headsign = trainLeg?.headsign ?: ""
-    val platform = trainLeg?.platform?.ifBlank {
-        trainLeg.let { PlatformAndCarResolver.resolvePlatform(it.fromName, it.lineName, it.headsign, null, false) }
-    } ?: "1番線"
+    val rawPlatform = trainLeg?.platform
+    val platform = if (!rawPlatform.isNullOrBlank() && rawPlatform != "0") {
+        if (rawPlatform.endsWith("番線") || rawPlatform.endsWith("のりば")) rawPlatform else "${rawPlatform}番線"
+    } else ""
     val carCount = trainLeg?.let { PlatformAndCarResolver.resolveCarCount(it.lineName, it.trainType, false) } ?: 10
 
     val isWaiting = guidance?.kind == GuidanceKind.WAIT
@@ -782,12 +783,14 @@ private fun TrainLcdTopCard(
                                 fontWeight = FontWeight.Bold
                             )
                         }
-                        Text(
-                            text = platform,
-                            color = Color(0xFF00E5FF),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Black
-                        )
+                        if (platform.isNotBlank()) {
+                            Text(
+                                text = platform,
+                                color = Color(0xFF00E5FF),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                        }
                     }
 
                     Spacer(Modifier.height(8.dp))
@@ -888,17 +891,19 @@ private fun TrainLcdTopCard(
                             Text(destStation, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         }
 
-                        Surface(
-                            color = Color(0x3300E5FF),
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = "$platform 着",
-                                color = Color(0xFF80D8FF),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                            )
+                        if (platform.isNotBlank()) {
+                            Surface(
+                                color = Color(0x3300E5FF),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "$platform 着",
+                                    color = Color(0xFF80D8FF),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                )
+                            }
                         }
                     }
                 }

@@ -350,7 +350,7 @@ private fun PastDeparturesToggleRow(
 @Composable
 fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = null) {
     val status = "定刻に出発済み"
-    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus, d.detail)
+    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -398,7 +398,7 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
 fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
     val within1Hour = minutes < 60
     val status = if (within1Hour) "定刻" else "定刻出発予定"
-    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus, d.detail)
+    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus)
 
     Row(
         modifier = Modifier

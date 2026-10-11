@@ -77,7 +77,7 @@ fun sampleDepartures(): List<Departure> {
     return offsets.mapIndexed { i, minutes ->
         val s = sampleLines[i % sampleLines.size]
         val isBus = s.op == "バス"
-        val plat = if (isBus) "2番のりば" else "${(i % 3) + 1}番線"
+        val plat = if (isBus) "2番のりば" else ""
         val cars = if (isBus) null else PlatformAndCarResolver.resolveCarCount(s.line, s.detail, false)
         Departure(
             operatorLabel = s.op,
@@ -100,7 +100,7 @@ fun samplePastDepartures(): List<Departure> {
     return offsets.mapIndexed { i, minutesAgo ->
         val s = sampleLines[i % sampleLines.size]
         val isBus = s.op == "バス"
-        val plat = if (isBus) "2番のりば" else "${(i % 3) + 1}番線"
+        val plat = if (isBus) "2番のりば" else ""
         val cars = if (isBus) null else PlatformAndCarResolver.resolveCarCount(s.line, s.detail, false)
         Departure(
             operatorLabel = s.op,

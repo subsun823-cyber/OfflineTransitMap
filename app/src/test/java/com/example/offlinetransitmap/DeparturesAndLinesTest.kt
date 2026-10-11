@@ -94,4 +94,35 @@ class DeparturesAndLinesTest {
         assertTrue("Tobu station icon file should exist", iconFile.exists())
         assertTrue("Tobu station icon should not be empty", iconFile.length() > 500)
     }
+
+    @Test
+    fun platformResolution_returnsPlatformOnlyWhenOfficiallyAvailable() {
+        // 明示的な番線情報がある場合のみフォーマットして返す
+        assertEquals("1番線", PlatformAndCarResolver.resolvePlatform("新宿", "山手線", "品川", "1", isBus = false))
+        assertEquals("2番のりば", PlatformAndCarResolver.resolvePlatform("渋谷", "都営バス", "新橋駅", "2", isBus = true))
+        assertEquals("3番線", PlatformAndCarResolver.resolvePlatform("東京", "東海道線", "熱海", "3番線", isBus = false))
+
+        // 番線情報がない場合、推測による誤表示を避けるため空文字を返す
+        assertEquals("", PlatformAndCarResolver.resolvePlatform("新宿", "山手線", "品川", null, isBus = false))
+        assertEquals("", PlatformAndCarResolver.resolvePlatform("新宿", "山手線", "品川", "", isBus = false))
+        assertEquals("", PlatformAndCarResolver.resolvePlatform("新宿", "山手線", "品川", "0", isBus = false))
+    }
+
+    @Test
+    fun departureDetailFormatting_hidesPlatformWhenEmpty() {
+        // 番線情報がある場合
+        val withPlatform = PlatformAndCarResolver.formatDepartureDetail("定刻", "2番線", 10, isBus = false)
+        assertEquals("定刻 · 2番線 · 10両編成", withPlatform)
+
+        // 番線情報がない場合、番線部分は非表示になり定刻と両数のみ表示
+        val withoutPlatform = PlatformAndCarResolver.formatDepartureDetail("定刻", "", 10, isBus = false)
+        assertEquals("定刻 · 10両編成", withoutPlatform)
+
+        // バスの場合（両数表示なし）
+        val busWithPlatform = PlatformAndCarResolver.formatDepartureDetail("定刻", "1番のりば", null, isBus = true)
+        assertEquals("定刻 · 1番のりば", busWithPlatform)
+
+        val busWithoutPlatform = PlatformAndCarResolver.formatDepartureDetail("定刻", "", null, isBus = true)
+        assertEquals("定刻", busWithoutPlatform)
+    }
 }
