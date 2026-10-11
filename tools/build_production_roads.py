@@ -14,7 +14,7 @@ src_path = 'app/src/main/assets/bootstrap/tokyo.pmtiles'
 out_path = 'app/src/main/assets/bootstrap/roads.db'
 
 print(f"===========================================================")
-print(f"Building Production roads.db from {src_path}")
+print(f"Building Production roads.db (v8: road_class support) from {src_path}")
 print(f"Target: {out_path}")
 print(f"===========================================================")
 
@@ -66,6 +66,34 @@ def rdp(points, epsilon_m):
     else:
         return [start, end]
 
+def classify_road(kind, kind_detail):
+    if kind == 'major_road':
+        if kind_detail in ['trunk', 'trunk_link', 'primary', 'primary_link']:
+            return 1 # 大通り・主要幹線 (最優先・走りやすい)
+        else:
+            return 2 # 主要中規模道 (secondary, tertiary)
+    elif kind == 'medium_road':
+        return 2 # 主要中規模道
+    elif kind == 'path':
+        if kind_detail == 'cycleway':
+            return 3 # 専用自転車道 (自転車最優先)
+        elif kind_detail == 'steps':
+            return 8 # 階段
+        elif kind_detail in ['pedestrian', 'footway', 'path']:
+            return 5 # 歩行者道・緑道・広場
+        elif kind_detail == 'track':
+            return 7 # 未舗装
+        elif kind_detail == 'alley':
+            return 6 # 路地
+        else:
+            return 5
+    elif kind == 'minor_road':
+        if kind_detail in ['service', 'alley']:
+            return 6 # 細街路・裏道・サービス道 (通過を避ける)
+        else:
+            return 4 # 一般生活道路 (基準)
+    return 4
+
 GRID_CELL_DEG = 0.01
 def grid_cell_key(lat, lon):
     y = int(lat / GRID_CELL_DEG)
@@ -116,15 +144,16 @@ for zxy, data in all_tiles(src):
             if not is_walk and not is_bike:
                 continue
             
+            road_class = classify_road(k, kd)
+            
             geom = r.get('geometry', {})
             coords = geom.get('coordinates', [])
             lines = [coords] if geom.get('type') == 'LineString' else (coords if geom.get('type') == 'MultiLineString' else [])
             for line in lines:
                 if len(line) >= 2:
                     pts = [tile_to_latlon(14, zxy[1], zxy[2], pt[0], pt[1]) for pt in line]
-                    # 道路のカーブを完全に保ちつつ、冗長ノードを3.0mで間引き
                     simplified_pts = rdp(pts, 3.0)
-                    raw_lines.append((is_walk, is_bike, simplified_pts))
+                    raw_lines.append((is_walk, is_bike, road_class, simplified_pts))
 
 t1 = time.time()
 print(f"Loaded {len(raw_lines)} road lines from {tile_count} tiles in {t1-t0:.2f}s")
@@ -151,19 +180,19 @@ def get_snapped_node_id(lat, lon):
 
 print("Building road network topology...")
 adj = {}
-for is_walk, is_bike, pts in raw_lines:
+for is_walk, is_bike, road_class, pts in raw_lines:
     for i in range(len(pts) - 1):
         u = get_snapped_node_id(pts[i][0], pts[i][1])
         v = get_snapped_node_id(pts[i+1][0], pts[i+1][1])
         if u != v:
             d = max(1, int(round(distance_m(pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1]))))
             if v in adj.get(u, {}):
-                old_d, old_w, old_b = adj[u][v]
-                adj[u][v] = (min(old_d, d), max(old_w, is_walk), max(old_b, is_bike))
-                adj[v][u] = (min(old_d, d), max(old_w, is_walk), max(old_b, is_bike))
+                old_d, old_w, old_b, old_rc = adj[u][v]
+                adj[u][v] = (min(old_d, d), max(old_w, is_walk), max(old_b, is_bike), min(old_rc, road_class))
+                adj[v][u] = (min(old_d, d), max(old_w, is_walk), max(old_b, is_bike), min(old_rc, road_class))
             else:
-                adj.setdefault(u, {})[v] = (d, is_walk, is_bike)
-                adj.setdefault(v, {})[u] = (d, is_walk, is_bike)
+                adj.setdefault(u, {})[v] = (d, is_walk, is_bike, road_class)
+                adj.setdefault(v, {})[u] = (d, is_walk, is_bike, road_class)
 
 print(f"Topology built: {len(node_coords)} nodes")
 
@@ -217,7 +246,7 @@ print(f"Miyama verification: Magome snap: {sn_id} ({sn_d:.1f}m), Oyashiki snap: 
 
 dist_map = {sn_id: 0.0}
 prev_map = {}
-init_h = distance_m(node_coords[sn_id][0], node_coords[sn_id][1], node_coords[gn_id][0], node_coords[gn_id][1])
+init_h = distance_m(node_coords[sn_id][0], node_coords[sn_id][1], node_coords[gn_id][0], node_coords[gn_id][1]) * 0.70
 pq = [(init_h, 0.0, sn_id)]
 
 while pq:
@@ -226,28 +255,30 @@ while pq:
         break
     if d > dist_map.get(u, 1e9):
         continue
-    for v, (weight, is_walk, is_bike) in adj.get(u, {}).items():
+    for v, (weight, is_walk, is_bike, road_class) in adj.get(u, {}).items():
         if v not in valid_nodes:
             continue
-        new_d = d + weight
+        # 大通り優遇コスト
+        class_factor = 0.85 if road_class in [1, 2] else (1.35 if road_class == 6 else 1.0)
+        new_d = d + weight * class_factor
         if new_d < dist_map.get(v, 1e9):
             dist_map[v] = new_d
             prev_map[v] = u
-            h = distance_m(node_coords[v][0], node_coords[v][1], node_coords[gn_id][0], node_coords[gn_id][1])
+            h = distance_m(node_coords[v][0], node_coords[v][1], node_coords[gn_id][0], node_coords[gn_id][1]) * 0.70
             heapq.heappush(pq, (new_d + h, new_d, v))
 
 if gn_id in dist_map:
     path = []
     curr = gn_id
+    real_dist = 0
     while curr != sn_id:
+        p = prev_map[curr]
+        real_dist += adj[p][curr][0]
         path.append(curr)
-        curr = prev_map[curr]
+        curr = p
     path.append(sn_id)
     path.reverse()
-    print(f"VERIFIED! Miyama route found: {dist_map[gn_id]:.1f}m across {len(path)} waypoints")
-    for i, pid in enumerate(path):
-        coord = node_coords[pid]
-        print(f"  [{i}] ({coord[0]:.6f}, {coord[1]:.6f})")
+    print(f"VERIFIED! Miyama route found: real ground distance={real_dist}m across {len(path)} waypoints")
 else:
     print("WARNING: Miyama route NOT found!")
 
@@ -279,6 +310,7 @@ CREATE TABLE road_edges (
     dist_m INTEGER NOT NULL,
     is_walk INTEGER NOT NULL,
     is_bike INTEGER NOT NULL,
+    road_class INTEGER NOT NULL,
     grid INTEGER NOT NULL
 )
 """)
@@ -305,16 +337,16 @@ for old_u in valid_nodes:
     nu = new_id_map[old_u]
     pt = new_nodes[nu]
     grid = grid_cell_key(pt[0], pt[1])
-    for old_v, (dist_m, is_walk, is_bike) in adj.get(old_u, {}).items():
+    for old_v, (dist_m, is_walk, is_bike, road_class) in adj.get(old_u, {}).items():
         if old_v in valid_nodes:
             pair = (min(old_u, old_v), max(old_u, old_v))
             if pair not in visited_edges:
                 visited_edges.add(pair)
                 nv = new_id_map[old_v]
-                edge_rows.append((eid, nu, nv, dist_m, is_walk, is_bike, grid))
+                edge_rows.append((eid, nu, nv, dist_m, is_walk, is_bike, road_class, grid))
                 eid += 1
 
-cur.executemany("INSERT INTO road_edges (id, u, v, dist_m, is_walk, is_bike, grid) VALUES (?, ?, ?, ?, ?, ?, ?)", edge_rows)
+cur.executemany("INSERT INTO road_edges (id, u, v, dist_m, is_walk, is_bike, road_class, grid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", edge_rows)
 
 print("Creating spatial grid indices...")
 cur.execute("CREATE INDEX idx_road_nodes_grid ON road_nodes(grid)")
@@ -329,4 +361,4 @@ if os.path.exists(out_path):
 os.rename(temp_out, out_path)
 
 final_size = os.path.getsize(out_path)
-print(f"SUCCESS! {out_path} created: {final_size / (1024*1024):.2f} MB ({final_size} bytes)")
+print(f"SUCCESS! {out_path} created with road_class: {final_size / (1024*1024):.2f} MB ({final_size} bytes)")

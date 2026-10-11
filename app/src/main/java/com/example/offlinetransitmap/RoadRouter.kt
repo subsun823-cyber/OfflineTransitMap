@@ -34,7 +34,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
     companion object {
         private const val TAG = "RoadRouter"
         private const val DB_NAME = "roads.db"
-        private const val ROADS_DB_VERSION = 7 // DB更新用バージョンコード (Y座標反転バグ解消・正確な実道追従版)
+        private const val ROADS_DB_VERSION = 8 // DB更新用バージョンコード (道路種別・走りやすさ・右左折ペナルティ対応版)
         private const val GRID_CELL_DEG = 0.01 // 約1.1km
         private const val MAX_SNAP_DISTANCE_M = 2500 // 道路ノードまでの最大許容スナップ距離
 
@@ -117,7 +117,8 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
         val toNode: Int,
         val distMeters: Int,
         val isWalk: Boolean,
-        val isBike: Boolean
+        val isBike: Boolean,
+        val roadClass: Int
     )
 
     private data class SearchState(
@@ -261,7 +262,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
         // 領域内のエッジを隣接リストに展開
         val modeColumn = if (mode == TravelMode.BICYCLE) "is_bike" else "is_walk"
         val edgeCursor = db.rawQuery(
-            "SELECT u, v, dist_m, is_walk, is_bike FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
+            "SELECT u, v, dist_m, is_walk, is_bike, road_class FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
             null
         )
 
@@ -272,6 +273,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             val distCol = it.getColumnIndexOrThrow("dist_m")
             val walkCol = it.getColumnIndexOrThrow("is_walk")
             val bikeCol = it.getColumnIndexOrThrow("is_bike")
+            val rcCol = it.getColumnIndexOrThrow("road_class")
 
             while (it.moveToNext()) {
                 val u = it.getInt(uCol)
@@ -279,21 +281,22 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                 val d = it.getInt(distCol)
                 val isWalk = it.getInt(walkCol) == 1
                 val isBike = it.getInt(bikeCol) == 1
+                val rc = it.getInt(rcCol)
 
                 if (nodesMap.containsKey(u) && nodesMap.containsKey(v)) {
-                    adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike))
-                    adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike))
+                    adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike, rc))
+                    adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike, rc))
                 }
             }
         }
 
-        // A* 探索
+        // A* 探索 (大通り優先・走りやすさ・右左折ペナルティを考慮した高品質経路探索)
         val dist = HashMap<Int, Double>()
         val prev = HashMap<Int, Pair<Int, GraphEdge>>()
         val pq = PriorityQueue<SearchState>()
 
         dist[startNodeId] = 0.0
-        val initialH = calcDistanceMeters(nodesMap[startNodeId]!!.lat, nodesMap[startNodeId]!!.lon, goalNode.lat, goalNode.lon).toDouble()
+        val initialH = calcDistanceMeters(nodesMap[startNodeId]!!.lat, nodesMap[startNodeId]!!.lon, goalNode.lat, goalNode.lon) * 0.70
         pq.add(SearchState(startNodeId, 0.0, initialH))
 
         var found = false
@@ -312,15 +315,62 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             }
 
             val edges = adj[u] ?: continue
+            val uNode = nodesMap[u] ?: continue
             for (edge in edges) {
                 val v = edge.toNode
                 val vNode = nodesMap[v] ?: continue
-                val newCost = curr.cost + edge.distMeters
+
+                // 道路種別によるコスト係数（走りやすさ・大通りの優先度）
+                val classFactor = when (mode) {
+                    TravelMode.BICYCLE -> when (edge.roadClass) {
+                        1 -> 0.82   // 大通り・主要幹線 (幅広・舗装状態良好・直進性高: 18%優遇)
+                        2 -> 0.88   // 主要中規模道 (12%優遇)
+                        3 -> 0.70   // 専用自転車道 (最優先: 30%優遇)
+                        4 -> 1.00   // 一般生活道路 (基準)
+                        5 -> 1.15   // 歩行者道・広場 (徐行・押し歩き)
+                        6 -> 1.35   // 細街路・裏道・路地 (見通し悪く低速・回避)
+                        7 -> 1.60   // 未舗装路 (走行困難)
+                        8 -> 8.00   // 階段
+                        else -> 1.00
+                    }
+                    TravelMode.WALK -> when (edge.roadClass) {
+                        1 -> 0.88   // 大通り (幅広歩道・街灯・わかりやすい: 12%優遇)
+                        2 -> 0.90   // 主要道
+                        3 -> 0.85   // 自転車・歩行者専用道
+                        4 -> 1.00   // 生活道路 (基準)
+                        5 -> 0.80   // 歩行者専用道・緑道・公園道 (快適安全: 20%優遇)
+                        6 -> 1.25   // 細い路地・裏道 (迷いやすく見通しが悪い)
+                        7 -> 1.35   // 未舗装路
+                        8 -> 1.50   // 階段 (疲れるため迂回路があれば回避)
+                        else -> 1.00
+                    }
+                }
+
+                var edgeCost = edge.distMeters * classFactor
+
+                // 直進性・右左折ペナルティ（無駄な曲がり角・ジグザグの抑制）
+                if (prev.containsKey(u)) {
+                    val fromNodeId = prev[u]!!.first
+                    val fromNode = nodesMap[fromNodeId]
+                    if (fromNode != null) {
+                        val b1 = calcBearing(fromNode.lat, fromNode.lon, uNode.lat, uNode.lon)
+                        val b2 = calcBearing(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
+                        val diff = kotlin.math.abs(angleDiff(b1, b2))
+                        if (diff > 40.0) {
+                            // 40度以上の明確な右左折には小ペナルティ(8m〜16m相当)を加算
+                            val turnPenalty = (diff / 90.0) * 10.0
+                            edgeCost += turnPenalty
+                        }
+                    }
+                }
+
+                val newCost = curr.cost + edgeCost
 
                 if (newCost < (dist[v] ?: Double.MAX_VALUE)) {
                     dist[v] = newCost
                     prev[v] = Pair(u, edge)
-                    val h = calcDistanceMeters(vNode.lat, vNode.lon, goalNode.lat, goalNode.lon).toDouble()
+                    // A* のヒューリスティック関数 (大通りの最大割引係数 0.70 を乗算して許容性を保持)
+                    val h = calcDistanceMeters(vNode.lat, vNode.lon, goalNode.lat, goalNode.lon) * 0.70
                     pq.add(SearchState(v, newCost, newCost + h))
                 }
             }
