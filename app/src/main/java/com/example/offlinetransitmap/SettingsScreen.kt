@@ -226,22 +226,24 @@ fun SettingsScreen(
                             onClick = { showCrossingSpotsDialog = true },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("🚥 周辺の踏切スポット・ロケハン一覧を開く")
+                            Text("🏆 路線別踏切制覇 & ロケハン一覧を開く")
                         }
                     } else {
-                        SettingNote("有効にすると、地図上の踏切強調・太陽光線コンパス・接近アラート・構図枠などが利用できます。")
+                        SettingNote("有効にすると、地図上の踏切強調・太陽光線コンパス・接近アラート・構図枠・路線別制覇率などが利用できます。")
                     }
                 }
 
                 if (showCrossingSpotsDialog) {
                     val poiDb = remember { PoiDatabase.open(context) }
+                    val timetable = remember { TimetableDb.open(context) }
                     val curLoc = remember { lastKnownLatLon(context) }
                     NearbyCrossingsDialog(
                         poiDatabase = poiDb,
                         userLocation = curLoc,
+                        timetableDb = timetable?.db,
                         onSelectCrossing = {
                             showCrossingSpotsDialog = false
-                            // 選択時は設定画面を閉じる等ができるように後ほど統合
+                            onMapUpdated()
                         },
                         onDismiss = { showCrossingSpotsDialog = false }
                     )

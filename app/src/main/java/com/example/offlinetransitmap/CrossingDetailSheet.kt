@@ -1,5 +1,6 @@
 package com.example.offlinetransitmap
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -195,12 +196,25 @@ fun CrossingDetailCard(
                                 Text("★", color = Color(0xFFFFB300), fontSize = 18.sp)
                             }
                         }
-                        if (crossing.detail.isNotBlank()) {
-                            Text(
-                                text = crossing.detail,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "🚃 ${crossing.railwayLine}",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            if (crossing.detail.isNotBlank() && crossing.detail != "施設") {
+                                Text(
+                                    text = crossing.detail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
@@ -221,6 +235,54 @@ fun CrossingDetailCard(
                     IconButton(onClick = onClose) {
                         Icon(Icons.Default.Close, contentDescription = "閉じる")
                     }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // 訪問チェックインバー
+            val isVisited = crossing.memo?.visited == true
+            Surface(
+                onClick = {
+                    val current = crossing.memo ?: CrossingMemo()
+                    val newVisited = !current.visited
+                    val today = if (newVisited) java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy/MM/dd")) else ""
+                    onSaveMemo(current.copy(visited = newVisited, visitedDate = today))
+                },
+                shape = RoundedCornerShape(10.dp),
+                color = if (isVisited) Color(0xFFE8F5E9) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                border = BorderStroke(1.dp, if (isVisited) Color(0xFF4CAF50) else Color(0x33888888)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(if (isVisited) "✅" else "⬜", fontSize = 18.sp)
+                        Column {
+                            Text(
+                                text = if (isVisited) "訪問制覇済み！" else "この踏切を訪問したらチェック",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isVisited) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (isVisited && crossing.memo?.visitedDate?.isNotBlank() == true) {
+                                Text(
+                                    text = "訪問日: ${crossing.memo.visitedDate}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF388E3C)
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        text = if (isVisited) "チェック解除" else "チェックをつける",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isVisited) Color(0xFF2E7D32) else MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
 

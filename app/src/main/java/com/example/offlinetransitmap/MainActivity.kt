@@ -180,16 +180,18 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var selectedCrossing by remember { mutableStateOf<LevelCrossingItem?>(null) }
     var showCrossingListDialog by remember { mutableStateOf(false) }
     var nearbyCrossingAlert by remember { mutableStateOf<LevelCrossingItem?>(null) }
+    var refreshCrossingsTrigger by remember { mutableIntStateOf(0) }
 
     val crossingsGeoJson by produceState<String?>(
         initialValue = null,
-        key1 = poiDb,
-        key2 = preferences.hobbyCrossingMode,
-        key3 = preferences.hobbyHighlightCrossings
+        poiDb,
+        preferences.hobbyCrossingMode,
+        preferences.hobbyHighlightCrossings,
+        refreshCrossingsTrigger
     ) {
         if (preferences.hobbyCrossingMode && preferences.hobbyHighlightCrossings && poiDb != null) {
             value = withContext(Dispatchers.IO) {
-                CrossingRepository.getCrossingsGeoJson(poiDb.db)
+                CrossingRepository.getCrossingsGeoJson(poiDb.db, context)
             }
         } else {
             value = null
@@ -617,6 +619,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         val dist = curLoc?.let { calcDistanceMeters(it.first, it.second, lat, lon) }
                         val sun = SunPositionCalculator.calculate(lat, lon)
                         val memo = CrossingRepository.loadMemo(context, id)
+                        val line = CrossingRepository.resolveRailwayLine(name, lat, lon, timetable?.db)
                         selectedCrossing = LevelCrossingItem(
                             id = id,
                             name = name,
@@ -625,7 +628,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             detail = "踏切",
                             distanceMeters = dist,
                             sunPosition = sun,
-                            memo = memo
+                            memo = memo,
+                            railwayLine = line
                         )
                     }
                 },
@@ -763,6 +767,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         onSaveMemo = { memo ->
                             CrossingRepository.saveMemo(context, crossing.id, memo)
                             selectedCrossing = crossing.copy(memo = memo)
+                            refreshCrossingsTrigger++
                         },
                         onClose = { selectedCrossing = null },
                         modifier = Modifier.align(Alignment.BottomCenter)
@@ -895,6 +900,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 NearbyCrossingsDialog(
                     poiDatabase = poiDb,
                     userLocation = curLoc,
+                    timetableDb = timetable?.db,
                     onSelectCrossing = { item ->
                         showCrossingListDialog = false
                         selectedStation = null
@@ -902,8 +908,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationPoint = null
                         targetCameraPoint = Pair(item.lat, item.lon)
                         selectedCrossing = item
+                        refreshCrossingsTrigger++
                     },
-                    onDismiss = { showCrossingListDialog = false }
+                    onDismiss = {
+                        showCrossingListDialog = false
+                        refreshCrossingsTrigger++
+                    }
                 )
             }
         }

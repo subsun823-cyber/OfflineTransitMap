@@ -147,9 +147,18 @@ internal fun offlineMultiStyleJson(
             add("    " + tmpl)
         }
         if (highlightCrossings) {
-            add("""    {"id": "crossings-highlight-circle", "type": "circle", "source": "crossings", "minzoom": 11, "paint": {"circle-radius": 7, "circle-color": "#ffb300", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2}}""")
+            // 1. 各都県のベクタータイル内に存在する名称未設定含むすべての踏切を強調
+            val protoCrossingCircle = """{"id": "protomaps-crossings-circle", "type": "circle", "source": "protomaps", "source-layer": "pois", "minzoom": 11, "filter": ["any", ["==", "kind", "level_crossing"], ["==", "pmap:kind", "level_crossing"]], "paint": {"circle-radius": 6.5, "circle-color": "#ffb300", "circle-stroke-color": "#ffffff", "circle-stroke-width": 2}}"""
+            val protoCrossingSymbol = """{"id": "protomaps-crossings-symbol", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 11, "filter": ["any", ["==", "kind", "level_crossing"], ["==", "pmap:kind", "level_crossing"]], "layout": {"icon-image": "poi-level-crossing", "icon-size": 0.85, "icon-allow-overlap": true}}"""
+            for ((pref, _) in downloadedPrefectures) {
+                add("    " + expandLayerForPrefecture(protoCrossingCircle, pref.id))
+                add("    " + expandLayerForPrefecture(protoCrossingSymbol, pref.id))
+            }
+
+            // 2. 踏切データベース（訪問状態・制覇機能つき）のオーバーレイ
+            add("""    {"id": "crossings-highlight-circle", "type": "circle", "source": "crossings", "minzoom": 11, "paint": {"circle-radius": 7.5, "circle-color": ["case", ["get", "visited"], "#4caf50", "#ffb300"], "circle-stroke-color": "#ffffff", "circle-stroke-width": 2}}""")
             add("""    {"id": "crossings-highlight-symbol", "type": "symbol", "source": "crossings", "minzoom": 11, "layout": {"icon-image": "poi-level-crossing", "icon-size": 0.85, "icon-allow-overlap": true}}""")
-            add("""    {"id": "crossings-highlight-name", "type": "symbol", "source": "crossings", "minzoom": 13, "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.9]}, "paint": {"text-color": "#b26a00", "text-halo-color": "#ffffff", "text-halo-width": 1.5}}""")
+            add("""    {"id": "crossings-highlight-name", "type": "symbol", "source": "crossings", "minzoom": 13, "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.9]}, "paint": {"text-color": ["case", ["get", "visited"], "#2e7d32", "#b26a00"], "text-halo-color": "#ffffff", "text-halo-width": 1.5}}""")
         }
     }.joinToString(",\n")
 
@@ -271,11 +280,14 @@ fun MapLibreMapView(
                     val p = map.projection.toScreenLocation(latLng)
                     val area = RectF(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
 
-                    // 1. 踏切のタップ判定（趣味モード時）
-                    val crossingFeature = map.queryRenderedFeatures(area, "crossings-highlight-symbol", "crossings-highlight-circle").firstOrNull()
+                    // 1. 踏切のタップ判定（趣味モード時・名称未設定踏切含む）
+                    val protoLayers = KantoPrefectures.all.flatMap { listOf("protomaps-crossings-symbol-${it.id}", "protomaps-crossings-circle-${it.id}") }.toTypedArray()
+                    val crossingLayers = arrayOf("crossings-highlight-symbol", "crossings-highlight-circle", *protoLayers)
+                    val crossingFeature = map.queryRenderedFeatures(area, *crossingLayers).firstOrNull()
                     if (crossingFeature != null) {
-                        val cId = crossingFeature.getStringProperty("id") ?: ""
-                        val cName = crossingFeature.getStringProperty("name") ?: "踏切"
+                        val cId = crossingFeature.getStringProperty("id") ?: "crossing_${latLng.latitude}_${latLng.longitude}"
+                        val rawName = crossingFeature.getStringProperty("name")
+                        val cName = if (!rawName.isNullOrBlank()) rawName else "（名称未設定の踏切）"
                         val geom = crossingFeature.geometry()
                         if (geom is org.maplibre.geojson.Point) {
                             currentOnCrossingClick(cId, cName, geom.latitude(), geom.longitude())
