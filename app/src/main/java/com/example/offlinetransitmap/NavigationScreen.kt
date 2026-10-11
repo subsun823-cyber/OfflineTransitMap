@@ -662,6 +662,528 @@ private fun BottomNavigationDashboard(
     }
 }
 
+// 駅名から英語表記を生成
+private fun stationNameToRomaji(name: String): String {
+    val clean = name.removeSuffix("駅").trim()
+    val dict = mapOf(
+        "新宿" to "Shinjuku", "東京" to "Tokyo", "渋谷" to "Shibuya", "池袋" to "Ikebukuro",
+        "上野" to "Ueno", "品川" to "Shinagawa", "秋葉原" to "Akihabara", "立川" to "Tachikawa",
+        "八王子" to "Hachioji", "高尾" to "Takao", "吉祥寺" to "Kichijoji", "三鷹" to "Mitaka",
+        "中野" to "Nakano", "荻窪" to "Ogikubo", "国分寺" to "Kokubunji", "武蔵小金井" to "Musashi-Koganei",
+        "横浜" to "Yokohama", "大宮" to "Omiya", "川崎" to "Kawasaki", "町田" to "Machida",
+        "高尾山口" to "Takaosanguchi", "調布" to "Chofu", "府中" to "Fuchu", "橋本" to "Hashimoto"
+    )
+    return dict[clean] ?: clean
+}
+
+// 電車の車内LCD案内表示（トレインビジョン）または駅ホーム発車標風のトップカード
+@Composable
+private fun TrainLcdTopCard(
+    guidance: Guidance?,
+    itinerary: Itinerary?,
+    modifier: Modifier = Modifier
+) {
+    val legs = itinerary?.legs ?: emptyList()
+    val trainLeg = legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
+    val lineColor = if (trainLeg != null && trainLeg.lineColor != 0L) Color(trainLeg.lineColor) else Color(0xFFF15A22)
+    val lineName = trainLeg?.lineName ?: "電車"
+    val trainType = trainLeg?.trainType?.ifBlank { "各停" } ?: "普通"
+    val headsign = trainLeg?.headsign ?: ""
+    val platform = trainLeg?.platform?.ifBlank {
+        trainLeg.let { PlatformAndCarResolver.resolvePlatform(it.fromName, it.lineName, it.headsign, null, false) }
+    } ?: "1番線"
+    val carCount = trainLeg?.let { PlatformAndCarResolver.resolveCarCount(it.lineName, it.trainType, false) } ?: 10
+
+    val isWaiting = guidance?.kind == GuidanceKind.WAIT
+    val isRiding = guidance?.kind == GuidanceKind.RIDE
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xF50F141C)),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.5.dp, Color(0xFF334155)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 最上部: 路線カラーストライプ帯
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(lineColor)
+                    .padding(horizontal = 14.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "🚃 $lineName",
+                        color = Color.White,
+                        fontWeight = FontWeight.Black,
+                        fontSize = 13.sp
+                    )
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.35f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = trainType,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                    if (headsign.isNotBlank()) {
+                        Text(
+                            text = "$headsign 方面",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                Surface(
+                    color = Color.White.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = "${carCount}両編成",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                    )
+                }
+            }
+
+            // メインコンテンツ (トレインビジョン / 発車標)
+            if (isWaiting) {
+                // ホームLED発車標スタイル
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(4.dp)) {
+                                Text(
+                                    text = "発車標",
+                                    color = Color(0xFFFFB300),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                text = "まもなく電車がまいります",
+                                color = Color(0xFFFFD54F),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            text = platform,
+                            color = Color(0xFF00E5FF),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0A0F16), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = guidance?.title ?: "乗車案内",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = guidance?.subtitle ?: "",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            } else if (isRiding) {
+                // ドア上車内LCDトレインビジョン
+                val destStation = guidance?.title?.removeSuffix("で降車")?.removeSuffix("へ") ?: (trainLeg?.toName ?: "")
+                val romaji = stationNameToRomaji(destStation)
+
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "次は",
+                                color = Color(0xFF38BDF8),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = destStation,
+                                color = Color.White,
+                                fontSize = 24.sp,
+                                fontWeight = FontWeight.Black
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Next $romaji",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        // 到着予定
+                        guidance?.let { g ->
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    text = "${hm(g.arrival)} 着",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Black
+                                )
+                                Text(
+                                    text = "あと約${g.remainingMinutes}分",
+                                    color = Color(0xFFCBD5E1),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // 停車駅シークエンスライン
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFF0A0F16), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("●", color = Color(0xFF64748B), fontSize = 10.sp)
+                            Text(trainLeg?.fromName ?: "乗車駅", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                            Text("───", color = Color(0xFF334155), fontSize = 11.sp)
+                            Text("🚃 走行中", color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("───", color = Color(0xFF334155), fontSize = 11.sp)
+                            Text("◯", color = Color(0xFF00E676), fontSize = 12.sp)
+                            Text(destStation, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Surface(
+                            color = Color(0x3300E5FF),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "$platform 着",
+                                color = Color(0xFF80D8FF),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
+            } else {
+                // 駅への徒歩移動など
+                TopManeuverCard(guidance = guidance)
+            }
+        }
+    }
+}
+
+// 電車の運転台風・デジタルATC速度計＆マスコン計器
+@Composable
+private fun TrainCabSpeedometer(
+    speedKmh: Float,
+    hasGps: Boolean,
+    guidance: Guidance?,
+    itinerary: Itinerary?,
+    modifier: Modifier = Modifier
+) {
+    val legs = itinerary?.legs ?: emptyList()
+    val trainLeg = legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
+    val trainType = trainLeg?.trainType?.ifBlank { "快速" } ?: "快速"
+
+    val animatedSpeed by animateFloatAsState(
+        targetValue = speedKmh,
+        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
+        label = "trainSpeedAnimation"
+    )
+
+    // ノッチ・運転ステータス判定 (疑似力行・定速・惰行・ブレーキ)
+    val notchText: String
+    val notchColor: Color
+    when {
+        animatedSpeed < 3f -> {
+            notchText = "停車"
+            notchColor = Color(0xFF94A3B8)
+        }
+        animatedSpeed in 3f..35f -> {
+            notchText = "力行 P2"
+            notchColor = Color(0xFF00E676)
+        }
+        animatedSpeed in 35f..75f -> {
+            notchText = "力行 P4"
+            notchColor = Color(0xFF00E676)
+        }
+        animatedSpeed in 75f..100f -> {
+            notchText = "定速"
+            notchColor = Color(0xFF00E5FF)
+        }
+        else -> {
+            notchText = "高速巡航"
+            notchColor = Color(0xFFFF9100)
+        }
+    }
+
+    Card(
+        modifier = modifier.size(width = 126.dp, height = 118.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xF50F141C)),
+        border = BorderStroke(1.2.dp, Color(0xFF334155))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 上部: ATC / 信号現示バー
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(if (hasGps) Color(0xFF00E676) else Color.Gray, CircleShape)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(text = "ATC 100", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Surface(
+                    color = Color(0xFFF15A22).copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(3.dp),
+                    border = BorderStroke(0.8.dp, Color(0xFFF15A22))
+                ) {
+                    Text(
+                        text = trainType,
+                        color = Color(0xFFFFAB91),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp)
+                    )
+                }
+            }
+
+            // 中央: 速度計 (デジタル数字)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                val displaySpeed = animatedSpeed.roundToInt()
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = "$displaySpeed",
+                        color = Color.White,
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Black,
+                        lineHeight = 32.sp
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text(
+                        text = "km/h",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.padding(bottom = 3.dp)
+                    )
+                }
+
+                // スピードバーインジケーター (0〜120km/h)
+                val fraction = (animatedSpeed / 120f).coerceIn(0f, 1f)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .height(4.dp)
+                        .background(Color(0xFF1E293B), RoundedCornerShape(2.dp))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction)
+                            .height(4.dp)
+                            .background(
+                                Brush.horizontalGradient(
+                                    listOf(Color(0xFF00E5FF), Color(0xFF00E676), Color(0xFFFF9100))
+                                ),
+                                RoundedCornerShape(2.dp)
+                            )
+                    )
+                }
+            }
+
+            // 下部: ノッチ / マスコンステータス
+            Surface(
+                color = Color(0xFF1E293B),
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "⚡ $notchText",
+                        color = notchColor,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+// 電車の運行情報・スタフ風ダッシュボードバー
+@Composable
+private fun TrainBottomDashboard(
+    guidance: Guidance?,
+    itinerary: Itinerary?,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val legs = itinerary?.legs ?: emptyList()
+    val finalDest = legs.lastOrNull { !it.isWalk }?.toName ?: legs.lastOrNull()?.toName ?: "目的地"
+
+    Surface(
+        color = Color(0xF50F141C),
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        border = BorderStroke(1.dp, Color(0xFF334155)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 最上部: 鉄道信号風アクセントバー
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.5.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                Color(0xFF0288D1),
+                                Color(0xFF00E676),
+                                Color(0xFF0288D1)
+                            )
+                        )
+                    )
+            )
+
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 左: ナビ終了ボタン
+                Box(
+                    modifier = Modifier
+                        .size(46.dp)
+                        .background(Color(0x2AEF4444), CircleShape)
+                        .border(1.2.dp, Color(0x66EF4444), CircleShape)
+                        .clickable(onClick = onStop),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("✕", color = Color(0xFFFF6B6B), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                // 中央: ダイヤ運行ステータス & 到着予定
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (guidance != null) {
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(
+                                text = "${guidance.remainingMinutes}",
+                                color = Color(0xFF00E676),
+                                fontSize = 32.sp,
+                                fontWeight = FontWeight.Black,
+                                lineHeight = 32.sp
+                            )
+                            Text(
+                                text = " 分",
+                                color = Color(0xFF00E676),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 3.dp)
+                            )
+                            Text(
+                                text = " · 終着 ${finalDest}",
+                                color = Color.White,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 3.dp, start = 4.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "終着 ${hm(guidance.arrival)} 着予定",
+                                color = Color(0xFF94A3B8),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "🟢 定刻運行中",
+                                color = Color(0xFF81C784),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        Text("運行情報取得中…", color = Color.White, fontSize = 15.sp)
+                    }
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                // 右: 電車ピクトグラムバッジ
+                Surface(
+                    color = Color(0xFF1E293B),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFF334155))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("🚃", fontSize = 16.sp)
+                        Text("ダイヤ", color = Color(0xFF80D8FF), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ナビ中に、地図の上に重ねる表示(上の案内バナー、下の速度計とダッシュボード)
 @Composable
 fun NavigationOverlay(
@@ -681,8 +1203,15 @@ fun NavigationOverlay(
     }
     val hasGps = location != null
 
+    // 電車ルートの案内中かどうか判定
+    val isTrainNav = guidance?.kind == GuidanceKind.RIDE ||
+            guidance?.kind == GuidanceKind.WAIT ||
+            (NavigationState.itinerary != null &&
+                    NavigationState.itinerary?.legs?.any { !it.isWalk && it.lineName != "自転車" } == true &&
+                    guidance?.kind != GuidanceKind.BICYCLE)
+
     Box(modifier = modifier.fillMaxSize()) {
-        // 上部: ターンバイターン案内カード
+        // 上部: 案内カード (電車モード時はトレインビジョン、道路ナビ時はターンバイターン)
         Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -690,7 +1219,14 @@ fun NavigationOverlay(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TopManeuverCard(guidance = guidance)
+            if (isTrainNav) {
+                TrainLcdTopCard(
+                    guidance = guidance,
+                    itinerary = NavigationState.itinerary
+                )
+            } else {
+                TopManeuverCard(guidance = guidance)
+            }
 
             // 趣味モード: 踏切接近アラートバナー
             if (nearbyCrossing != null) {
@@ -750,11 +1286,20 @@ fun NavigationOverlay(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 左下: 車のナビ風速度計
-                CarSpeedometer(
-                    speedKmh = speedKmh,
-                    hasGps = hasGps
-                )
+                // 左下: 電車モードなら鉄道運転台計器、通常なら車のナビ風速度計
+                if (isTrainNav) {
+                    TrainCabSpeedometer(
+                        speedKmh = speedKmh,
+                        hasGps = hasGps,
+                        guidance = guidance,
+                        itinerary = NavigationState.itinerary
+                    )
+                } else {
+                    CarSpeedometer(
+                        speedKmh = speedKmh,
+                        hasGps = hasGps
+                    )
+                }
 
                 // 右下: 追従が外れた場合の「現在地に戻る」ボタン
                 if (followLost) {
@@ -786,12 +1331,20 @@ fun NavigationOverlay(
                 }
             }
 
-            // 最下部: 自動車ナビ風ダッシュボードバー
-            BottomNavigationDashboard(
-                guidance = guidance,
-                mapBearing = mapBearing,
-                onStop = onStop
-            )
+            // 最下部: 電車モードなら鉄道ダッシュボード、通常なら自動車ナビ風ダッシュボードバー
+            if (isTrainNav) {
+                TrainBottomDashboard(
+                    guidance = guidance,
+                    itinerary = NavigationState.itinerary,
+                    onStop = onStop
+                )
+            } else {
+                BottomNavigationDashboard(
+                    guidance = guidance,
+                    mapBearing = mapBearing,
+                    onStop = onStop
+                )
+            }
         }
     }
 }

@@ -350,6 +350,7 @@ private fun PastDeparturesToggleRow(
 @Composable
 fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = null) {
     val status = "定刻に出発済み"
+    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus, d.detail)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -362,7 +363,7 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
             LineTitle(d)
             Spacer(Modifier.height(4.dp))
             Text(
-                text = if (d.detail.isBlank()) status else "$status · ${d.detail}",
+                text = detailText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -397,6 +398,7 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
 fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
     val within1Hour = minutes < 60
     val status = if (within1Hour) "定刻" else "定刻出発予定"
+    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus, d.detail)
 
     Row(
         modifier = Modifier
@@ -409,7 +411,7 @@ fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
             LineTitle(d)
             Spacer(Modifier.height(4.dp))
             Text(
-                text = if (d.detail.isBlank()) status else "$status · ${d.detail}",
+                text = detailText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -451,8 +453,13 @@ private fun ColumnScope.TripDetailContent(
         Text("‹ 一覧に戻る")
     }
     LineTitle(departure, Modifier.padding(horizontal = 24.dp))
+    val trainMeta = buildList {
+        if (departure.platform.isNotBlank()) add(departure.platform)
+        if (departure.carCount != null && departure.carCount > 0 && !departure.isBus) add("${departure.carCount}両編成")
+    }.joinToString(" · ")
+    val subText = if (trainMeta.isNotBlank()) "$stationName 発 · $trainMeta" else "$stationName 発"
     Text(
-        text = "$stationName 発",
+        text = subText,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp)

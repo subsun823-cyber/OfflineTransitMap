@@ -315,7 +315,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         val sql = """
             SELECT st.dep_sec, r.operator, r.name, r.color, r.route_type,
                    COALESCE(st.headsign, t.headsign), s.platform,
-                   st.trip, st.seq, $trainTypeColumn
+                   st.trip, st.seq, $trainTypeColumn, s.name
             FROM stop_times st
             JOIN trips t ON t.trip_no = st.trip
             JOIN routes r ON r.route_id = t.route_id
@@ -337,19 +337,29 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         db.rawQuery(sql, args).use { c ->
             while (c.moveToNext()) {
                 val isBus = c.getInt(4) == 3
-                val platform: String? = c.getString(6)
+                val rawPlatform: String? = c.getString(6)
+                val lineNameStr = shorten(c.getString(2) ?: "", 10)
+                val headsignStr = tidyHeadsign(c.getString(5) ?: "")
+                val tripNo = c.getLong(7)
+                val seq = c.getInt(8)
+                val trainType = c.getString(9) ?: ""
+                val stName = c.getString(10) ?: ""
+                val resolvedPlat = PlatformAndCarResolver.resolvePlatform(stName, lineNameStr, headsignStr, rawPlatform, isBus, seq, tripNo)
+                val resolvedCars = PlatformAndCarResolver.resolveCarCount(lineNameStr, trainType, isBus)
                 list.add(
                     Departure(
                         operatorLabel = shorten(c.getString(1) ?: "", 6),
-                        lineName = shorten(c.getString(2) ?: "", 10),
+                        lineName = lineNameStr,
                         lineColor = 0xFF000000L or c.getInt(3).toLong(),
-                        headsign = tidyHeadsign(c.getString(5) ?: ""),
-                        detail = platformText(platform, isBus),
+                        headsign = headsignStr,
+                        detail = platformText(rawPlatform, isBus),
                         time = midnight.plusSeconds(c.getLong(0)),
                         isBus = isBus,
-                        tripNo = c.getLong(7),
-                        seq = c.getInt(8),
-                        trainType = c.getString(9) ?: ""
+                        tripNo = tripNo,
+                        seq = seq,
+                        trainType = trainType,
+                        platform = resolvedPlat,
+                        carCount = resolvedCars
                     )
                 )
             }
@@ -410,7 +420,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         val sql = """
             SELECT st.dep_sec, r.operator, r.name, r.color, r.route_type,
                    COALESCE(st.headsign, t.headsign), s.platform,
-                   st.trip, st.seq, $trainTypeColumn
+                   st.trip, st.seq, $trainTypeColumn, s.name
             FROM stop_times st
             JOIN trips t ON t.trip_no = st.trip
             JOIN routes r ON r.route_id = t.route_id
@@ -431,19 +441,29 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         db.rawQuery(sql, args).use { c ->
             while (c.moveToNext()) {
                 val isBus = c.getInt(4) == 3
-                val platform: String? = c.getString(6)
+                val rawPlatform: String? = c.getString(6)
+                val lineNameStr = shorten(c.getString(2) ?: "", 10)
+                val headsignStr = tidyHeadsign(c.getString(5) ?: "")
+                val tripNo = c.getLong(7)
+                val seq = c.getInt(8)
+                val trainType = c.getString(9) ?: ""
+                val stName = c.getString(10) ?: ""
+                val resolvedPlat = PlatformAndCarResolver.resolvePlatform(stName, lineNameStr, headsignStr, rawPlatform, isBus, seq, tripNo)
+                val resolvedCars = PlatformAndCarResolver.resolveCarCount(lineNameStr, trainType, isBus)
                 list.add(
                     Departure(
                         operatorLabel = shorten(c.getString(1) ?: "", 6),
-                        lineName = shorten(c.getString(2) ?: "", 10),
+                        lineName = lineNameStr,
                         lineColor = 0xFF000000L or c.getInt(3).toLong(),
-                        headsign = tidyHeadsign(c.getString(5) ?: ""),
-                        detail = platformText(platform, isBus),
+                        headsign = headsignStr,
+                        detail = platformText(rawPlatform, isBus),
                         time = midnight.plusSeconds(c.getLong(0)),
                         isBus = isBus,
-                        tripNo = c.getLong(7),
-                        seq = c.getInt(8),
-                        trainType = c.getString(9) ?: ""
+                        tripNo = tripNo,
+                        seq = seq,
+                        trainType = trainType,
+                        platform = resolvedPlat,
+                        carCount = resolvedCars
                     )
                 )
             }
@@ -473,10 +493,11 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         val midnight = d.time.minusSeconds(boardDep.toLong())
         return rows.map { r ->
             val sec = if (r.seq <= d.seq) r.dep else r.arr
+            val plat = PlatformAndCarResolver.resolvePlatform(r.name, d.lineName, d.headsign, r.platform, d.isBus, r.seq, d.tripNo)
             TripStop(
                 seq = r.seq,
                 name = r.name,
-                platform = platformText(r.platform, d.isBus),
+                platform = plat,
                 time = midnight.plusSeconds(sec.toLong())
             )
         }

@@ -15,7 +15,9 @@ data class Departure(
     val isBus: Boolean = false, // バスなら「行き」、それ以外は「方面」と表示
     val tripNo: Long = 0L,   // DB上の便の番号(0 = サンプル)
     val seq: Int = 0,        // その便の中で、この駅が何番目の停留所か
-    val trainType: String = "" // 電車の種別(快速・中央特快など。バスは空)
+    val trainType: String = "", // 電車の種別(快速・中央特快など。バスは空)
+    val platform: String = "",  // 発着番線 (例: "2番線", "3番のりば")
+    val carCount: Int? = null   // 編成両数 (例: 10)
 )
 
 // 便の経由地1つ分(詳細表示用)
@@ -74,6 +76,9 @@ fun sampleDepartures(): List<Departure> {
     )
     return offsets.mapIndexed { i, minutes ->
         val s = sampleLines[i % sampleLines.size]
+        val isBus = s.op == "バス"
+        val plat = if (isBus) "2番のりば" else "${(i % 3) + 1}番線"
+        val cars = if (isBus) null else PlatformAndCarResolver.resolveCarCount(s.line, s.detail, false)
         Departure(
             operatorLabel = s.op,
             lineName = s.line,
@@ -81,7 +86,9 @@ fun sampleDepartures(): List<Departure> {
             headsign = s.head,
             detail = s.detail,
             time = base.plusMinutes(minutes.toLong()),
-            isBus = s.op == "バス"
+            isBus = isBus,
+            platform = plat,
+            carCount = cars
         )
     }
 }
@@ -92,6 +99,9 @@ fun samplePastDepartures(): List<Departure> {
     val offsets = listOf(10, 10, 6, 4, 2, 1) // 分前
     return offsets.mapIndexed { i, minutesAgo ->
         val s = sampleLines[i % sampleLines.size]
+        val isBus = s.op == "バス"
+        val plat = if (isBus) "2番のりば" else "${(i % 3) + 1}番線"
+        val cars = if (isBus) null else PlatformAndCarResolver.resolveCarCount(s.line, s.detail, false)
         Departure(
             operatorLabel = s.op,
             lineName = s.line,
@@ -99,7 +109,9 @@ fun samplePastDepartures(): List<Departure> {
             headsign = s.head,
             detail = s.detail,
             time = base.minusMinutes(minutesAgo.toLong()),
-            isBus = s.op == "バス"
+            isBus = isBus,
+            platform = plat,
+            carCount = cars
         )
     }
 }
