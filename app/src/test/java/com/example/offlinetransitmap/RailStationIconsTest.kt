@@ -100,4 +100,19 @@ class RailStationIconsTest {
         assertEquals("station-rail-jr-private-metro-toei", railStationIcon(setOf("JR東日本", "小田急電鉄", "東京メトロ", "都営地下鉄")))
         assertEquals("station-rail-jr-seibu-metro-toei", railStationIcon(setOf("JR東日本", "西武鉄道", "東京メトロ", "都営地下鉄")))
     }
+
+    @Test fun tokyuUsesTokyuSymbolIncludingAliases() {
+        for (operator in listOf("東急電鉄", "東急", "Tokyu", "tokyu railway", "Tokyu Corporation", "odpt.Operator:Tokyu")) {
+            assertEquals(operator, "station-tokyu", railStationIcon(setOf(operator)))
+        }
+    }
+
+    @Test fun sharedStationWithTokyuCombos() {
+        assertEquals("station-rail-jr-tokyu", railStationIcon(setOf("東急電鉄", "JR東日本")))
+        assertEquals("station-rail-tokyu-metro", railStationIcon(setOf("東急電鉄", "東京メトロ")))
+        assertEquals("station-rail-tokyu-toei", railStationIcon(setOf("東急電鉄", "東京都交通局")))
+        assertEquals("station-rail-jr-tokyu-metro", railStationIcon(setOf("JR東日本", "東急電鉄", "東京メトロ")))
+        assertEquals("station-rail-tokyu-metro-toei", railStationIcon(setOf("東急電鉄", "東京メトロ", "都営地下鉄")))
+        assertEquals("station-rail-jr-tokyu-metro-toei", railStationIcon(setOf("JR東日本", "東急電鉄", "東京メトロ", "都営地下鉄")))
+    }
 }

@@ -97,7 +97,7 @@ object PlatformAndCarResolver {
         if (line.contains("池上") || line.contains("東急多摩川") || line.contains("鶴見")) return 3
 
         // 2両編成
-        if (line.contains("世田谷")) return 2
+        if (line.contains("世田谷") || line.contains("こどもの国")) return 2
 
         // 私鉄全般のデフォルト (京王、小田急、西武、東武、東急など)
         if (line.contains("京王") || line.contains("小田急") || line.contains("東急") ||

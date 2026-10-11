@@ -128,6 +128,35 @@ p_t.end()
 tobu_img.save(tobu_path)
 print(f'Saved {tobu_path}')
 
+# 4. Ensure map_station_tokyu.png exists (Tokyu Corporation symbol matching Google Maps)
+tokyu_path = os.path.join(DRAWABLE_DIR, 'map_station_tokyu.png')
+tokyu_img = QImage(80, 80, QImage.Format_ARGB32)
+tokyu_img.fill(QColor(0, 0, 0, 0))
+p_tk = QPainter(tokyu_img)
+p_tk.setRenderHint(QPainter.Antialiasing, True)
+p_tk.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+# White rounded rectangle
+rect_path_tk = QPainterPath()
+rect_path_tk.addRoundedRect(QRectF(11.0 * s, 11.0 * s, 68.0 * s, 68.0 * s), 16.0 * s, 16.0 * s)
+p_tk.fillPath(rect_path_tk, QBrush(QColor('#ffffff')))
+
+# Tokyu red symbol mark from vector SVG
+from PySide6.QtCore import QByteArray
+from PySide6.QtSvg import QSvgRenderer
+
+svg_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 48 300 195" width="300" height="195">
+<path fill="#e60012" d="m 150,50.008008 c -47.04952,0 -85.190625,30.996735 -85.190625,69.233202 0,38.23647 38.141105,69.2332 85.190625,69.2332 47.04952,0 85.19062,-30.99673 85.19062,-69.2332 0,-38.236467 -38.1411,-69.233202 -85.19062,-69.233202 z M 78.690234,83.497266 c 0,0 33.114026,14.4 71.309766,14.4 38.19574,0 71.30977,-14.4 71.30977,-14.4 C 178.59823,103.73284 150,155.49306 150,187.68691 150,155.49306 121.40176,103.73284 78.690234,83.497266 Z m -33.539061,36.478124 -1.334181,0.0393 c 0,0 -0.524196,84.19533 106.183008,86.49316 106.7072,-2.29783 106.18301,-86.49316 106.18301,-86.49316 l -1.33418,-0.0393 c 0,0 -5.49139,75.47025 -104.84883,75.69492 C 50.642562,195.44564 45.151173,119.97539 45.151173,119.97539 Z M 1.3271484,120.24551 0,120.2918 c 0,0 2.004381,116.73248 150,121.39511 C 297.99561,237.02428 300,120.2918 300,120.2918 l -1.32715,-0.0463 c 0,0 -10.10741,106.68811 -148.67285,110.60449 C 11.434568,226.93362 1.3271484,120.24551 1.3271484,120.24551 Z m 22.0441406,0 -1.327148,0.0463 c 0,0 4.302422,101.22002 127.955859,103.68281 C 273.65343,221.51182 277.95586,120.2918 277.95586,120.2918 l -1.32715,-0.0463 c 0,0 -6.79269,89.91341 -126.62871,92.89218 C 30.163968,210.15892 23.371289,120.24551 23.371289,120.24551 Z" />
+</svg>"""
+
+renderer = QSvgRenderer(QByteArray(svg_xml.encode('utf-8')))
+target_rect = QRectF(14.0, 19.0, 52.0, 42.0)
+renderer.render(p_tk, target_rect)
+p_tk.end()
+tokyu_img.save(tokyu_path)
+print(f'Saved {tokyu_path}')
+
 # Load base 80x80 icons
 icons = {
     'jr': QImage(os.path.join(DRAWABLE_DIR, 'map_station_jr_east.png')),
@@ -136,6 +165,7 @@ icons = {
     'toei': toei_img,
     'seibu': seibu_img,
     'tobu': tobu_img,
+    'tokyu': tokyu_img,
 }
 
 def create_combined(icon_keys):
@@ -203,6 +233,26 @@ combinations = {
     # Tobu combos (4-operator)
     'map_station_rail_jr_tobu_metro_toei.png': ['jr', 'tobu', 'metro', 'toei'],
     'map_station_rail_jr_seibu_tobu_metro.png': ['jr', 'seibu', 'tobu', 'metro'],
+
+    # Tokyu combos (2-operator)
+    'map_station_rail_jr_tokyu.png': ['jr', 'tokyu'],
+    'map_station_rail_tokyu_metro.png': ['tokyu', 'metro'],
+    'map_station_rail_tokyu_toei.png': ['tokyu', 'toei'],
+    'map_station_rail_tokyu_private.png': ['tokyu', 'private'],
+    'map_station_rail_tokyu_seibu.png': ['seibu', 'tokyu'],
+    'map_station_rail_tokyu_tobu.png': ['tobu', 'tokyu'],
+
+    # Tokyu combos (3-operator)
+    'map_station_rail_jr_tokyu_metro.png': ['jr', 'tokyu', 'metro'],
+    'map_station_rail_jr_tokyu_toei.png': ['jr', 'tokyu', 'toei'],
+    'map_station_rail_tokyu_metro_toei.png': ['tokyu', 'metro', 'toei'],
+    'map_station_rail_jr_tokyu_private.png': ['jr', 'tokyu', 'private'],
+    'map_station_rail_tokyu_private_metro.png': ['tokyu', 'private', 'metro'],
+
+    # Tokyu combos (4-operator)
+    'map_station_rail_jr_tokyu_metro_toei.png': ['jr', 'tokyu', 'metro', 'toei'],
+    'map_station_rail_jr_tobu_tokyu_metro.png': ['jr', 'tobu', 'tokyu', 'metro'],
+    'map_station_rail_jr_seibu_tokyu_metro.png': ['jr', 'seibu', 'tokyu', 'metro'],
 }
 
 for fname, keys in combinations.items():
