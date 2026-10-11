@@ -61,6 +61,7 @@ object NavigationState {
     var location by mutableStateOf<Location?>(null)
     var guidance by mutableStateOf<Guidance?>(null)
     var remainingPath by mutableStateOf<List<Pair<Double, Double>>?>(null)
+    var isRerouting by mutableStateOf(false) // ルート再探索中フラグ
 }
 
 fun calcBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -86,6 +87,63 @@ fun distShortHelper(m: Int?): String = when {
     else -> "${m}m"
 }
 
+// 点(pLat, pLon)から線分(aLat, aLon)-(bLat, bLon)への最短距離(m)を計算
+fun distanceToSegmentMeters(
+    pLat: Double, pLon: Double,
+    aLat: Double, aLon: Double,
+    bLat: Double, bLon: Double
+): Double {
+    val meanLatRad = Math.toRadians((aLat + bLat) * 0.5)
+    val cosLat = kotlin.math.cos(meanLatRad)
+    val dx = (bLon - aLon) * cosLat * 111320.0
+    val dy = (bLat - aLat) * 110540.0
+    val px = (pLon - aLon) * cosLat * 111320.0
+    val py = (pLat - aLat) * 110540.0
+
+    val segLenSq = dx * dx + dy * dy
+    if (segLenSq < 1.0) {
+        return kotlin.math.hypot(px, py)
+    }
+
+    val t = ((px * dx + py * dy) / segLenSq).coerceIn(0.0, 1.0)
+    val projX = t * dx
+    val projY = t * dy
+
+    return kotlin.math.hypot(px - projX, py - projY)
+}
+
+// 点からパス全体の最短セグメントインデックスと距離(m)を検索
+fun findClosestSegment(
+    curLat: Double, curLon: Double,
+    path: List<Pair<Double, Double>>
+): Pair<Int, Double> {
+    if (path.isEmpty()) return Pair(0, Double.MAX_VALUE)
+    if (path.size == 1) {
+        return Pair(0, calcDistanceMeters(curLat, curLon, path[0].first, path[0].second).toDouble())
+    }
+
+    var bestIdx = 0
+    var bestDist = Double.MAX_VALUE
+    for (i in 0 until path.size - 1) {
+        val d = distanceToSegmentMeters(
+            curLat, curLon,
+            path[i].first, path[i].second,
+            path[i + 1].first, path[i + 1].second
+        )
+        if (d < bestDist) {
+            bestDist = d
+            bestIdx = i
+        }
+    }
+    return Pair(bestIdx, bestDist)
+}
+
+// 点からパスへの最短距離(m)
+fun minDistanceToPathMeters(
+    pLat: Double, pLon: Double,
+    path: List<Pair<Double, Double>>
+): Double = findClosestSegment(pLat, pLon, path).second
+
 data class RoadGuidanceInfo(
     val maneuver: ManeuverType,
     val title: String,
@@ -96,7 +154,9 @@ data class RoadGuidanceInfo(
     val totalRemainingMeters: Int,
     val remainingMinutes: Long,
     val arrivalTime: LocalDateTime,
-    val remainingPath: List<Pair<Double, Double>>
+    val remainingPath: List<Pair<Double, Double>>,
+    val isOffCourse: Boolean = false,
+    val distToPathMeters: Double = 0.0
 )
 
 // 道路ルートに沿ったリアルタイムターンバイターン計算
@@ -123,29 +183,47 @@ fun evaluateRoadTurnByTurn(
         )
     }
 
-    var closestIdx = 0
-    var closestDist = Double.MAX_VALUE
-    for (i in path.indices) {
-        val d = calcDistanceMeters(curLat, curLon, path[i].first, path[i].second).toDouble()
-        if (d < closestDist) {
-            closestDist = d
-            closestIdx = i
-        }
+    val destPt = path.last()
+    val distToDest = calcDistanceMeters(curLat, curLon, destPt.first, destPt.second)
+
+    // セグメントに対する最短距離とオフコース判定
+    val (closestSegIdx, distToPath) = findClosestSegment(curLat, curLon, path)
+    val offCourseThreshold = if (isBike) 40.0 else 35.0
+    val isOffCourse = distToDest > 50 && distToPath >= offCourseThreshold
+
+    // セグメント closestSegIdx に対する射影パラメータ t を計算
+    val a = path[closestSegIdx]
+    val b = if (closestSegIdx + 1 < path.size) path[closestSegIdx + 1] else a
+    val meanLatRad = Math.toRadians((a.first + b.first) * 0.5)
+    val cosLat = kotlin.math.cos(meanLatRad)
+    val dx = (b.second - a.second) * cosLat * 111320.0
+    val dy = (b.first - a.first) * 110540.0
+    val px = (curLon - a.second) * cosLat * 111320.0
+    val py = (curLat - a.first) * 110540.0
+    val segLenSq = dx * dx + dy * dy
+    val t = if (segLenSq > 1.0) (px * dx + py * dy) / segLenSq else 0.0
+
+    // t <= 0.05 (セグメント始点付近または手前) の場合は始点ノードも経由、それ以外は次ノードへ向かう
+    val nextNodeIdx = if (t <= 0.05) {
+        closestSegIdx
+    } else if (closestSegIdx + 1 < path.size) {
+        closestSegIdx + 1
+    } else {
+        path.size - 1
     }
 
-    val curDistToNode = calcDistanceMeters(curLat, curLon, path[closestIdx].first, path[closestIdx].second)
+    val curDistToNode = calcDistanceMeters(curLat, curLon, path[nextNodeIdx].first, path[nextNodeIdx].second)
 
-    val remainingPath = if (closestIdx < path.size) {
-        val list = ArrayList<Pair<Double, Double>>()
-        list.add(Pair(curLat, curLon))
-        list.addAll(path.subList(closestIdx, path.size))
-        list
+    val remainingPath = ArrayList<Pair<Double, Double>>()
+    remainingPath.add(Pair(curLat, curLon))
+    if (nextNodeIdx < path.size) {
+        remainingPath.addAll(path.subList(nextNodeIdx, path.size))
     } else {
-        listOf(Pair(curLat, curLon), path.last())
+        remainingPath.add(destPt)
     }
 
     var totalRemaining = curDistToNode
-    for (i in closestIdx until path.size - 1) {
+    for (i in nextNodeIdx until path.size - 1) {
         totalRemaining += calcDistanceMeters(path[i].first, path[i].second, path[i + 1].first, path[i + 1].second)
     }
 
@@ -154,8 +232,6 @@ fun evaluateRoadTurnByTurn(
     val now = LocalDateTime.now()
     val arrival = now.plusMinutes(remMin)
 
-    val destPt = path.last()
-    val distToDest = calcDistanceMeters(curLat, curLon, destPt.first, destPt.second)
     if (totalRemaining <= 50 || distToDest <= 50) {
         return RoadGuidanceInfo(
             maneuver = ManeuverType.ARRIVE,
@@ -167,7 +243,9 @@ fun evaluateRoadTurnByTurn(
             totalRemainingMeters = totalRemaining,
             remainingMinutes = remMin,
             arrivalTime = arrival,
-            remainingPath = remainingPath
+            remainingPath = remainingPath,
+            isOffCourse = false,
+            distToPathMeters = distToPath
         )
     }
 
@@ -175,9 +253,11 @@ fun evaluateRoadTurnByTurn(
     var turnManeuver = ManeuverType.STRAIGHT
     var distToTurn = curDistToNode
 
-    for (i in closestIdx until path.size - 2) {
+    for (i in closestSegIdx until path.size - 2) {
         val segDist = calcDistanceMeters(path[i].first, path[i].second, path[i + 1].first, path[i + 1].second)
-        distToTurn += segDist
+        if (i > closestSegIdx) {
+            distToTurn += segDist
+        }
 
         val b1 = calcBearing(path[i].first, path[i].second, path[i + 1].first, path[i + 1].second)
         val b2 = calcBearing(path[i + 1].first, path[i + 1].second, path[i + 2].first, path[i + 2].second)
@@ -246,7 +326,9 @@ fun evaluateRoadTurnByTurn(
         totalRemainingMeters = totalRemaining,
         remainingMinutes = remMin,
         arrivalTime = arrival,
-        remainingPath = remainingPath
+        remainingPath = remainingPath,
+        isOffCourse = isOffCourse,
+        distToPathMeters = distToPath
     )
 }
 
@@ -426,6 +508,76 @@ class NavigationService : Service() {
     private val firedAlerts = HashSet<String>()
     private val finished = HashSet<Int>()
     private var nextAlertId = 2000
+    private var lastRerouteTimeMs = 0L
+    private var isReroutingInProgress = false
+
+    // ルート離脱時のオートリルート（非同期で最短・最適ルートを再探索）
+    private fun triggerReroute(
+        curLat: Double,
+        curLon: Double,
+        destPoint: Pair<Double, Double>,
+        destName: String,
+        isBike: Boolean,
+        currentItin: Itinerary
+    ) {
+        if (isReroutingInProgress) return
+        val nowMs = System.currentTimeMillis()
+        // 連続リルート防止（クールダウン 4秒）
+        if (nowMs - lastRerouteTimeMs < 4000L) return
+
+        isReroutingInProgress = true
+        NavigationState.isRerouting = true
+
+        Thread {
+            try {
+                val router = RoadRouter.open(applicationContext)
+                val mode = if (isBike) TravelMode.BICYCLE else TravelMode.WALK
+                val roadRes = router?.route(curLat, curLon, destPoint.first, destPoint.second, mode)
+
+                handler.post {
+                    isReroutingInProgress = false
+                    NavigationState.isRerouting = false
+                    lastRerouteTimeMs = System.currentTimeMillis()
+
+                    if (roadRes != null && roadRes.path.size >= 2) {
+                        val modeLabel = if (isBike) "自転車" else "徒歩"
+                        val updatedLeg = RouteLeg(
+                            isWalk = true,
+                            fromName = "現在地",
+                            toName = destName,
+                            walkMinutes = roadRes.durationMinutes,
+                            walkMeters = roadRes.distanceMeters,
+                            lineName = modeLabel,
+                            trainType = modeLabel,
+                            path = roadRes.path
+                        )
+                        val now = LocalDateTime.now()
+                        val updatedItin = currentItin.copy(
+                            legs = listOf(updatedLeg),
+                            arrival = now.plusMinutes(roadRes.durationMinutes.toLong()),
+                            routeKey = if (isBike) "bike_direct" else "walk_direct"
+                        )
+                        route = updatedItin
+                        NavigationState.itinerary = updatedItin
+                        NavigationState.remainingPath = roadRes.path
+
+                        // ユーザーへの通知とトースト
+                        val alertKey = "reroute_${System.currentTimeMillis() / 15000L}"
+                        alert(alertKey, "新しいルートを検索しました", "${destName}方面へのルートを再計算しました")
+                        Toast.makeText(applicationContext, "ルートを再検索しました", Toast.LENGTH_SHORT).show()
+
+                        // 新ルートで即座に案内を再評価
+                        evaluate()
+                    }
+                }
+            } catch (e: Exception) {
+                handler.post {
+                    isReroutingInProgress = false
+                    NavigationState.isRerouting = false
+                }
+            }
+        }.start()
+    }
 
     // 10秒ごとに状況を見直す(位置が更新されたときにも見直す)
     private val ticker = object : Runnable {
@@ -483,6 +635,7 @@ class NavigationService : Service() {
         } catch (e: Exception) {
             // 何もしない
         }
+        NavigationState.isRerouting = false
         NavigationState.active = false
         super.onDestroy()
     }
@@ -667,10 +820,13 @@ class NavigationService : Service() {
             val fullPath = legs.flatMap { it.path }
 
             if (lastLocation != null && fullPath.size >= 2) {
+                val curLat = lastLocation!!.latitude
+                val curLon = lastLocation!!.longitude
+
                 val roadInfo = evaluateRoadTurnByTurn(
                     path = fullPath,
-                    curLat = lastLocation!!.latitude,
-                    curLon = lastLocation!!.longitude,
+                    curLat = curLat,
+                    curLon = curLon,
                     destName = destName,
                     isBike = isBike,
                     scheduledArrival = r.arrival
@@ -684,26 +840,41 @@ class NavigationService : Service() {
                     return
                 }
 
+                // ルート離脱（オフコース）検知時に自動リルート
+                if (roadInfo.isOffCourse) {
+                    triggerReroute(
+                        curLat = curLat,
+                        curLon = curLon,
+                        destPoint = destPoint,
+                        destName = destName,
+                        isBike = isBike,
+                        currentItin = r
+                    )
+                }
+
                 // 曲がり角接近アラート（50m以内）
                 if (roadInfo.maneuver != ManeuverType.STRAIGHT && roadInfo.maneuver != ManeuverType.ARRIVE && roadInfo.distToManeuver <= 50) {
                     val alertKey = "turn_${String.format("%.4f", roadInfo.targetLat)}_${String.format("%.4f", roadInfo.targetLon)}"
                     alert(alertKey, roadInfo.title, "${destName}方面へ")
                 }
 
+                val title = if (NavigationState.isRerouting) "ルートを再探索中..." else roadInfo.title
+                val subtitle = if (NavigationState.isRerouting) "最適なルートを計算しています" else roadInfo.subtitle
+
                 NavigationState.guidance = Guidance(
                     kind = modeKind,
-                    title = roadInfo.title,
-                    subtitle = roadInfo.subtitle,
+                    title = title,
+                    subtitle = subtitle,
                     distanceMeters = roadInfo.distToManeuver,
                     targetLat = roadInfo.targetLat,
                     targetLon = roadInfo.targetLon,
                     next = "目的地に到着",
                     remainingMinutes = roadInfo.remainingMinutes,
                     arrival = roadInfo.arrivalTime,
-                    maneuver = roadInfo.maneuver,
+                    maneuver = if (NavigationState.isRerouting) ManeuverType.STRAIGHT else roadInfo.maneuver,
                     remainingRoadMeters = roadInfo.totalRemainingMeters
                 )
-                showStatus(roadInfo.title, "${roadInfo.subtitle} (残り${distShort(roadInfo.totalRemainingMeters)})")
+                showStatus(title, "$subtitle (残り${distShort(roadInfo.totalRemainingMeters)})")
                 return
             }
 

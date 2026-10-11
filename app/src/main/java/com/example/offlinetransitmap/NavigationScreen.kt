@@ -416,21 +416,34 @@ private fun TopManeuverCard(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val isRerouting = NavigationState.isRerouting
+
                 // 左: マニューバーアイコンプレート
                 Box(
                     modifier = Modifier
                         .size(60.dp)
-                        .background(Color(0x1F00E5FF), RoundedCornerShape(16.dp))
-                        .border(1.dp, Color(0x3D00E5FF), RoundedCornerShape(16.dp)),
+                        .background(
+                            if (isRerouting) Color(0x33FF9100) else Color(0x1F00E5FF),
+                            RoundedCornerShape(16.dp)
+                        )
+                        .border(
+                            1.dp,
+                            if (isRerouting) Color(0x66FF9100) else Color(0x3D00E5FF),
+                            RoundedCornerShape(16.dp)
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    when (guidance?.kind) {
-                        GuidanceKind.WALK, GuidanceKind.BICYCLE -> {
-                            ManeuverIcon(guidance.maneuver, modifier = Modifier.size(46.dp))
+                    if (isRerouting) {
+                        Text("🔄", fontSize = 32.sp)
+                    } else {
+                        when (guidance?.kind) {
+                            GuidanceKind.WALK, GuidanceKind.BICYCLE -> {
+                                ManeuverIcon(guidance.maneuver, modifier = Modifier.size(46.dp))
+                            }
+                            GuidanceKind.WAIT -> Text("🚏", fontSize = 32.sp)
+                            GuidanceKind.RIDE -> Text("🚌", fontSize = 32.sp)
+                            else -> Text("📍", fontSize = 32.sp)
                         }
-                        GuidanceKind.WAIT -> Text("🚏", fontSize = 32.sp)
-                        GuidanceKind.RIDE -> Text("🚌", fontSize = 32.sp)
-                        else -> Text("📍", fontSize = 32.sp)
                     }
                 }
 
@@ -439,13 +452,22 @@ private fun TopManeuverCard(
                 // 中央: 曲がり角の案内と方面
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = guidance?.title ?: "案内を準備しています",
+                        text = if (isRerouting) "ルートを再探索中..." else (guidance?.title ?: "案内を準備しています"),
                         color = Color.White,
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold,
                         lineHeight = 23.sp
                     )
-                    if (guidance != null && guidance.subtitle.isNotBlank()) {
+                    if (isRerouting) {
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = "新しい最適ルートを計算しています",
+                            color = Color(0xFFFFB74D),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            lineHeight = 16.sp
+                        )
+                    } else if (guidance != null && guidance.subtitle.isNotBlank()) {
                         Spacer(Modifier.height(3.dp))
                         Text(
                             text = guidance.subtitle,
@@ -459,7 +481,7 @@ private fun TopManeuverCard(
 
                 // 右: 曲がり角までの距離（大きな数字＋単位）
                 val meters = guidance?.distanceMeters
-                if (meters != null) {
+                if (meters != null && !isRerouting) {
                     Spacer(Modifier.width(8.dp))
                     Column(horizontalAlignment = Alignment.End) {
                         if (meters >= 1000) {

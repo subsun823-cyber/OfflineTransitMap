@@ -284,5 +284,79 @@ class DestinationNavigationTest {
         )
         assertTrue("大通りから生活道路への離脱には追加ペナルティがあること", pLeave > pKeep)
     }
+
+    @Test
+    fun testDistanceToSegmentMeters() {
+        // 線分: (35.6800, 139.7000) から (35.6820, 139.7000) (南北に約220m走る直線)
+        val aLat = 35.6800
+        val aLon = 139.7000
+        val bLat = 35.6820
+        val bLon = 139.7000
+
+        // 1. 線分上の点 (35.6810, 139.7000) -> 距離 0m
+        val dOn = distanceToSegmentMeters(35.6810, 139.7000, aLat, aLon, bLat, bLon)
+        assertEquals(0.0, dOn, 1.0)
+
+        // 2. 線分から東に約50m離れた点
+        // 経度差 0.00055度は約50m
+        val dEast = distanceToSegmentMeters(35.6810, 139.70055, aLat, aLon, bLat, bLon)
+        assertTrue("東西に約50m離れていること: $dEast", dEast in 45.0..55.0)
+
+        // 3. 端点Aより南に外れた点 (35.6790, 139.7000) -> 端点Aまでの距離 (約110m)
+        val dSouth = distanceToSegmentMeters(35.6790, 139.7000, aLat, aLon, bLat, bLon)
+        assertTrue("端点外の距離が正しく求まること: $dSouth", dSouth in 100.0..120.0)
+    }
+
+    @Test
+    fun testMinDistanceToPathMeters() {
+        // パス: (35.6800, 139.7000) -> (35.6810, 139.7000) -> (35.6810, 139.7020)
+        val path = listOf(
+            Pair(35.6800, 139.7000),
+            Pair(35.6810, 139.7000),
+            Pair(35.6810, 139.7020)
+        )
+
+        // パス上の点
+        val dPath = minDistanceToPathMeters(35.6805, 139.7000, path)
+        assertEquals(0.0, dPath, 1.0)
+
+        // パスから60m離れた点
+        val dFar = minDistanceToPathMeters(35.6805, 139.7007, path)
+        assertTrue("パスから約60m離れていること: $dFar", dFar in 55.0..68.0)
+    }
+
+    @Test
+    fun testEvaluateRoadTurnByTurnOffCourseDetection() {
+        val now = LocalDateTime.now().plusMinutes(10)
+        // ルート: (35.6800, 139.7000) から (35.6850, 139.7000) へ約550m
+        val path = listOf(
+            Pair(35.6800, 139.7000),
+            Pair(35.6820, 139.7000),
+            Pair(35.6850, 139.7000)
+        )
+
+        // 1. ルート近傍 (ルートから5m) -> isOffCourse は false
+        val infoOnRoute = evaluateRoadTurnByTurn(
+            path = path,
+            curLat = 35.6810,
+            curLon = 139.70005,
+            destName = "テスト目的地",
+            isBike = false,
+            scheduledArrival = now
+        )
+        org.junit.Assert.assertFalse("ルート近傍ではオフコースでないこと", infoOnRoute.isOffCourse)
+
+        // 2. ルートから60m東に外れた位置 -> isOffCourse は true (オートリルート対象)
+        val infoOffRoute = evaluateRoadTurnByTurn(
+            path = path,
+            curLat = 35.6810,
+            curLon = 139.7007,
+            destName = "テスト目的地",
+            isBike = false,
+            scheduledArrival = now
+        )
+        assertTrue("ルートから60m離れたらオフコースと判定されること", infoOffRoute.isOffCourse)
+        assertTrue("distToPathMetersが正しく記録されていること: ${infoOffRoute.distToPathMeters}", infoOffRoute.distToPathMeters >= 55.0)
+    }
 }
 
