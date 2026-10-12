@@ -95,7 +95,8 @@ internal object OfflineDataSetup {
                 "tokyometro" to KeioDatabase.TOKYO_METRO_PREFIX,
                 "seibu" to KeioDatabase.SEIBU_PREFIX,
                 "tobu" to KeioDatabase.TOBU_PREFIX,
-                "tobu-bus" to KeioDatabase.TOBU_BUS_PREFIX
+                "tobu-bus" to KeioDatabase.TOBU_BUS_PREFIX,
+                "tokyu" to KeioDatabase.TOKYU_PREFIX
             )) {
 
                 val info = JSONObject(context.assets.open("bootstrap/$assetName-info.json").bufferedReader().use { it.readText() })

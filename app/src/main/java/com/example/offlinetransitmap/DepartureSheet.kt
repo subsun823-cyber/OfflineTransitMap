@@ -190,8 +190,9 @@ fun DepartureSheet(
 
             Spacer(Modifier.height(4.dp))
             if (sheetItems.isEmpty() && safePastDepartures.isEmpty()) {
+                val targetLabel = if (railLines.isNotEmpty()) "駅" else "停留所・駅"
                 Text(
-                    text = "この駅の出発情報がありません(時刻表の有効期間外の可能性があります)",
+                    text = "この${targetLabel}の出発情報がありません（時刻表データ未収録または有効期間外の可能性があります）",
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
                 )
