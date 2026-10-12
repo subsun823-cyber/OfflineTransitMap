@@ -287,7 +287,7 @@ fun MapLibreMapView(
                     val area = RectF(p.x - 40f, p.y - 40f, p.x + 40f, p.y + 40f)
 
                     // 1. 踏切のタップ判定（趣味モード時・名称未設定踏切含む）
-                    val protoLayers = KantoPrefectures.all.flatMap { listOf("protomaps-crossings-symbol-${it.id}", "protomaps-crossings-circle-${it.id}") }.toTypedArray()
+                    val protoLayers = KantoPrefectures.nationalList.flatMap { listOf("protomaps-crossings-symbol-${it.id}", "protomaps-crossings-circle-${it.id}") }.toTypedArray()
                     val crossingLayers = arrayOf("crossings-highlight-symbol", "crossings-highlight-circle", *protoLayers)
                     val crossingFeature = map.queryRenderedFeatures(area, *crossingLayers).firstOrNull()
                     if (crossingFeature != null) {

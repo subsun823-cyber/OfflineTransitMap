@@ -1,0 +1,88 @@
+name: Build and Publish Prefecture PMTiles & Road Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefectures:
+        description: 'Prefecture IDs to build (comma-separated, e.g. "osaka,kyoto,hyogo,aichi", or "kansai", "all")'
+        type: string
+        required: true
+        default: 'osaka,kyoto,hyogo,aichi,shizuoka,nagano,yamanashi,miyagi,fukuoka,hokkaido'
+      build_roads:
+        description: 'Also generate SQLite road routing databases (roads_*.db)'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pmtiles mapbox-vector-tile protobuf
+
+      - name: Extract PMTiles and build road databases
+        run: |
+          mkdir -p dist/maps
+          PREFS="${{ inputs.prefectures }}"
+          BUILD_ROADS_FLAG=""
+          if [ "${{ inputs.build_roads }}" = "true" ]; then
+            BUILD_ROADS_FLAG="--build-roads"
+          fi
+
+          if [ "$PREFS" = "all" ]; then
+            python3 tools/extract_pmtiles.py --region all --out dist/maps $BUILD_ROADS_FLAG
+          elif [ "$PREFS" = "kanto" ] || [ "$PREFS" = "kansai" ] || [ "$PREFS" = "tohoku" ] || [ "$PREFS" = "chubu" ] || [ "$PREFS" = "chugoku" ] || [ "$PREFS" = "shikoku" ] || [ "$PREFS" = "kyushu" ]; then
+            python3 tools/extract_pmtiles.py --region "$PREFS" --out dist/maps $BUILD_ROADS_FLAG
+          else
+            IFS=',' read -ra ADDR <<< "$PREFS"
+            ARGS=""
+            for p in "${ADDR[@]}"; do
+              trimmed=$(echo "$p" | tr -d ' ')
+              if [ -n "$trimmed" ]; then
+                ARGS="$ARGS --pref $trimmed"
+              fi
+            done
+            python3 tools/extract_pmtiles.py $ARGS --out dist/maps $BUILD_ROADS_FLAG
+          fi
+
+      - name: List generated assets
+        run: |
+          ls -lh dist/maps/
+
+      - name: Publish assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="transit-data-latest"
+          
+          # Ensure release exists
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" \
+              --title "Latest Offline Transit & Map Data" \
+              --notes "Offline map (PMTiles) and road routing SQLite databases for Japanese prefectures."
+          fi
+
+          # Upload all generated pmtiles and db files
+          for f in dist/maps/*.pmtiles dist/maps/*.db; do
+            if [ -f "$f" ]; then
+              echo "Uploading $f..."
+              gh release upload "$TAG_NAME" "$f" --clobber
+            fi
+          done
+
+          echo "Successfully published prefecture assets to GitHub Release $TAG_NAME!"

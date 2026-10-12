@@ -12,6 +12,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -321,18 +323,19 @@ fun SettingsScreen(
                     SettingNote("オフラインで使用する地図（PMTiles）とナビ用道路データ（OSM）を都県ごとに管理できます。越境ナビ時はダウンロード済みの複数都県を自動で連結して案内します。")
                     Spacer(Modifier.height(8.dp))
 
-                    // 地域絞り込みボタン
+                    // 地域絞り込みボタン (横スクロール対応)
+                    val regionFilters = listOf("関東", "関西", "中部・東海", "東北・北海道", "中国・四国", "九州・沖縄", "すべて")
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf("関東", "甲信越・東海", "関西・全国", "すべて").forEach { regionFilter ->
+                        regionFilters.forEach { regionFilter ->
                             val isSelected = selectedRegionFilter == regionFilter
                             if (isSelected) {
                                 Button(
                                     onClick = { selectedRegionFilter = regionFilter },
                                     modifier = Modifier.height(34.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                 ) {
                                     Text(regionFilter, style = MaterialTheme.typography.labelMedium)
                                 }
@@ -340,7 +343,7 @@ fun SettingsScreen(
                                 OutlinedButton(
                                     onClick = { selectedRegionFilter = regionFilter },
                                     modifier = Modifier.height(34.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                 ) {
                                     Text(regionFilter, style = MaterialTheme.typography.labelMedium)
                                 }
@@ -354,8 +357,11 @@ fun SettingsScreen(
                     val filteredStates = prefectureStates.filter {
                         when (selectedRegionFilter) {
                             "関東" -> it.info.region == "関東"
-                            "甲信越・東海" -> it.info.region in listOf("甲信越", "東海")
-                            "関西・全国" -> it.info.region !in listOf("関東", "甲信越", "東海")
+                            "関西" -> it.info.region == "関西"
+                            "中部・東海" -> it.info.region in listOf("甲信越", "北陸", "東海")
+                            "東北・北海道" -> it.info.region in listOf("北海道", "東北")
+                            "中国・四国" -> it.info.region in listOf("中国", "四国")
+                            "九州・沖縄" -> it.info.region in listOf("九州", "沖縄")
                             else -> true
                         }
                     }

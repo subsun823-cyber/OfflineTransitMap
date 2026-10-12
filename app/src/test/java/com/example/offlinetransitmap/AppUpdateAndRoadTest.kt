@@ -84,15 +84,21 @@ class AppUpdateAndRoadTest {
 
     @Test
     fun testNationalPrefecturesList() {
-        assertTrue(KantoPrefectures.nationalList.size >= 15)
+        assertEquals("日本全国47都道府県が全て定義されていること", 47, KantoPrefectures.nationalList.size)
         val tokyo = KantoPrefectures.findByIdInNational("tokyo")
         val osaka = KantoPrefectures.findByIdInNational("osaka")
         val saitama = KantoPrefectures.findByIdInNational("saitama")
+        val hokkaido = KantoPrefectures.findByIdInNational("hokkaido")
+        val okinawa = KantoPrefectures.findByIdInNational("okinawa")
 
         assertEquals("東京都", tokyo?.name)
         assertEquals("大阪府", osaka?.name)
         assertEquals("埼玉県", saitama?.name)
+        assertEquals("北海道", hokkaido?.name)
+        assertEquals("沖縄県", okinawa?.name)
         assertEquals("roads_saitama.db", saitama?.roadFileName)
         assertEquals("roads_tokyo.db", tokyo?.roadFileName)
+        assertEquals("roads_osaka.db", osaka?.roadFileName)
+        assertEquals("osaka.pmtiles", osaka?.fileName)
     }
 }
