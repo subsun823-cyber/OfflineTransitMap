@@ -329,7 +329,55 @@ private fun cleanTrainType(type: String): String {
     return if (base.length > 8) base.take(7) + "…" else base
 }
 
-// 「事業者 / 路線バッジ / ◯◯行き」の1行
+// GoogleMaps風の種別バッジ（快速・特急を鮮やかに目立たせ、普通は控えめに表示）
+@Composable
+private fun TrainTypeBadge(trainType: String) {
+    val clean = cleanTrainType(trainType)
+    if (clean.isBlank()) return
+
+    val isRapid = clean.contains("快速") || clean.contains("特快") || clean.contains("ラピッド")
+    val isLimitedExp = clean.contains("特急") || clean.contains("ライナー") || clean.contains("ロマンスカー")
+    val isExpress = clean.contains("急行")
+    val isSemiExp = clean.contains("準急")
+
+    val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+
+    val (bg, textColor, borderModifier) = when {
+        // 特急: 鮮やかなレッドバッジ（白文字）
+        isLimitedExp -> Triple(Color(0xFFD9381E), Color.White, Modifier)
+        // 快速・特別快速: Google Maps風の鮮烈なオレンジバッジ（白文字・強調）
+        isRapid -> Triple(Color(0xFFE8710A), Color.White, Modifier)
+        // 急行: レッドオレンジバッジ（白文字）
+        isExpress -> Triple(Color(0xFFE53935), Color.White, Modifier)
+        // 準急: エメラルドグリーンバッジ（白文字）
+        isSemiExp -> Triple(Color(0xFF2E7D32), Color.White, Modifier)
+        // 普通・各停: 控えめな薄いアウトライン表示
+        else -> {
+            val baseBg = if (isDark) Color(0x24FFFFFF) else Color(0x14000000)
+            val border = Modifier.border(
+                width = 0.8.dp,
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(4.dp)
+            )
+            Triple(baseBg, MaterialTheme.colorScheme.onSurfaceVariant, border)
+        }
+    }
+
+    Text(
+        text = clean,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = if (isRapid || isLimitedExp || isExpress) FontWeight.Bold else FontWeight.Medium,
+        color = textColor,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .then(borderModifier)
+            .background(bg, RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    )
+}
+
+// 「事業者 / 路線バッジ / 種別バッジ / ◯◯行き」の1行
 @Composable
 private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -355,18 +403,9 @@ private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
                 .background(Color(d.lineColor), RoundedCornerShape(12.dp))
                 .padding(horizontal = 8.dp, vertical = 1.dp)
         )
-        val shortType = cleanTrainType(d.trainType)
-        if (shortType.isNotBlank()) {
+        if (cleanTrainType(d.trainType).isNotBlank()) {
             Spacer(Modifier.width(6.dp))
-            val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-            Text(
-                text = shortType,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = if (isDark) Color(0xFF64B5F6) else MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            TrainTypeBadge(trainType = d.trainType)
         }
         Spacer(Modifier.width(6.dp))
         Text(
