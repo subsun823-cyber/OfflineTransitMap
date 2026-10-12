@@ -275,6 +275,12 @@ fun MapLibreMapView(
                     .zoom(if (downloaded.isNotEmpty()) 9.5 else 11.0)
                     .build()
 
+                // コンパスウィジェットの設定 (右上配置かつ上部UIカードと被らないマージンを確保)
+                val density = context.resources.displayMetrics.density
+                map.uiSettings.isCompassEnabled = true
+                map.uiSettings.compassGravity = android.view.Gravity.TOP or android.view.Gravity.END
+                map.uiSettings.setCompassMargins(0, (density * 72f).toInt(), (density * 16f).toInt(), 0)
+
                 // 駅・バス停・踏切のマークまたは地図をタップしたときの処理
                 map.addOnMapClickListener { latLng ->
                     val p = map.projection.toScreenLocation(latLng)
@@ -417,6 +423,12 @@ fun MapLibreMapView(
     var wasFollowing by remember { mutableStateOf(false) }
     LaunchedEffect(followMode, mapState, loadedStyle, locationGranted) {
         val map = mapState ?: return@LaunchedEffect
+        val density = context.resources.displayMetrics.density
+        // ナビ中は上部の経路案内カード(約150dp)の下にコンパスを退避させ、重なりを防止
+        val topMarginPx = (density * if (followMode) 165f else 72f).toInt()
+        val rightMarginPx = (density * 16f).toInt()
+        map.uiSettings.setCompassMargins(0, topMarginPx, rightMarginPx, 0)
+
         val style = loadedStyle ?: return@LaunchedEffect
         if (!locationGranted) return@LaunchedEffect
         enableLocationMarker(context, map, style)
