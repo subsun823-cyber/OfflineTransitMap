@@ -512,6 +512,22 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         }
                     },
                     actions = {
+                        IconButton(
+                            onClick = {
+                                if (searcher == null) {
+                                    Toast.makeText(
+                                        context,
+                                        "経路検索には、新しい timetable.db が必要です",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } else {
+                                    searchLocation = if (hasLocationPermission) lastKnownLatLon(context) else null
+                                    showSearch = true
+                                }
+                            }
+                        ) {
+                            Text("🚇", fontSize = 20.sp)
+                        }
                         if (preferences.hobbyCrossingMode) {
                             IconButton(onClick = { showCrossingListDialog = true }) {
                                 Text("🚥", fontSize = 20.sp)
@@ -559,23 +575,6 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         }
                     ) {
                         MyLocationIcon(color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    }
-                    // 経路検索
-                    FloatingActionButton(
-                        onClick = {
-                            if (searcher == null) {
-                                Toast.makeText(
-                                    context,
-                                    "経路検索には、新しい timetable.db が必要です",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } else {
-                                searchLocation = if (hasLocationPermission) lastKnownLatLon(context) else null
-                                showSearch = true
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = "経路検索")
                     }
                 }
             }
@@ -840,6 +839,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     onSelect = { itin ->
                         selectedItinerary = itin
                         showSearch = false
+                    },
+                    onStartNavigation = { itin ->
+                        selectedItinerary = itin
+                        showSearch = false
+                        startNavigation(itin)
                     },
                     onClose = { showSearch = false }
                 )

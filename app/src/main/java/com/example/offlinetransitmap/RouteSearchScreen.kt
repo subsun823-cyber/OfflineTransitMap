@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,18 +13,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -99,6 +105,7 @@ fun RouteSearchScreen(
     searcher: RouteSearcher,
     currentLocation: Pair<Double, Double>?,
     onSelect: (Itinerary) -> Unit,
+    onStartNavigation: ((Itinerary) -> Unit)? = null,
     onClose: () -> Unit
 ) {
     BackHandler(onBack = onClose)
@@ -298,7 +305,11 @@ fun RouteSearchScreen(
                 val ranked = remember(all, state.sortMode) { searcher.rank(all, state.sortMode) }
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     items(ranked) { itin ->
-                        ItineraryCard(itin = itin, onClick = { onSelect(itin) })
+                        ItineraryCard(
+                            itin = itin,
+                            onClick = { onSelect(itin) },
+                            onStartNavigation = onStartNavigation?.let { cb -> { cb(itin) } }
+                        )
                         Spacer(Modifier.height(8.dp))
                     }
                     item {
@@ -378,7 +389,11 @@ fun LineBadge(name: String, color: Long) {
 }
 
 @Composable
-private fun ItineraryCard(itin: Itinerary, onClick: () -> Unit) {
+private fun ItineraryCard(
+    itin: Itinerary,
+    onClick: () -> Unit,
+    onStartNavigation: (() -> Unit)? = null
+) {
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -394,11 +409,39 @@ private fun ItineraryCard(itin: Itinerary, onClick: () -> Unit) {
                     }
                 }
             }
-            Text(
-                text = summaryText(itin),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = summaryText(itin),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (onStartNavigation != null) {
+                    Spacer(Modifier.width(8.dp))
+                    FilledTonalButton(
+                        onClick = onStartNavigation,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "ナビ開始",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
         }
     }
 }

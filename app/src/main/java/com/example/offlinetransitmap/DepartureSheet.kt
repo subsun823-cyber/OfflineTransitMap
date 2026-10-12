@@ -121,135 +121,147 @@ fun DepartureSheet(
     // タップされた出発(null のときは出発一覧を表示)
     var selected by remember { mutableStateOf<Departure?>(null) }
 
+    val trainInfo = remember(stationName, railLines, selectedLine, departures) {
+        TrainVehicleResolver.resolve(stationName, railLines, selectedLine, departures)
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        sheetGesturesEnabled = false
+        sheetGesturesEnabled = false,
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
     ) {
-        // 詳細表示中の「戻る」操作は、シートを閉じずに一覧へ戻る
-        BackHandler(enabled = selected != null) { selected = null }
+        Box(modifier = Modifier.fillMaxWidth()) {
+            // 背景に電車の透かし（ウォーターマーク）を描画
+            TrainWatermarkBackground(trainInfo = trainInfo)
 
-        val detail = selected
-        if (detail == null) {
-            Text(
-                text = stationName,
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-            )
-            if (note != null) {
-                Text(
-                    text = note,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 24.dp)
-                )
-            }
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // 詳細表示中の「戻る」操作は、シートを閉じずに一覧へ戻る
+                BackHandler(enabled = selected != null) { selected = null }
 
-            // 複数路線が乗り入れている駅のみ路線選択チップを表示(単独駅やバス停は今まで通り非表示)
-            if (railLines.size >= 2) {
-                Spacer(Modifier.height(4.dp))
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(railLines) { line ->
-                        val isSelected = selectedLine == line.name
-                        val lineColor = Color(line.color)
-                        val textColor = if (lineColor.luminance() > 0.6f) Color.Black else Color.White
-                        Row(
+                val detail = selected
+                if (detail == null) {
+                    Text(
+                        text = stationName,
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                    )
+                    if (note != null) {
+                        Text(
+                            text = note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+                    }
+
+                    // 複数路線が乗り入れている駅のみ路線選択チップを表示(単独駅やバス停は今まで通り非表示)
+                    if (railLines.size >= 2) {
+                        Spacer(Modifier.height(4.dp))
+                        LazyRow(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(lineColor)
-                                .clickable {
-                                    onSelectLine(if (isSelected) null else line.name)
-                                }
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                text = line.name,
-                                color = textColor,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                            if (isSelected) {
-                                Spacer(Modifier.width(6.dp))
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "選択解除",
-                                    tint = textColor,
-                                    modifier = Modifier.size(16.dp)
-                                )
+                            items(railLines) { line ->
+                                val isSelected = selectedLine == line.name
+                                val lineColor = Color(line.color)
+                                val textColor = if (lineColor.luminance() > 0.6f) Color.Black else Color.White
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(lineColor)
+                                        .clickable {
+                                            onSelectLine(if (isSelected) null else line.name)
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = line.name,
+                                        color = textColor,
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                    if (isSelected) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "選択解除",
+                                            tint = textColor,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                }
-            }
 
-            Spacer(Modifier.height(4.dp))
-            if (sheetItems.isEmpty() && safePastDepartures.isEmpty()) {
-                val targetLabel = if (railLines.isNotEmpty()) "駅" else "停留所・駅"
-                Text(
-                    text = "この${targetLabel}の出発情報がありません（時刻表データ未収録または有効期間外の可能性があります）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
-                )
-            }
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .heightIn(max = listMaxHeight)
-            ) {
-                // 前に出発した便(アコーディオン展開・折りたたみ)
-                if (safePastDepartures.isNotEmpty()) {
-                    item {
-                        PastDeparturesToggleRow(
-                            isExpanded = showPastDepartures,
-                            onClick = { showPastDepartures = !showPastDepartures }
+                    Spacer(Modifier.height(4.dp))
+                    if (sheetItems.isEmpty() && safePastDepartures.isEmpty()) {
+                        val targetLabel = if (railLines.isNotEmpty()) "駅" else "停留所・駅"
+                        Text(
+                            text = "この${targetLabel}の出発情報がありません（時刻表データ未収録または有効期間外の可能性があります）",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
                         )
-                        HorizontalDivider()
                     }
-                    if (showPastDepartures) {
-                        items(safePastDepartures) { dep ->
-                            val minutesAgo = ChronoUnit.MINUTES.between(dep.time, now).coerceAtLeast(0)
-                            PastDepartureRow(
-                                d = dep,
-                                minutesAgo = minutesAgo,
-                                onClick = if (dep.tripNo != 0L) ({ selected = dep }) else null
-                            )
-                            HorizontalDivider()
+                    LazyColumn(
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .heightIn(max = listMaxHeight)
+                    ) {
+                        // 前に出発した便(アコーディオン展開・折りたたみ)
+                        if (safePastDepartures.isNotEmpty()) {
+                            item {
+                                PastDeparturesToggleRow(
+                                    isExpanded = showPastDepartures,
+                                    onClick = { showPastDepartures = !showPastDepartures }
+                                )
+                                HorizontalDivider()
+                            }
+                            if (showPastDepartures) {
+                                items(safePastDepartures) { dep ->
+                                    val minutesAgo = ChronoUnit.MINUTES.between(dep.time, now).coerceAtLeast(0)
+                                    PastDepartureRow(
+                                        d = dep,
+                                        minutesAgo = minutesAgo,
+                                        onClick = if (dep.tripNo != 0L) ({ selected = dep }) else null
+                                    )
+                                    HorizontalDivider()
+                                }
+                            }
                         }
-                    }
-                }
 
-                items(sheetItems) { item ->
-                    when (item) {
-                        is SheetItem.Header -> DateHeader(item.label)
-                        is SheetItem.Entry -> {
-                            val dep = item.departure
-                            DepartureRow(
-                                d = dep,
-                                minutes = ChronoUnit.MINUTES.between(now, dep.time),
-                                // DBの便(tripNo != 0)だけ、タップで詳細を開く
-                                onClick = if (dep.tripNo != 0L) ({ selected = dep }) else null
-                            )
-                            HorizontalDivider()
+                        items(sheetItems) { item ->
+                            when (item) {
+                                is SheetItem.Header -> DateHeader(item.label)
+                                is SheetItem.Entry -> {
+                                    val dep = item.departure
+                                    DepartureRow(
+                                        d = dep,
+                                        minutes = ChronoUnit.MINUTES.between(now, dep.time),
+                                        // DBの便(tripNo != 0)だけ、タップで詳細を開く
+                                        onClick = if (dep.tripNo != 0L) ({ selected = dep }) else null
+                                    )
+                                    HorizontalDivider()
+                                }
+                            }
                         }
                     }
+                    Spacer(Modifier.height(24.dp))
+                } else {
+                    val stops = remember(detail) { loadTripStops(detail) }
+                    TripDetailContent(
+                        departure = detail,
+                        stationName = stationName,
+                        stops = stops,
+                        listMaxHeight = listMaxHeight,
+                        onBack = { selected = null }
+                    )
                 }
             }
-            Spacer(Modifier.height(24.dp))
-        } else {
-            val stops = remember(detail) { loadTripStops(detail) }
-            TripDetailContent(
-                departure = detail,
-                stationName = stationName,
-                stops = stops,
-                listMaxHeight = listMaxHeight,
-                onBack = { selected = null }
-            )
         }
     }
 }
