@@ -273,6 +273,15 @@ class DestinationNavigationTest {
             currRoadClass = 4,
             mode = TravelMode.BICYCLE
         )
+        // 大通り (roadClass 1) から自転車道 (roadClass 3) への離脱ターン (迂回防止)
+        val pLeaveCycleway = computeTurnPenalty(
+            angleDiffDeg = 90.0,
+            prevEdgeDistMeters = 150.0,
+            isConsecutiveTurn = false,
+            prevRoadClass = 1,
+            currRoadClass = 3,
+            mode = TravelMode.BICYCLE
+        )
         // 大通り同士 (roadClass 1 -> 1) のターン
         val pKeep = computeTurnPenalty(
             angleDiffDeg = 90.0,
@@ -283,6 +292,7 @@ class DestinationNavigationTest {
             mode = TravelMode.BICYCLE
         )
         assertTrue("大通りから生活道路への離脱には追加ペナルティがあること", pLeave > pKeep)
+        assertTrue("大通りから自転車道への不要な離脱にも追加ペナルティがあること", pLeaveCycleway > pKeep)
     }
 
     @Test

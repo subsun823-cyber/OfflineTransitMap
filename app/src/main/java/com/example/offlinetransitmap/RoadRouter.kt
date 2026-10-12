@@ -34,7 +34,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
     companion object {
         private const val TAG = "RoadRouter"
         private const val DB_NAME = "roads.db"
-        private const val ROADS_DB_VERSION = 8 // DB更新用バージョンコード (道路種別・走りやすさ・右左折ペナルティ対応版)
+        private const val ROADS_DB_VERSION = 9 // DB更新用バージョンコード (タイル境界クリップ&ステッチング roads.db v9)
         private const val GRID_CELL_DEG = 0.01 // 約1.1km
         private const val MAX_SNAP_DISTANCE_M = 2500 // 道路ノードまでの最大許容スナップ距離
 
@@ -325,7 +325,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                     TravelMode.BICYCLE -> when (edge.roadClass) {
                         1 -> 0.82   // 大通り・主要幹線 (幅広・舗装状態良好・直進性高: 18%優遇)
                         2 -> 0.88   // 主要中規模道 (12%優遇)
-                        3 -> 0.70   // 専用自転車道 (最優先: 30%優遇)
+                        3 -> 0.85   // 専用自転車道 (15%優遇: 幹線道路からの不要な離脱を防止)
                         4 -> 1.00   // 一般生活道路 (基準)
                         5 -> 1.15   // 歩行者道・広場 (徐行・押し歩き)
                         6 -> 1.35   // 細街路・裏道・路地 (見通し悪く低速・回避)
@@ -485,8 +485,8 @@ internal fun computeTurnPenalty(
         penalty += if (mode == TravelMode.BICYCLE) 60.0 else 40.0
     }
 
-    // 大通りからの離脱ペナルティ: 大通り走行中はできるだけ直進維持
-    if (prevRoadClass <= 2 && currRoadClass >= 4) {
+    // 大通りからの離脱ペナルティ: 大通り走行中はできるだけ直進維持 (自転車道への不要な逸脱も防止)
+    if (prevRoadClass <= 2 && currRoadClass >= 3) {
         penalty += if (mode == TravelMode.BICYCLE) 30.0 else 18.0
     }
 
