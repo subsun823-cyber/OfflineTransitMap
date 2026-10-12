@@ -125,4 +125,63 @@ class DeparturesAndLinesTest {
         val busWithoutPlatform = PlatformAndCarResolver.formatDepartureDetail("定刻", "", null, isBus = true)
         assertEquals("定刻", busWithoutPlatform)
     }
+
+    @Test
+    fun trainPhotoResolver_resolvesSpecifiedTrainModels() {
+        // 埼京線 & 川越線（大宮〜川越） -> E233系7000番台 (saikyo_e233_7000)
+        assertEquals(
+            "saikyo_e233_7000",
+            TrainPhotoResolver.resolvePhotoKey("大宮", listOf(StationLine("埼京線・川越線", 0L, "JR東日本")), "埼京線・川越線", emptyList())
+        )
+        assertEquals(
+            "saikyo_e233_7000",
+            TrainPhotoResolver.resolvePhotoKey("南古谷", listOf(StationLine("川越線", 0L, "JR東日本")), "川越線", emptyList())
+        )
+
+        // 川越線（高麗川〜川越） -> E231系3000番台 (hachiko)
+        assertEquals(
+            "hachiko",
+            TrainPhotoResolver.resolvePhotoKey("笠幡", listOf(StationLine("川越線", 0L, "JR東日本")), "川越線", emptyList())
+        )
+        assertEquals(
+            "hachiko",
+            TrainPhotoResolver.resolvePhotoKey("川越", listOf(StationLine("川越線(川越-高麗川間)", 0L, "JR東日本")), "川越線(川越-高麗川間)", emptyList())
+        )
+
+        // 八高線（高麗川以南） -> E231系3000番台 (hachiko)
+        assertEquals(
+            "hachiko",
+            TrainPhotoResolver.resolvePhotoKey("八王子", listOf(StationLine("八高線", 0L, "JR東日本")), "八高線", emptyList())
+        )
+
+        // 八高線（高麗川以北） -> HB-E220系 (hachiko_hbe220)
+        assertEquals(
+            "hachiko_hbe220",
+            TrainPhotoResolver.resolvePhotoKey("寄居", listOf(StationLine("八高線", 0L, "JR東日本")), "八高線", emptyList())
+        )
+        assertEquals(
+            "hachiko_hbe220",
+            TrainPhotoResolver.resolvePhotoKey("高崎", listOf(StationLine("八高線", 0L, "JR東日本")), "八高線", emptyList())
+        )
+
+        // 東武越生線 -> 東武8000系 (tobu_8000)
+        assertEquals(
+            "tobu_8000",
+            TrainPhotoResolver.resolvePhotoKey("越生", listOf(StationLine("東武越生線", 0L, "東武鉄道")), "東武越生線", emptyList())
+        )
+        assertEquals(
+            "tobu_8000",
+            TrainPhotoResolver.resolvePhotoKey("武州長瀬", listOf(StationLine("越生線", 0L, "東武鉄道")), "越生線", emptyList())
+        )
+
+        // 東武小泉線・佐野線 -> 東武10000系 (tobu_10000)
+        assertEquals(
+            "tobu_10000",
+            TrainPhotoResolver.resolvePhotoKey("佐野", listOf(StationLine("東武佐野線", 0L, "東武鉄道")), "東武佐野線", emptyList())
+        )
+        assertEquals(
+            "tobu_10000",
+            TrainPhotoResolver.resolvePhotoKey("西小泉", listOf(StationLine("東武小泉線", 0L, "東武鉄道")), "東武小泉線", emptyList())
+        )
+    }
 }

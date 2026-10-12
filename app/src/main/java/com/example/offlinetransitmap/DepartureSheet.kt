@@ -329,7 +329,7 @@ private fun cleanTrainType(type: String): String {
     return if (base.length > 8) base.take(7) + "…" else base
 }
 
-// GoogleMaps風の種別バッジ（快速・特急を鮮やかに目立たせ、普通は控えめに表示）
+// GoogleMaps風の種別表示（快速・特急を鮮やかなバッジで目立たせ、普通は元のインラインテキスト表示）
 @Composable
 private fun TrainTypeBadge(trainType: String) {
     val clean = cleanTrainType(trainType)
@@ -342,39 +342,36 @@ private fun TrainTypeBadge(trainType: String) {
 
     val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
 
-    val (bg, textColor, borderModifier) = when {
-        // 特急: 鮮やかなレッドバッジ（白文字）
-        isLimitedExp -> Triple(Color(0xFFD9381E), Color.White, Modifier)
-        // 快速・特別快速: Google Maps風の鮮烈なオレンジバッジ（白文字・強調）
-        isRapid -> Triple(Color(0xFFE8710A), Color.White, Modifier)
-        // 急行: レッドオレンジバッジ（白文字）
-        isExpress -> Triple(Color(0xFFE53935), Color.White, Modifier)
-        // 準急: エメラルドグリーンバッジ（白文字）
-        isSemiExp -> Triple(Color(0xFF2E7D32), Color.White, Modifier)
-        // 普通・各停: 控えめな薄いアウトライン表示
-        else -> {
-            val baseBg = if (isDark) Color(0x24FFFFFF) else Color(0x14000000)
-            val border = Modifier.border(
-                width = 0.8.dp,
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                shape = RoundedCornerShape(4.dp)
-            )
-            Triple(baseBg, MaterialTheme.colorScheme.onSurfaceVariant, border)
+    if (isRapid || isLimitedExp || isExpress || isSemiExp) {
+        // 優等列車・快速: Google Mapsのように鮮烈なカラーバッジで強調
+        val bg = when {
+            isLimitedExp -> Color(0xFFD9381E) // 特急: 鮮烈な赤
+            isRapid -> Color(0xFFE8710A)      // 快速: Google Maps風の鮮やかなオレンジ
+            isExpress -> Color(0xFFE53935)    // 急行: 赤
+            else -> Color(0xFF2E7D32)         // 準急: 深緑
         }
+        Text(
+            text = clean,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = Color.White,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .background(bg, RoundedCornerShape(4.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+    } else {
+        // 普通・各停など: 元の位置のまま、枠線なしの自然なテキスト表示
+        Text(
+            text = clean,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = if (isDark) Color(0xFF64B5F6) else MaterialTheme.colorScheme.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
-
-    Text(
-        text = clean,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = if (isRapid || isLimitedExp || isExpress) FontWeight.Bold else FontWeight.Medium,
-        color = textColor,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
-            .then(borderModifier)
-            .background(bg, RoundedCornerShape(4.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    )
 }
 
 // 「事業者 / 路線バッジ / 種別バッジ / ◯◯行き」の1行

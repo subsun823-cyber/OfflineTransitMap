@@ -22,6 +22,34 @@ object TrainPhotoResolver {
 
     private val bitmapCache = ConcurrentHashMap<String, Bitmap>()
 
+    // 八高北線（高麗川以北）の駅名
+    private val HACHIKO_NORTH_STATIONS = setOf(
+        "毛呂", "越生", "明覚", "小川町", "竹沢", "折原", "寄居",
+        "用土", "松久", "児玉", "丹荘", "群馬藤岡", "北藤岡", "倉賀野", "高崎"
+    )
+
+    // 川越線西側（高麗川～川越間）の中間駅
+    private val KAWAGOE_WEST_STATIONS = setOf(
+        "西川越", "的場", "笠幡", "武蔵高萩"
+    )
+
+    // 川越線東側（大宮～川越間）の中間駅
+    private val KAWAGOE_EAST_STATIONS = setOf(
+        "日進", "西大宮", "指扇", "南古谷"
+    )
+
+    // 東武越生線の駅名
+    private val TOBU_OGOSE_STATIONS = setOf(
+        "坂戸", "一本松", "西大家", "川角", "武州長瀬", "東毛呂", "武州唐沢", "越生"
+    )
+
+    // 東武小泉線・佐野線・桐生線の主要駅名
+    private val TOBU_BRANCH_STATIONS = setOf(
+        "館林", "渡瀬", "田島", "佐野", "堀米", "吉水", "田沼", "多田", "葛生",
+        "成島", "本中野", "篠塚", "十王", "西小泉", "竜舞", "太田",
+        "三枚橋", "治良門橋", "藪塚", "阿左美", "新桐生", "相老", "赤城"
+    )
+
     /**
      * 駅名、路線情報から代表電車のフォトキーを解決
      * バス停・バス路線の場合は null を返し、透かし背景を適用しない（元の表示に戻す）
@@ -87,7 +115,32 @@ object TrainPhotoResolver {
             // 常磐線 (中距離・本線): E531系
             lineLower.contains("常磐") -> "joban_e531"
 
-            // 八高線: E231系3000番台
+            // 川越線（西側: 高麗川〜川越）: 八高南線と同じく E231系3000番台
+            lineLower.contains("川越-高麗川") || lineLower.contains("高麗川-川越") ||
+                    (lineLower.contains("川越") && KAWAGOE_WEST_STATIONS.contains(stationName)) ||
+                    (lineLower.contains("川越") && stationName == "川越" &&
+                            departures.any { it.headsign.contains("高麗川") || it.headsign.contains("八王子") }) ||
+                    (lineLower.contains("川越") && stationName == "高麗川" &&
+                            !departures.any { it.headsign.contains("高崎") }) -> "hachiko"
+
+            // 埼京線 / 川越線（東側: 川越〜大宮）: E233系7000番台
+            lineLower.contains("埼京") ||
+                    (lineLower.contains("川越") && (
+                            KAWAGOE_EAST_STATIONS.contains(stationName) ||
+                            stationName == "大宮" ||
+                            (stationName == "川越" && !departures.any { it.headsign.contains("高麗川") || it.headsign.contains("八王子") })
+                    )) -> "saikyo_e233_7000"
+
+            // 八高線（高麗川以北）: HB-E220系
+            lineLower.contains("八高") && (
+                    HACHIKO_NORTH_STATIONS.contains(stationName) ||
+                    departures.any { dep ->
+                        val h = dep.headsign
+                        h.contains("高崎") || h.contains("寄居") || h.contains("小川町") || h.contains("児玉")
+                    }
+            ) -> "hachiko_hbe220"
+
+            // 八高線（高麗川以南）: E231系3000番台
             lineLower.contains("八高") -> "hachiko"
 
             // 武蔵野線: E231系0番台 (武蔵野線向け)
@@ -102,11 +155,10 @@ object TrainPhotoResolver {
             // JR 京浜東北線・根岸線: E233系1000番台
             lineLower.contains("京浜東北") || lineLower.contains("根岸") -> "keihin_tohoku"
 
-            // JR 湘南新宿ライン・上野東京ライン・東海道線・高崎線・宇都宮線・埼京線・川越線: 湘南色等
+            // JR 湘南新宿ライン・上野東京ライン・東海道線・高崎線・宇都宮線: 湘南色等
             lineLower.contains("湘南新宿") || lineLower.contains("上野東京") ||
                     lineLower.contains("東海道") || lineLower.contains("高崎") ||
-                    lineLower.contains("宇都宮") || lineLower.contains("埼京") ||
-                    lineLower.contains("川越") -> "shonan"
+                    lineLower.contains("宇都宮") -> "shonan"
 
             // 東急東横線・みなとみらい線: 東急5050系
             lineLower.contains("東横") || lineLower.contains("みなとみらい") -> "tokyu_toyoko"
@@ -133,7 +185,15 @@ object TrainPhotoResolver {
                     lineLower.contains("拝島") || lineLower.contains("国分寺") ||
                     lineLower.contains("池袋") && lineLower.contains("線") -> "seibu"
 
-            // 東武線各線: 東武70000系
+            // 東武越生線: 東武8000系
+            lineLower.contains("越生") ||
+                    (lineLower.contains("東武") && TOBU_OGOSE_STATIONS.contains(stationName) && stationName != "坂戸") -> "tobu_8000"
+
+            // 東武小泉線・佐野線・桐生線など: 東武10000系
+            lineLower.contains("小泉") || lineLower.contains("佐野") || lineLower.contains("桐生") ||
+                    (lineLower.contains("東武") && TOBU_BRANCH_STATIONS.contains(stationName)) -> "tobu_10000"
+
+            // 東武線本線系（スカイツリーライン・伊勢崎線・日光線・東上線等）: 東武70000系
             lineLower.contains("東武") || lineLower.contains("スカイツリー") ||
                     lineLower.contains("伊勢崎") || lineLower.contains("日光") ||
                     lineLower.contains("東上") -> "tobu"
