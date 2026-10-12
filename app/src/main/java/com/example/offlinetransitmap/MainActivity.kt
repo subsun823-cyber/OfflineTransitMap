@@ -372,11 +372,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationStation?.name?.let { "$it 付近" } ?: "目的地"
                         }
                         val crowDistance = calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
-                        val isCloseDirect = (selectedTravelMode == TravelMode.WALK && crowDistance <= 2000) ||
-                                            (selectedTravelMode == TravelMode.BICYCLE && crowDistance <= 6000)
+                        val isDirectCandidate = (selectedTravelMode == TravelMode.WALK && crowDistance <= 15000) ||
+                                                (selectedTravelMode == TravelMode.BICYCLE && crowDistance <= 35000)
 
-                        if (startNavImmediately && isCloseDirect) {
-                            // 近距離かつナビ即時開始の場合：選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築して即座にナビ開始
+                        if (startNavImmediately && isDirectCandidate) {
+                            // 選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築して即座にナビ開始
                             val directItin = withContext(Dispatchers.Default) {
                                 val router = roadRouter ?: RoadRouter.open(context)
                                 val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)

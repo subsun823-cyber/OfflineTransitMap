@@ -181,10 +181,11 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             this.estimatedTotal.compareTo(other.estimatedTotal)
     }
 
-    // 最寄りの道路ノードを検索 (周囲グリッド探索、全DB走査)
-    fun findNearestNode(lat: Double, lon: Double): Pair<Long, Int>? {
+    // 最寄りの道路ノードを検索 (周囲グリッド探索、全DB走査、孤立小路を回避するロバストスナップ)
+    fun findNearestNode(lat: Double, lon: Double, mode: TravelMode = TravelMode.WALK): Pair<Long, Int>? {
         val y = (lat / GRID_CELL_DEG).toInt()
         val x = (lon / GRID_CELL_DEG).toInt()
+        val modeColumn = if (mode == TravelMode.BICYCLE) "is_bike" else "is_walk"
 
         fun searchInRadius(r: Int): Pair<Long, Int>? {
             val gridKeys = ArrayList<Int>((2 * r + 1) * (2 * r + 1))
@@ -193,8 +194,9 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                     gridKeys.add((((y + dy) and 0xFFFF) shl 16) or ((x + dx) and 0xFFFF))
                 }
             }
-            var bestGlobalId: Long = -1L
-            var bestDist = Int.MAX_VALUE
+
+            data class Candidate(val globalId: Long, val localId: Int, val dist: Int, val lat: Double, val lon: Double, val dbIdx: Int)
+            val candidates = ArrayList<Candidate>()
 
             for ((dbIdx, db) in databases.withIndex()) {
                 if (!db.isOpen) continue
@@ -218,15 +220,67 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                             val nLat = it.getDouble(latCol)
                             val nLon = it.getDouble(lonCol)
                             val dist = calcDistanceMeters(lat, lon, nLat, nLon)
-                            if (dist < bestDist) {
-                                bestDist = dist
-                                bestGlobalId = makeGlobalNodeId(dbIdx, nid)
+                            val maxSnap = if (r <= 2) MAX_SNAP_DISTANCE_M else 4000
+                            if (dist <= maxSnap) {
+                                val globalId = makeGlobalNodeId(dbIdx, nid)
+                                candidates.add(Candidate(globalId, nid, dist, nLat, nLon, dbIdx))
                             }
                         }
                     }
                 }
             }
-            return if (bestGlobalId != -1L) Pair(bestGlobalId, bestDist) else null
+
+            if (candidates.isEmpty()) return null
+            candidates.sortBy { it.dist }
+
+            // 候補ノードの到達性チェック（駅前デッキ等の孤立した微小コンポーネントを回避し、実幹線・一般道ネットワークを優先）
+            // 距離順に上位15候補を調べ、局所エッジで15ノード以上広がるノードを採用する
+            val topCandidates = candidates.take(15)
+            for (cand in topCandidates) {
+                val db = databases.getOrNull(cand.dbIdx) ?: continue
+                if (!db.isOpen) continue
+                // 周囲エッジを取得して局所BFS
+                val localAdj = HashMap<Int, ArrayList<Int>>()
+                val chunkKeys = gridKeys.take(25).joinToString(",")
+                val edgeCursor = try {
+                    db.rawQuery(
+                        "SELECT u, v FROM road_edges WHERE $modeColumn = 1 AND grid IN ($chunkKeys)",
+                        null
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+                edgeCursor?.use {
+                    val uCol = it.getColumnIndexOrThrow("u")
+                    val vCol = it.getColumnIndexOrThrow("v")
+                    while (it.moveToNext()) {
+                        val u = it.getInt(uCol)
+                        val v = it.getInt(vCol)
+                        localAdj.getOrPut(u) { ArrayList() }.add(v)
+                        localAdj.getOrPut(v) { ArrayList() }.add(u)
+                    }
+                }
+
+                val visited = HashSet<Int>()
+                val queue = ArrayDeque<Int>()
+                queue.add(cand.localId)
+                visited.add(cand.localId)
+                while (queue.isNotEmpty() && visited.size < 15) {
+                    val curr = queue.removeFirst()
+                    for (nxt in localAdj[curr] ?: emptyList()) {
+                        if (visited.add(nxt)) {
+                            queue.add(nxt)
+                        }
+                    }
+                }
+
+                if (visited.size >= 15) {
+                    return Pair(cand.globalId, cand.dist)
+                }
+            }
+
+            // 十分な連結ノードが見つからない場合は最寄り候補にフォールバック
+            return Pair(candidates.first().globalId, candidates.first().dist)
         }
 
         // まず半径2セル (約1.5km四方) で探索
@@ -260,17 +314,19 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             return directFallback
         }
 
-        val startSnap = findNearestNode(originLat, originLon) ?: return directFallback
-        val goalSnap = findNearestNode(destLat, destLon) ?: return directFallback
+        val startSnap = findNearestNode(originLat, originLon, mode) ?: return directFallback
+        val goalSnap = findNearestNode(destLat, destLon, mode) ?: return directFallback
 
         val startNodeId = startSnap.first
         val goalNodeId = goalSnap.first
 
-        // 探索領域のノードとエッジを読み込み (マージン0.05: 約5.5kmで迂回路も確実にカバー)
-        val minLat = minOf(originLat, destLat) - 0.05
-        val maxLat = maxOf(originLat, destLat) + 0.05
-        val minLon = minOf(originLon, destLon) - 0.05
-        val maxLon = maxOf(originLon, destLon) + 0.05
+        // 探索領域のノードとエッジを読み込み
+        // 長距離(20km超)ではマージンを0.035に調整してセル肥大化を抑えつつ迂回路を確保
+        val margin = if (directMeters > 20000) 0.035 else 0.05
+        val minLat = minOf(originLat, destLat) - margin
+        val maxLat = maxOf(originLat, destLat) + margin
+        val minLon = minOf(originLon, destLon) - margin
+        val maxLon = maxOf(originLon, destLon) + margin
 
         val yMin = (minLat / GRID_CELL_DEG).toInt()
         val yMax = (maxLat / GRID_CELL_DEG).toInt()
@@ -284,7 +340,8 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             }
         }
 
-        if (gridKeys.isEmpty() || gridKeys.size > 2500) return directFallback
+        // 最大セル数を5000（約70km四方）まで大幅拡大
+        if (gridKeys.isEmpty() || gridKeys.size > 5000) return directFallback
 
         // 領域内のノードをマップに展開 (全DB)
         val nodesMap = HashMap<Long, GraphNode>()
@@ -378,36 +435,54 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             }
         }
 
-        // 都県境ステッチング（異なるDB間の近接ノードを連結してシームレスに探索可能にする）
-        if (databases.size > 1) {
+        // 隙間・デッドエンド・駅前デッキ等の近接自動縫合 (同一DB内および都県境ステッチング)
+        val deadEnds = ArrayList<Long>()
+        for (nid in nodesMap.keys) {
+            val edgeCount = adj[nid]?.size ?: 0
+            if (edgeCount <= 1) {
+                deadEnds.add(nid)
+            }
+        }
+
+        if (deadEnds.isNotEmpty()) {
             val nodesByGrid = HashMap<Int, ArrayList<GraphNode>>()
             for (node in nodesMap.values) {
                 val key = gridCellKey(node.lat, node.lon)
                 nodesByGrid.getOrPut(key) { ArrayList() }.add(node)
             }
 
-            for ((key, cellNodes) in nodesByGrid) {
-                val cy = (key shr 16) and 0xFFFF
-                val cx = key and 0xFFFF
-                // 同一グリッドおよび隣接グリッドを探索
+            for (u in deadEnds) {
+                val uNode = nodesMap[u] ?: continue
+                val uKey = gridCellKey(uNode.lat, uNode.lon)
+                val cy = (uKey shr 16) and 0xFFFF
+                val cx = uKey and 0xFFFF
+                var bestV: Long? = null
+                var bestD = Int.MAX_VALUE
+
                 for (dy in -1..1) {
                     for (dx in -1..1) {
                         val neighborKey = (((cy + dy) and 0xFFFF) shl 16) or ((cx + dx) and 0xFFFF)
                         val neighborNodes = nodesByGrid[neighborKey] ?: continue
-                        for (n1 in cellNodes) {
-                            for (n2 in neighborNodes) {
-                                if (n1.dbIdx != n2.dbIdx && n1.id < n2.id) {
-                                    val dist = calcDistanceMeters(n1.lat, n1.lon, n2.lat, n2.lon)
-                                    // 25m 以内の近接ノードを境界接続エッジで結ぶ
-                                    if (dist <= 25) {
-                                        val d = maxOf(1, dist)
-                                        adj.getOrPut(n1.id) { ArrayList() }.add(GraphEdge(n2.id, d, isWalk = true, isBike = true, roadClass = 4))
-                                        adj.getOrPut(n2.id) { ArrayList() }.add(GraphEdge(n1.id, d, isWalk = true, isBike = true, roadClass = 4))
-                                    }
+                        for (vNode in neighborNodes) {
+                            val v = vNode.id
+                            if (v == u) continue
+                            val d = calcDistanceMeters(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
+                            // 35m以内の隙間を縫合
+                            if (d <= 35 && d < bestD) {
+                                val alreadyConnected = adj[u]?.any { it.toNode == v } == true
+                                if (!alreadyConnected) {
+                                    bestD = d
+                                    bestV = v
                                 }
                             }
                         }
                     }
+                }
+
+                if (bestV != null) {
+                    val d = maxOf(1, bestD)
+                    adj.getOrPut(u) { ArrayList() }.add(GraphEdge(bestV, d, isWalk = true, isBike = true, roadClass = 4))
+                    adj.getOrPut(bestV) { ArrayList() }.add(GraphEdge(u, d, isWalk = true, isBike = true, roadClass = 4))
                 }
             }
         }

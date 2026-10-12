@@ -250,13 +250,13 @@ for is_walk, is_bike, road_class, pts in raw_lines:
 
 print(f"Topology built: {len(node_coords)} nodes")
 
-# 端点ステッチング（タイル境界や交差点でわずかに切断されたデッドエンドの自動縫合）
+# 端点ステッチング（タイル境界や交差点・駅前デッキでわずかに切断されたデッドエンドの自動縫合）
 print("Performing stitching pass for disconnected endpoints...")
 dead_ends = [u for u in range(len(node_coords)) if len(adj.get(u, {})) == 1]
 print(f"Found {len(dead_ends)} dead-end nodes.")
 
 stitch_count = 0
-MAX_STITCH_DIST = 18.0  # 18m以内の切れ目を縫合
+MAX_STITCH_DIST = 35.0  # 35m以内の切れ目を縫合（駅前ロータリーや交差点の切断を解消）
 STITCH_CELL_RANGE = int(math.ceil(MAX_STITCH_DIST / SNAP_DIST))
 
 for u in dead_ends:
@@ -322,7 +322,7 @@ for c in components:
 
 print(f"Valid active nodes: {len(valid_nodes)} / {len(node_coords)}")
 
-# 美山町（馬込松木〜御屋敷入口）のナビ検証
+# 美山町（馬込松木〜御屋敷入口）のナビ検証 (該当ノードが含まれる場合のみ実行)
 magome = (35.688568, 139.251249)
 oyashiki = (35.68627, 139.25291)
 
@@ -340,90 +340,90 @@ def find_nearest_node(lat, lon):
 
 sn_id, sn_d = find_nearest_node(magome[0], magome[1])
 gn_id, gn_d = find_nearest_node(oyashiki[0], oyashiki[1])
-print(f"Miyama verification: Magome snap: {sn_id} ({sn_d:.1f}m), Oyashiki snap: {gn_id} ({gn_d:.1f}m)")
+if sn_id != -1 and gn_id != -1:
+    print(f"Miyama verification: Magome snap: {sn_id} ({sn_d:.1f}m), Oyashiki snap: {gn_id} ({gn_d:.1f}m)")
+    dist_map = {sn_id: 0.0}
+    prev_map = {}
+    init_h = distance_m(node_coords[sn_id][0], node_coords[sn_id][1], node_coords[gn_id][0], node_coords[gn_id][1]) * 0.70
+    pq = [(init_h, 0.0, sn_id)]
 
-dist_map = {sn_id: 0.0}
-prev_map = {}
-init_h = distance_m(node_coords[sn_id][0], node_coords[sn_id][1], node_coords[gn_id][0], node_coords[gn_id][1]) * 0.70
-pq = [(init_h, 0.0, sn_id)]
-
-while pq:
-    prio, d, u = heapq.heappop(pq)
-    if u == gn_id:
-        break
-    if d > dist_map.get(u, 1e9):
-        continue
-    for v, (weight, is_walk, is_bike, road_class) in adj.get(u, {}).items():
-        if v not in valid_nodes:
+    while pq:
+        prio, d, u = heapq.heappop(pq)
+        if u == gn_id:
+            break
+        if d > dist_map.get(u, 1e9):
             continue
-        # 大通り優遇コスト
-        class_factor = 0.85 if road_class in [1, 2] else (1.35 if road_class == 6 else 1.0)
-        new_d = d + weight * class_factor
-        if new_d < dist_map.get(v, 1e9):
-            dist_map[v] = new_d
-            prev_map[v] = u
-            h = distance_m(node_coords[v][0], node_coords[v][1], node_coords[gn_id][0], node_coords[gn_id][1]) * 0.70
-            heapq.heappush(pq, (new_d + h, new_d, v))
+        for v, (weight, is_walk, is_bike, road_class) in adj.get(u, {}).items():
+            if v not in valid_nodes:
+                continue
+            # 大通り優遇コスト
+            class_factor = 0.85 if road_class in [1, 2] else (1.35 if road_class == 6 else 1.0)
+            new_d = d + weight * class_factor
+            if new_d < dist_map.get(v, 1e9):
+                dist_map[v] = new_d
+                prev_map[v] = u
+                h = distance_m(node_coords[v][0], node_coords[v][1], node_coords[gn_id][0], node_coords[gn_id][1]) * 0.70
+                heapq.heappush(pq, (new_d + h, new_d, v))
 
-if gn_id in dist_map:
-    path = []
-    curr = gn_id
-    real_dist = 0
-    while curr != sn_id:
-        p = prev_map[curr]
-        real_dist += adj[p][curr][0]
-        path.append(curr)
-        curr = p
-    path.append(sn_id)
-    path.reverse()
-    print(f"VERIFIED! Miyama route found: real ground distance={real_dist}m across {len(path)} waypoints")
-else:
-    print("WARNING: Miyama route NOT found!")
+    if gn_id in dist_map:
+        path = []
+        curr = gn_id
+        real_dist = 0
+        while curr != sn_id:
+            p = prev_map[curr]
+            real_dist += adj[p][curr][0]
+            path.append(curr)
+            curr = p
+        path.append(sn_id)
+        path.reverse()
+        print(f"VERIFIED! Miyama route found: real ground distance={real_dist}m across {len(path)} waypoints")
+    else:
+        print("WARNING: Miyama route NOT found!")
 
-# 八王子明神町（甲州街道）〜大和田町五丁目（エコタウン）のナビ検証
+# 八王子明神町（甲州街道）〜大和田町五丁目（エコタウン）のナビ検証 (該当ノードが含まれる場合のみ実行)
 myojin = (35.6580, 139.3425)
 ecotown = (35.663041, 139.352576)
 
 s_id, s_d = find_nearest_node(myojin[0], myojin[1])
 g_id, g_d = find_nearest_node(ecotown[0], ecotown[1])
-print(f"Hachioji verification: Myojin snap: {s_id} ({s_d:.1f}m), Ecotown snap: {g_id} ({g_d:.1f}m)")
+if s_id != -1 and g_id != -1:
+    print(f"Hachioji verification: Myojin snap: {s_id} ({s_d:.1f}m), Ecotown snap: {g_id} ({g_d:.1f}m)")
+    dist_map_h = {s_id: 0.0}
+    prev_map_h = {}
+    init_h = distance_m(node_coords[s_id][0], node_coords[s_id][1], node_coords[g_id][0], node_coords[g_id][1]) * 0.70
+    pq_h = [(init_h, 0.0, s_id)]
 
-dist_map_h = {s_id: 0.0}
-prev_map_h = {}
-init_h = distance_m(node_coords[s_id][0], node_coords[s_id][1], node_coords[g_id][0], node_coords[g_id][1]) * 0.70
-pq_h = [(init_h, 0.0, s_id)]
-
-while pq_h:
-    prio, d, u = heapq.heappop(pq_h)
-    if u == g_id:
-        break
-    if d > dist_map_h.get(u, 1e9):
-        continue
-    for v, (weight, is_walk, is_bike, road_class) in adj.get(u, {}).items():
-        if v not in valid_nodes or not is_bike:
+    while pq_h:
+        prio, d, u = heapq.heappop(pq_h)
+        if u == g_id:
+            break
+        if d > dist_map_h.get(u, 1e9):
             continue
-        class_factor = 0.82 if road_class == 1 else (0.88 if road_class == 2 else (0.85 if road_class == 3 else (1.35 if road_class == 6 else 1.0)))
-        new_d = d + weight * class_factor
-        if new_d < dist_map_h.get(v, 1e9):
-            dist_map_h[v] = new_d
-            prev_map_h[v] = u
-            h = distance_m(node_coords[v][0], node_coords[v][1], node_coords[g_id][0], node_coords[g_id][1]) * 0.70
-            heapq.heappush(pq_h, (new_d + h, new_d, v))
+        for v, (weight, is_walk, is_bike, road_class) in adj.get(u, {}).items():
+            if v not in valid_nodes or not is_bike:
+                continue
+            class_factor = 0.82 if road_class == 1 else (0.88 if road_class == 2 else (0.85 if road_class == 3 else (1.35 if road_class == 6 else 1.0)))
+            new_d = d + weight * class_factor
+            if new_d < dist_map_h.get(v, 1e9):
+                dist_map_h[v] = new_d
+                prev_map_h[v] = u
+                h = distance_m(node_coords[v][0], node_coords[v][1], node_coords[g_id][0], node_coords[g_id][1]) * 0.70
+                heapq.heappush(pq_h, (new_d + h, new_d, v))
 
-if g_id in dist_map_h:
-    path_h = []
-    curr = g_id
-    real_dist_h = 0
-    while curr != s_id:
-        p = prev_map_h[curr]
-        real_dist_h += adj[p][curr][0]
-        path_h.append(curr)
-        curr = p
-    path_h.append(s_id)
-    path_h.reverse()
-    print(f"VERIFIED! Hachioji Owada route found: real ground distance={real_dist_h}m across {len(path_h)} waypoints (Direct Koshu-kaido bridge route)")
-else:
-    print("WARNING: Hachioji Owada route NOT found!")
+    if g_id in dist_map_h:
+        path_h = []
+        curr = g_id
+        real_dist_h = 0
+        while curr != s_id:
+            p = prev_map_h[curr]
+            real_dist_h += adj[p][curr][0]
+            path_h.append(curr)
+            curr = p
+        path_h.append(s_id)
+        path_h.reverse()
+        print(f"VERIFIED! Hachioji Owada route found: real ground distance={real_dist_h}m across {len(path_h)} waypoints (Direct Koshu-kaido bridge route)")
+    else:
+        print("WARNING: Hachioji Owada route NOT found!")
 
 # SQLite 保存
 temp_out = out_path + ".tmp"

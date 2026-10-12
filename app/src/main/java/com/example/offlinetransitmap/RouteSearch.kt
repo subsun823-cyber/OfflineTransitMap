@@ -906,9 +906,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         roadRouter: RoadRouter? = null
     ): List<Itinerary> {
         val crowDistM = calcDistanceMeters(originLat, originLon, destLat, destLon)
-        // 近距離（徒歩で約3km以内、または自転車で約10km以内）の場合のみ、直接道路探索を行う
-        val shouldTryDirectRoad = (travelMode == TravelMode.BICYCLE && crowDistM <= 10000) ||
-                                  (travelMode == TravelMode.WALK && crowDistM <= 3000)
+        // 徒歩で約15km以内、または自転車で約35km以内の場合、直接道路探索を行う（中長距離・都県跨ぎもカバー）
+        val shouldTryDirectRoad = (travelMode == TravelMode.BICYCLE && crowDistM <= 35000) ||
+                                  (travelMode == TravelMode.WALK && crowDistM <= 15000)
 
         val roadResult = if (shouldTryDirectRoad) {
             roadRouter?.route(originLat, originLon, destLat, destLon, travelMode)
@@ -945,8 +945,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             )
         }
 
-        // 自転車モードの場合は、直接自転車で向かうルート（8km以内）を優先
-        if (travelMode == TravelMode.BICYCLE && directMeters <= 8000) {
+        // 自転車モードで道なり探索が成功している場合は、直接自転車で向かうルート（25km以内）を優先
+        if (travelMode == TravelMode.BICYCLE && directMeters <= 25000 && roadResult?.isRoadBased == true) {
             return listOf(directItinerary())
         }
 
@@ -1033,9 +1033,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             )
         }
 
-        // 徒歩で移動可能な距離（2.5km以内）、または自転車で移動可能な距離（8km以内）、または公共交通の経路が見つからなかった場合は徒歩/自転車ルートも追加
-        val isShortDirect = (travelMode == TravelMode.BICYCLE && directMeters <= 8000) ||
-                            (travelMode == TravelMode.WALK && directMeters <= 2500)
+        // 徒歩で移動可能な距離（10km以内）、または自転車で移動可能な距離（30km以内）、または公共交通の経路が見つからなかった場合は徒歩/自転車ルートも追加
+        val isShortDirect = (travelMode == TravelMode.BICYCLE && directMeters <= 30000) ||
+                            (travelMode == TravelMode.WALK && directMeters <= 10000)
         if (results.isEmpty() || isShortDirect) {
             results.add(directItinerary())
         }

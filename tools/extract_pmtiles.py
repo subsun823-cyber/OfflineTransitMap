@@ -92,7 +92,7 @@ PREFECTURES = {
     "okinawa":  {"name": "沖縄県", "region": "okinawa",  "file": "okinawa.pmtiles",  "bbox": "127.60,26.05,128.35,26.88"},
 }
 
-PMTILES_CLI_VERSION = "1.22.1"
+PMTILES_CLI_VERSION = "1.31.2"
 
 
 def get_pmtiles_cli_path() -> str:
@@ -121,7 +121,9 @@ def get_pmtiles_cli_path() -> str:
     archive_path = os.path.join(bin_dir, f"pmtiles.{ext}")
 
     print(f"pmtiles CLI をダウンロード中: {download_url}")
-    urllib.request.urlretrieve(download_url, archive_path)
+    req = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req) as resp, open(archive_path, "wb") as out_f:
+        out_f.write(resp.read())
 
     if ext == "zip":
         with zipfile.ZipFile(archive_path, 'r') as zip_ref:
@@ -147,26 +149,38 @@ def extract_prefecture(pmtiles_bin: str, pref_id: str, source_url: str, out_dir:
         print(f"不明な都府県ID: {pref_id}", file=sys.stderr)
         return
 
-    os.makedirs(out_dir, exist_ok=True)
-    out_file = os.path.join(out_dir, info["file"])
+    abs_out_dir = os.path.abspath(out_dir)
+    os.makedirs(abs_out_dir, exist_ok=True)
+    out_file = os.path.join(abs_out_dir, info["file"])
     print(f"[{info['name']}] PMTiles抽出を開始します: {out_file} (BBox: {info['bbox']})")
 
+    # go-pmtiles のディレクトリパス解釈バグ(issue #214)を回避するため、
+    # cwd=abs_out_dir でファイル名のみを渡して抽出する
     cmd = [
-        pmtiles_bin,
+        os.path.abspath(pmtiles_bin),
         "extract",
         source_url,
-        out_file,
+        info["file"],
         f"--bbox={info['bbox']}",
     ]
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, cwd=abs_out_dir, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"[{info['name']}] PMTiles抽出に失敗しました (Exit code: {e.returncode})", file=sys.stderr)
+        raise
+
     size_mb = os.path.getsize(out_file) / 1024 / 1024
     print(f"[{info['name']}] PMTiles抽出完了: {size_mb:.1f} MB -> {out_file}")
 
     if build_roads:
-        road_out_file = os.path.join(out_dir, f"roads_{pref_id}.db")
+        road_out_file = os.path.join(abs_out_dir, f"roads_{pref_id}.db")
         print(f"[{info['name']}] 道路データ (roads_{pref_id}.db) を生成中...")
         road_cmd = [sys.executable, os.path.join(os.path.dirname(__file__), "build_production_roads.py"), out_file, road_out_file]
-        subprocess.run(road_cmd, check=True)
+        try:
+            subprocess.run(road_cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"[{info['name']}] 道路データ生成に失敗しました (Exit code: {e.returncode})", file=sys.stderr)
+            raise
         r_size_mb = os.path.getsize(road_out_file) / 1024 / 1024
         print(f"[{info['name']}] 道路データ生成完了: {r_size_mb:.1f} MB -> {road_out_file}")
 
