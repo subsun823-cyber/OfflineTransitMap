@@ -329,7 +329,7 @@ private fun cleanTrainType(type: String): String {
     return if (base.length > 8) base.take(7) + "…" else base
 }
 
-// GoogleMaps風の種別表示（快速・特急を鮮やかなバッジで目立たせ、普通は元のインラインテキスト表示）
+// GoogleMaps風の種別表示（快速・特急を鮮やかなバッジで目立たせ、普通は詳細行テキストスタイルに統一）
 @Composable
 private fun TrainTypeBadge(trainType: String) {
     val clean = cleanTrainType(trainType)
@@ -339,8 +339,6 @@ private fun TrainTypeBadge(trainType: String) {
     val isLimitedExp = clean.contains("特急") || clean.contains("ライナー") || clean.contains("ロマンスカー")
     val isExpress = clean.contains("急行")
     val isSemiExp = clean.contains("準急")
-
-    val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
 
     if (isRapid || isLimitedExp || isExpress || isSemiExp) {
         // 優等列車・快速: Google Mapsのように鮮烈なカラーバッジで強調
@@ -358,23 +356,58 @@ private fun TrainTypeBadge(trainType: String) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier
-                .background(bg, RoundedCornerShape(4.dp))
-                .padding(horizontal = 6.dp, vertical = 2.dp)
+                .background(bg, RoundedCornerShape(3.dp))
+                .padding(horizontal = 4.dp, vertical = 1.dp)
         )
     } else {
-        // 普通・各停など: 元の位置のまま、枠線なしの自然なテキスト表示
+        // 普通・各停など: 両数の後ろに自然に馴染むプレーンテキスト
         Text(
             text = clean,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Bold,
-            color = if (isDark) Color(0xFF64B5F6) else MaterialTheme.colorScheme.primary,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
     }
 }
 
-// 「事業者 / 路線バッジ / 種別バッジ / ◯◯行き」の1行
+// 時刻表の2行目（定刻 · 番線 · 両数編成 · 種別）
+@Composable
+private fun DepartureSubInfo(
+    status: String,
+    platform: String,
+    carCount: Int?,
+    isBus: Boolean,
+    trainType: String,
+    modifier: Modifier = Modifier
+) {
+    val cleanType = cleanTrainType(trainType)
+    val hasType = cleanType.isNotBlank() && !isBus
+    val baseDetail = PlatformAndCarResolver.formatDepartureDetail(status, platform, carCount, isBus)
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = baseDetail,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (hasType) {
+            Text(
+                text = " · ",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TrainTypeBadge(trainType = cleanType)
+        }
+    }
+}
+
+// 「事業者 / 路線バッジ / ◯◯行き」の1行（種別は2行目の両数の後ろに移動）
 @Composable
 private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -400,10 +433,6 @@ private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
                 .background(Color(d.lineColor), RoundedCornerShape(12.dp))
                 .padding(horizontal = 8.dp, vertical = 1.dp)
         )
-        if (cleanTrainType(d.trainType).isNotBlank()) {
-            Spacer(Modifier.width(6.dp))
-            TrainTypeBadge(trainType = d.trainType)
-        }
         Spacer(Modifier.width(6.dp))
         Text(
             text = d.headsign + if (d.isBus || d.tripNo != 0L) "行き" else "方面",
@@ -447,7 +476,6 @@ private fun PastDeparturesToggleRow(
 @Composable
 fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = null) {
     val status = "定刻に出発済み"
-    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -459,12 +487,12 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
         Column(modifier = Modifier.weight(1f)) {
             LineTitle(d)
             Spacer(Modifier.height(4.dp))
-            Text(
-                text = detailText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            DepartureSubInfo(
+                status = status,
+                platform = d.platform,
+                carCount = d.carCount,
+                isBus = d.isBus,
+                trainType = d.trainType
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -495,7 +523,6 @@ fun PastDepartureRow(d: Departure, minutesAgo: Long, onClick: (() -> Unit)? = nu
 fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
     val within1Hour = minutes < 60
     val status = if (within1Hour) "定刻" else "定刻出発予定"
-    val detailText = PlatformAndCarResolver.formatDepartureDetail(status, d.platform, d.carCount, d.isBus)
 
     Row(
         modifier = Modifier
@@ -507,12 +534,12 @@ fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
         Column(modifier = Modifier.weight(1f)) {
             LineTitle(d)
             Spacer(Modifier.height(4.dp))
-            Text(
-                text = detailText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+            DepartureSubInfo(
+                status = status,
+                platform = d.platform,
+                carCount = d.carCount,
+                isBus = d.isBus,
+                trainType = d.trainType
             )
         }
         Spacer(Modifier.width(12.dp))
@@ -555,12 +582,25 @@ private fun ColumnScope.TripDetailContent(
         if (departure.carCount != null && departure.carCount > 0 && !departure.isBus) add("${departure.carCount}両編成")
     }.joinToString(" · ")
     val subText = if (trainMeta.isNotBlank()) "$stationName 発 · $trainMeta" else "$stationName 発"
-    Text(
-        text = subText,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    val cleanType = cleanTrainType(departure.trainType)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp)
-    )
+    ) {
+        Text(
+            text = subText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (cleanType.isNotBlank() && !departure.isBus) {
+            Text(
+                text = " · ",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TrainTypeBadge(trainType = cleanType)
+        }
+    }
 
     if (stops.isEmpty()) {
         Text(
