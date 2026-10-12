@@ -121,19 +121,23 @@ fun DepartureSheet(
     // タップされた出発(null のときは出発一覧を表示)
     var selected by remember { mutableStateOf<Departure?>(null) }
 
-    val trainInfo = remember(stationName, railLines, selectedLine, departures) {
-        TrainVehicleResolver.resolve(stationName, railLines, selectedLine, departures)
+    val photoKey = remember(stationName, railLines, selectedLine, departures) {
+        TrainPhotoResolver.resolvePhotoKey(stationName, railLines, selectedLine, departures)
     }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         sheetGesturesEnabled = false,
-        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
+        containerColor = if (photoKey != null) {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
+        } else {
+            MaterialTheme.colorScheme.surface
+        }
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
-            // 背景に電車の透かし（ウォーターマーク）を描画
-            TrainWatermarkBackground(trainInfo = trainInfo)
+            // Wikipedia等の実写写真による透かし背景（バスは非表示で元の表示）
+            TrainPhotoWatermark(photoKey = photoKey)
 
             Column(modifier = Modifier.fillMaxWidth()) {
                 // 詳細表示中の「戻る」操作は、シートを閉じずに一覧へ戻る
