@@ -78,9 +78,7 @@ private val PROTOMAPS_LABEL_LAYERS = listOf(
     """{"id": "places", "type": "symbol", "source": "protomaps", "source-layer": "places", "minzoom": 8, "filter": ["all", ["==", "${'$'}type", "Point"], ["has", "name"]], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": ["interpolate", ["linear"], ["zoom"], 8, 12, 12, 14, 16, 16], "text-max-width": 8, "text-padding": 4}, "paint": {"text-color": "#3c4043", "text-halo-color": "#ffffff", "text-halo-width": 1.6}}""",
     """{"id": "pois-dot", "type": "circle", "source": "protomaps", "source-layer": "pois", "minzoom": 15, "filter": ["all", ["==", "${'$'}type", "Point"], ["has", "name"], ["all", ["!in", "kind", "bus_stop", "bus_station"], ["!in", "pmap:kind", "bus_stop", "bus_station"]]], "paint": {"circle-radius": 3.5, "circle-color": "#1a73e8", "circle-stroke-color": "#ffffff", "circle-stroke-width": 1}}""",
     """{"id": "pois-name", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 15.5, "filter": ["all", ["==", ["geometry-type"], "Point"], ["has", "name"], ["!=", ["get", "kind"], "bus_stop"], ["!=", ["get", "kind"], "bus_station"], ["!=", ["get", "pmap:kind"], "bus_stop"], ["!=", ["get", "pmap:kind"], "bus_station"], ["==", $POI_ICON_EXPRESSION, ""]], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.6], "text-optional": true}, "paint": {"text-color": "#1a5fb4", "text-halo-color": "#ffffff", "text-halo-width": 1.3}}""",
-    """{"id": "pois-symbols", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 15.5, "filter": ["all", ["==", ["geometry-type"], "Point"], ["!=", $POI_ICON_EXPRESSION, ""]], "layout": {"icon-image": $POI_ICON_EXPRESSION, "icon-size": 1, "icon-padding": 2, "text-field": ["coalesce", ["get", "name"], ""], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.6], "text-optional": true}, "paint": {"text-color": "#1a5fb4", "text-halo-color": "#ffffff", "text-halo-width": 1.3}}""",
-    """{"id": "pois-bus-stop", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 13, "filter": ["all", ["==", "${'$'}type", "Point"], ["any", ["in", "kind", "bus_stop", "bus_station"], ["in", "pmap:kind", "bus_stop", "bus_station"]]], "layout": {"icon-image": "bus-stop", "icon-size": 1, "icon-allow-overlap": true, "icon-ignore-placement": true}}""",
-    """{"id": "pois-bus-name", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 14.5, "filter": ["all", ["==", "${'$'}type", "Point"], ["has", "name"], ["any", ["in", "kind", "bus_stop", "bus_station"], ["in", "pmap:kind", "bus_stop", "bus_station"]]], "layout": {"text-field": ["get", "name"], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.9], "text-optional": true}, "paint": {"text-color": "#b71c1c", "text-halo-color": "#ffffff", "text-halo-width": 1.4}}"""
+    """{"id": "pois-symbols", "type": "symbol", "source": "protomaps", "source-layer": "pois", "minzoom": 15.5, "filter": ["all", ["==", ["geometry-type"], "Point"], ["!=", $POI_ICON_EXPRESSION, ""]], "layout": {"icon-image": $POI_ICON_EXPRESSION, "icon-size": 1, "icon-padding": 2, "text-field": ["coalesce", ["get", "name"], ""], "text-font": ["NotoSansRegular"], "text-size": 11, "text-max-width": 7, "text-anchor": "top", "text-offset": [0, 0.6], "text-optional": true}, "paint": {"text-color": "#1a5fb4", "text-halo-color": "#ffffff", "text-halo-width": 1.3}}"""
 )
 
 private fun commonStationLayers(stationMinZoom: Double): List<String> = listOf(
@@ -306,12 +304,10 @@ fun MapLibreMapView(
                     }
 
                     // 2. 駅・バス停のタップ判定
-                    val protoBusLayers = KantoPrefectures.all.flatMap { listOf("pois-bus-stop-${it.id}", "pois-bus-name-${it.id}") }.toTypedArray()
-                    val feature = map.queryRenderedFeatures(area, "stations-rail", "stations", *protoBusLayers).firstOrNull()
-                    val rawId = feature?.getStringProperty("id") ?: feature?.getStringProperty("station_id") ?: ""
+                    val feature = map.queryRenderedFeatures(area, "stations-rail", "stations").firstOrNull()
+                    val id = feature?.getStringProperty("id") ?: ""
                     val name = feature?.getStringProperty("name")
                     if (name != null) {
-                        val id = if (rawId.isNotBlank()) rawId else "bus:$name"
                         currentOnStationClick(id, name)
                         true
                     } else {
