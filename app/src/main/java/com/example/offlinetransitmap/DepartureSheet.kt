@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
@@ -125,19 +126,47 @@ fun DepartureSheet(
         TrainPhotoResolver.resolvePhotoKey(stationName, railLines, selectedLine, departures)
     }
 
+    // 選択中または代表路線のカラーを取得
+    val targetLineColor = remember(selectedLine, railLines, departures) {
+        railLines.find { it.name == selectedLine }?.color
+            ?: departures.firstOrNull()?.lineColor
+            ?: railLines.firstOrNull()?.color
+    }
+
+    val baseSurface = MaterialTheme.colorScheme.surface
+    // 路線カラーが存在する場合、ほんの少し（約8%）路線カラーに寄せる
+    val tintedSurface = if (photoKey != null && targetLineColor != null && targetLineColor != 0L) {
+        lerp(baseSurface, Color(targetLineColor), 0.08f)
+    } else {
+        baseSurface
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         sheetGesturesEnabled = false,
         containerColor = if (photoKey != null) {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.90f)
+            tintedSurface.copy(alpha = 0.90f)
         } else {
             MaterialTheme.colorScheme.surface
         }
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
-            // Wikipedia等の実写写真による透かし背景（バスは非表示で元の表示）
-            TrainPhotoWatermark(photoKey = photoKey)
+            // matchParentSize() を指定することで、Column の自然な高さを引き伸ばさず、
+            // バス停と全く同じ自然なシート面積（コンテンツに合わせた高さ）にする
+            TrainPhotoWatermark(
+                photoKey = photoKey,
+                modifier = Modifier.matchParentSize()
+            )
+
+            // さらにほんのり路線カラーを透かしの上にブレンド
+            if (photoKey != null && targetLineColor != null && targetLineColor != 0L) {
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(Color(targetLineColor).copy(alpha = 0.04f))
+                )
+            }
 
             Column(modifier = Modifier.fillMaxWidth()) {
                 // 詳細表示中の「戻る」操作は、シートを閉じずに一覧へ戻る
