@@ -29,7 +29,7 @@ fun travelDurationMinutes(meters: Int, mode: TravelMode): Int = when (mode) {
     TravelMode.BICYCLE -> bicycleDurationMinutes(meters)
 }
 
-class RoadRouter private constructor(private val db: SQLiteDatabase) {
+class RoadRouter private constructor(private val databases: List<SQLiteDatabase>) {
 
     companion object {
         private const val TAG = "RoadRouter"
@@ -40,6 +40,18 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
 
         @Volatile
         private var instance: RoadRouter? = null
+
+        fun reload(context: Context): RoadRouter? {
+            synchronized(this) {
+                try {
+                    instance?.close()
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "Error closing existing RoadRouter databases", e)
+                }
+                instance = null
+                return open(context)
+            }
+        }
 
         fun open(context: Context): RoadRouter? {
             instance?.let { return it }
@@ -87,10 +99,36 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
                         }
                     }
 
-                    if (!file.exists()) return null
+                    // 探索対象の全SQLite道路DBファイルを収集 (roads.db + roads_*.db)
+                    val dbFiles = ArrayList<File>()
+                    if (file.exists()) {
+                        dbFiles.add(file)
+                    }
 
-                    val sqliteDb = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-                    val router = RoadRouter(sqliteDb)
+                    val extraDbs = dbDir.listFiles { f ->
+                        f.isFile && f.name.endsWith(".db") && f.name != DB_NAME && f.length() > 1024
+                    }
+                    if (extraDbs != null) {
+                        for (f in extraDbs) {
+                            dbFiles.add(f)
+                        }
+                    }
+
+                    if (dbFiles.isEmpty()) return null
+
+                    val openedDbs = ArrayList<SQLiteDatabase>()
+                    for (f in dbFiles) {
+                        try {
+                            val db = SQLiteDatabase.openDatabase(f.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                            openedDbs.add(db)
+                        } catch (e: Exception) {
+                            android.util.Log.e(TAG, "Failed to open road database: ${f.name}", e)
+                        }
+                    }
+
+                    if (openedDbs.isEmpty()) return null
+
+                    val router = RoadRouter(openedDbs)
                     instance = router
                     return router
                 } catch (e: Exception) {
@@ -105,16 +143,29 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             val x = (lon / GRID_CELL_DEG).toInt()
             return ((y and 0xFFFF) shl 16) or (x and 0xFFFF)
         }
+
+        fun makeGlobalNodeId(dbIdx: Int, localId: Int): Long {
+            return (dbIdx.toLong() shl 32) or (localId.toLong() and 0xFFFFFFFFL)
+        }
+    }
+
+    fun close() {
+        for (db in databases) {
+            try {
+                if (db.isOpen) db.close()
+            } catch (_: Exception) {}
+        }
     }
 
     private data class GraphNode(
-        val id: Int,
+        val id: Long,
         val lat: Double,
-        val lon: Double
+        val lon: Double,
+        val dbIdx: Int
     )
 
     private data class GraphEdge(
-        val toNode: Int,
+        val toNode: Long,
         val distMeters: Int,
         val isWalk: Boolean,
         val isBike: Boolean,
@@ -122,7 +173,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
     )
 
     private data class SearchState(
-        val nodeId: Int,
+        val nodeId: Long,
         val cost: Double,
         val estimatedTotal: Double
     ) : Comparable<SearchState> {
@@ -130,44 +181,52 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
             this.estimatedTotal.compareTo(other.estimatedTotal)
     }
 
-    // 最寄りの道路ノードを検索 (周囲グリッド探索)
-    fun findNearestNode(lat: Double, lon: Double): Pair<Int, Int>? {
+    // 最寄りの道路ノードを検索 (周囲グリッド探索、全DB走査)
+    fun findNearestNode(lat: Double, lon: Double): Pair<Long, Int>? {
         val y = (lat / GRID_CELL_DEG).toInt()
         val x = (lon / GRID_CELL_DEG).toInt()
 
-        fun searchInRadius(r: Int): Pair<Int, Int>? {
+        fun searchInRadius(r: Int): Pair<Long, Int>? {
             val gridKeys = ArrayList<Int>((2 * r + 1) * (2 * r + 1))
             for (dy in -r..r) {
                 for (dx in -r..r) {
                     gridKeys.add((((y + dy) and 0xFFFF) shl 16) or ((x + dx) and 0xFFFF))
                 }
             }
-            var bestId = -1
+            var bestGlobalId: Long = -1L
             var bestDist = Int.MAX_VALUE
 
-            for (chunk in gridKeys.chunked(500)) {
-                val inClause = chunk.joinToString(",")
-                val cursor = db.rawQuery(
-                    "SELECT id, lat, lon FROM road_nodes WHERE grid IN ($inClause)",
-                    null
-                )
-                cursor.use {
-                    val idCol = it.getColumnIndexOrThrow("id")
-                    val latCol = it.getColumnIndexOrThrow("lat")
-                    val lonCol = it.getColumnIndexOrThrow("lon")
-                    while (it.moveToNext()) {
-                        val nid = it.getInt(idCol)
-                        val nLat = it.getDouble(latCol)
-                        val nLon = it.getDouble(lonCol)
-                        val dist = calcDistanceMeters(lat, lon, nLat, nLon)
-                        if (dist < bestDist) {
-                            bestDist = dist
-                            bestId = nid
+            for ((dbIdx, db) in databases.withIndex()) {
+                if (!db.isOpen) continue
+                for (chunk in gridKeys.chunked(500)) {
+                    val inClause = chunk.joinToString(",")
+                    val cursor = try {
+                        db.rawQuery(
+                            "SELECT id, lat, lon FROM road_nodes WHERE grid IN ($inClause)",
+                            null
+                        )
+                    } catch (e: Exception) {
+                        null
+                    } ?: continue
+
+                    cursor.use {
+                        val idCol = it.getColumnIndexOrThrow("id")
+                        val latCol = it.getColumnIndexOrThrow("lat")
+                        val lonCol = it.getColumnIndexOrThrow("lon")
+                        while (it.moveToNext()) {
+                            val nid = it.getInt(idCol)
+                            val nLat = it.getDouble(latCol)
+                            val nLon = it.getDouble(lonCol)
+                            val dist = calcDistanceMeters(lat, lon, nLat, nLon)
+                            if (dist < bestDist) {
+                                bestDist = dist
+                                bestGlobalId = makeGlobalNodeId(dbIdx, nid)
+                            }
                         }
                     }
                 }
             }
-            return if (bestId != -1) Pair(bestId, bestDist) else null
+            return if (bestGlobalId != -1L) Pair(bestGlobalId, bestDist) else null
         }
 
         // まず半径2セル (約1.5km四方) で探索
@@ -227,21 +286,30 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
 
         if (gridKeys.isEmpty() || gridKeys.size > 2500) return directFallback
 
-        // 領域内のノードをマップに展開
-        val nodesMap = HashMap<Int, GraphNode>()
-        for (chunk in gridKeys.chunked(500)) {
-            val inClause = chunk.joinToString(",")
-            val nodeCursor = db.rawQuery(
-                "SELECT id, lat, lon FROM road_nodes WHERE grid IN ($inClause)",
-                null
-            )
-            nodeCursor.use {
-                val idCol = it.getColumnIndexOrThrow("id")
-                val latCol = it.getColumnIndexOrThrow("lat")
-                val lonCol = it.getColumnIndexOrThrow("lon")
-                while (it.moveToNext()) {
-                    val nid = it.getInt(idCol)
-                    nodesMap[nid] = GraphNode(nid, it.getDouble(latCol), it.getDouble(lonCol))
+        // 領域内のノードをマップに展開 (全DB)
+        val nodesMap = HashMap<Long, GraphNode>()
+        for ((dbIdx, db) in databases.withIndex()) {
+            if (!db.isOpen) continue
+            for (chunk in gridKeys.chunked(500)) {
+                val inClause = chunk.joinToString(",")
+                val nodeCursor = try {
+                    db.rawQuery(
+                        "SELECT id, lat, lon FROM road_nodes WHERE grid IN ($inClause)",
+                        null
+                    )
+                } catch (e: Exception) {
+                    null
+                } ?: continue
+
+                nodeCursor.use {
+                    val idCol = it.getColumnIndexOrThrow("id")
+                    val latCol = it.getColumnIndexOrThrow("lat")
+                    val lonCol = it.getColumnIndexOrThrow("lon")
+                    while (it.moveToNext()) {
+                        val nid = it.getInt(idCol)
+                        val globalId = makeGlobalNodeId(dbIdx, nid)
+                        nodesMap[globalId] = GraphNode(globalId, it.getDouble(latCol), it.getDouble(lonCol), dbIdx)
+                    }
                 }
             }
         }
@@ -266,42 +334,87 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
 
         val goalNode = nodesMap[goalNodeId] ?: return directFallback
 
-        // 領域内のエッジを隣接リストに展開
+        // 領域内のエッジを隣接リストに展開 (全DB)
         val modeColumn = if (mode == TravelMode.BICYCLE) "is_bike" else "is_walk"
-        val adj = HashMap<Int, ArrayList<GraphEdge>>()
-        for (chunk in gridKeys.chunked(500)) {
-            val inClause = chunk.joinToString(",")
-            val edgeCursor = db.rawQuery(
-                "SELECT u, v, dist_m, is_walk, is_bike, road_class FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
-                null
-            )
-            edgeCursor.use {
-                val uCol = it.getColumnIndexOrThrow("u")
-                val vCol = it.getColumnIndexOrThrow("v")
-                val distCol = it.getColumnIndexOrThrow("dist_m")
-                val walkCol = it.getColumnIndexOrThrow("is_walk")
-                val bikeCol = it.getColumnIndexOrThrow("is_bike")
-                val rcCol = it.getColumnIndexOrThrow("road_class")
+        val adj = HashMap<Long, ArrayList<GraphEdge>>()
+        for ((dbIdx, db) in databases.withIndex()) {
+            if (!db.isOpen) continue
+            for (chunk in gridKeys.chunked(500)) {
+                val inClause = chunk.joinToString(",")
+                val edgeCursor = try {
+                    db.rawQuery(
+                        "SELECT u, v, dist_m, is_walk, is_bike, road_class FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
+                        null
+                    )
+                } catch (e: Exception) {
+                    null
+                } ?: continue
 
-                while (it.moveToNext()) {
-                    val u = it.getInt(uCol)
-                    val v = it.getInt(vCol)
-                    val d = it.getInt(distCol)
-                    val isWalk = it.getInt(walkCol) == 1
-                    val isBike = it.getInt(bikeCol) == 1
-                    val rc = it.getInt(rcCol)
+                edgeCursor.use {
+                    val uCol = it.getColumnIndexOrThrow("u")
+                    val vCol = it.getColumnIndexOrThrow("v")
+                    val distCol = it.getColumnIndexOrThrow("dist_m")
+                    val walkCol = it.getColumnIndexOrThrow("is_walk")
+                    val bikeCol = it.getColumnIndexOrThrow("is_bike")
+                    val rcCol = it.getColumnIndexOrThrow("road_class")
 
-                    if (nodesMap.containsKey(u) && nodesMap.containsKey(v)) {
-                        adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike, rc))
-                        adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike, rc))
+                    while (it.moveToNext()) {
+                        val localU = it.getInt(uCol)
+                        val localV = it.getInt(vCol)
+                        val d = it.getInt(distCol)
+                        val isWalk = it.getInt(walkCol) == 1
+                        val isBike = it.getInt(bikeCol) == 1
+                        val rc = it.getInt(rcCol)
+
+                        val u = makeGlobalNodeId(dbIdx, localU)
+                        val v = makeGlobalNodeId(dbIdx, localV)
+
+                        if (nodesMap.containsKey(u) && nodesMap.containsKey(v)) {
+                            adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike, rc))
+                            adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike, rc))
+                        }
+                    }
+                }
+            }
+        }
+
+        // 都県境ステッチング（異なるDB間の近接ノードを連結してシームレスに探索可能にする）
+        if (databases.size > 1) {
+            val nodesByGrid = HashMap<Int, ArrayList<GraphNode>>()
+            for (node in nodesMap.values) {
+                val key = gridCellKey(node.lat, node.lon)
+                nodesByGrid.getOrPut(key) { ArrayList() }.add(node)
+            }
+
+            for ((key, cellNodes) in nodesByGrid) {
+                val cy = (key shr 16) and 0xFFFF
+                val cx = key and 0xFFFF
+                // 同一グリッドおよび隣接グリッドを探索
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        val neighborKey = (((cy + dy) and 0xFFFF) shl 16) or ((cx + dx) and 0xFFFF)
+                        val neighborNodes = nodesByGrid[neighborKey] ?: continue
+                        for (n1 in cellNodes) {
+                            for (n2 in neighborNodes) {
+                                if (n1.dbIdx != n2.dbIdx && n1.id < n2.id) {
+                                    val dist = calcDistanceMeters(n1.lat, n1.lon, n2.lat, n2.lon)
+                                    // 25m 以内の近接ノードを境界接続エッジで結ぶ
+                                    if (dist <= 25) {
+                                        val d = maxOf(1, dist)
+                                        adj.getOrPut(n1.id) { ArrayList() }.add(GraphEdge(n2.id, d, isWalk = true, isBike = true, roadClass = 4))
+                                        adj.getOrPut(n2.id) { ArrayList() }.add(GraphEdge(n1.id, d, isWalk = true, isBike = true, roadClass = 4))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
         // A* 探索 (大通り優先・走りやすさ・右左折ペナルティを考慮した高品質経路探索)
-        val dist = HashMap<Int, Double>()
-        val prev = HashMap<Int, Pair<Int, GraphEdge>>()
+        val dist = HashMap<Long, Double>()
+        val prev = HashMap<Long, Pair<Long, GraphEdge>>()
         val pq = PriorityQueue<SearchState>()
 
         dist[startNodeId] = 0.0
@@ -406,7 +519,7 @@ class RoadRouter private constructor(private val db: SQLiteDatabase) {
         }
 
         // 経路の復元 (通過ノード列を復元)
-        val pathNodes = ArrayList<Int>()
+        val pathNodes = ArrayList<Long>()
         var curr = goalNodeId
         pathNodes.add(curr)
         while (curr != startNodeId) {

@@ -49,8 +49,10 @@ import androidx.compose.foundation.layout.PaddingValues
 
 data class PrefectureDownloadState(
     val info: PrefectureMapInfo,
-    val isDownloaded: Boolean,
-    val sizeBytes: Long
+    val isMapDownloaded: Boolean,
+    val mapSizeBytes: Long,
+    val isRoadDownloaded: Boolean,
+    val roadSizeBytes: Long
 )
 
 @Composable
@@ -65,24 +67,41 @@ fun SettingsScreen(
     var savedData by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var prefectureStates by remember { mutableStateOf<List<PrefectureDownloadState>>(emptyList()) }
     var downloadingPrefectureId by remember { mutableStateOf<String?>(null) }
+    var downloadingRoadPrefectureId by remember { mutableStateOf<String?>(null) }
     var mapDownloadPercent by remember { mutableStateOf(0) }
+    var roadDownloadPercent by remember { mutableStateOf(0) }
     var mapActionMessage by remember { mutableStateOf<String?>(null) }
+    var roadActionMessage by remember { mutableStateOf<String?>(null) }
 
     var urlDialogPrefecture by remember { mutableStateOf<PrefectureMapInfo?>(null) }
+    var roadUrlDialogPrefecture by remember { mutableStateOf<PrefectureMapInfo?>(null) }
     var inputCustomUrl by remember { mutableStateOf("") }
+    var inputCustomRoadUrl by remember { mutableStateOf("") }
     var showBaseUrlDialog by remember { mutableStateOf(false) }
     var inputBaseUrl by remember { mutableStateOf("") }
     var importTargetPrefecture by remember { mutableStateOf<PrefectureMapInfo?>(null) }
+    var importRoadTargetPrefecture by remember { mutableStateOf<PrefectureMapInfo?>(null) }
+
+    // アプリ本体のGitHubアップデート管理用
+    var appUpdateCheckStatus by remember { mutableStateOf<String?>(null) }
+    var availableAppRelease by remember { mutableStateOf<GitHubReleaseInfo?>(null) }
+    var isCheckingAppUpdate by remember { mutableStateOf(false) }
+    var isDownloadingAppUpdate by remember { mutableStateOf(false) }
+    var appUpdateProgressPercent by remember { mutableStateOf(0) }
 
     suspend fun refreshPrefectureStates() {
         prefectureStates = withContext(Dispatchers.IO) {
-            KantoPrefectures.all.map { pref ->
-                val file = KantoPrefectures.getFile(context, pref)
-                val downloaded = KantoPrefectures.isDownloaded(context, pref)
+            KantoPrefectures.nationalList.map { pref ->
+                val mapFile = KantoPrefectures.getFile(context, pref)
+                val mapDownloaded = KantoPrefectures.isDownloaded(context, pref)
+                val roadFile = KantoPrefectures.getRoadFile(context, pref)
+                val roadDownloaded = KantoPrefectures.isRoadDownloaded(context, pref)
                 PrefectureDownloadState(
                     info = pref,
-                    isDownloaded = downloaded,
-                    sizeBytes = if (downloaded) file.length() else 0L
+                    isMapDownloaded = mapDownloaded,
+                    mapSizeBytes = if (mapDownloaded) mapFile.length() else 0L,
+                    isRoadDownloaded = roadDownloaded,
+                    roadSizeBytes = if (roadDownloaded) roadFile.length() else 0L
                 )
             }
         }
@@ -96,12 +115,22 @@ fun SettingsScreen(
                 "保存済み: ${mapDownloaded.joinToString("、") { it.name }}（%.1f MB）".format(totalBytes / 1024.0 / 1024.0)
             } else "未保存"
 
+            val roadDownloaded = KantoPrefectures.getRoadDownloadedList(context)
+            val roadStatus = if (roadDownloaded.isNotEmpty()) {
+                val totalBytes = RoadDownloadManager.getTotalRoadSizeBytes(context)
+                "保存済み: ${roadDownloaded.joinToString("、") { it.name }}（%.1f MB）".format(totalBytes / 1024.0 / 1024.0)
+            } else "未保存（同梱データのみ）"
+
             val timetableFile = context.getExternalFilesDir("timetable")?.let { File(it, "timetable.db") }
             val timetableStatus = if (timetableFile != null && timetableFile.isFile && timetableFile.length() > 0) {
                 "保存済み（%.1f MB）".format(timetableFile.length() / 1024.0 / 1024.0)
             } else "未保存"
 
-            listOf("地図" to mapStatus, "時刻表" to timetableStatus)
+            listOf(
+                "地図" to mapStatus,
+                "道路データ（ナビ）" to roadStatus,
+                "時刻表" to timetableStatus
+            )
         }
     }
 
@@ -113,7 +142,7 @@ fun SettingsScreen(
         if (uri != null && pref != null) {
             downloadingPrefectureId = pref.id
             mapDownloadPercent = 0
-            mapActionMessage = "${pref.name}をインポート中…"
+            mapActionMessage = "${pref.name}の地図をインポート中…"
             scope.launch {
                 val result = MapDownloadManager.importMapFile(context, pref, uri) { p ->
                     mapDownloadPercent = p
@@ -130,6 +159,34 @@ fun SettingsScreen(
                     }
                 }
                 downloadingPrefectureId = null
+            }
+        }
+    }
+
+    val roadFilePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        val pref = importRoadTargetPrefecture
+        importRoadTargetPrefecture = null
+        if (uri != null && pref != null) {
+            downloadingRoadPrefectureId = pref.id
+            roadDownloadPercent = 0
+            roadActionMessage = "${pref.name}の道路データをインポート中…"
+            scope.launch {
+                val result = RoadDownloadManager.importRoadFile(context, pref, uri) { p ->
+                    roadDownloadPercent = p
+                }
+                when (result) {
+                    is RoadDownloadResult.Success -> {
+                        roadActionMessage = "${pref.name}の道路データをインポートしました"
+                        refreshPrefectureStates()
+                        refreshSavedData()
+                    }
+                    is RoadDownloadResult.Failure -> {
+                        roadActionMessage = "${pref.name}の道路インポートに失敗しました: ${result.message}"
+                    }
+                }
+                downloadingRoadPrefectureId = null
             }
         }
     }
@@ -250,121 +307,289 @@ fun SettingsScreen(
                 }
             }
             item {
-                SettingsGroup("オフライン地図（関東各都県）") {
-                    val totalMb = prefectureStates.filter { it.isDownloaded }.sumOf { it.sizeBytes } / 1024.0 / 1024.0
-                    val downloadedCount = prefectureStates.count { it.isDownloaded }
+                var selectedRegionFilter by remember { mutableStateOf("関東") }
+                SettingsGroup("オフライン地図・道路データ（ナビ）") {
+                    val mapDownloadedCount = prefectureStates.count { it.isMapDownloaded }
+                    val roadDownloadedCount = prefectureStates.count { it.isRoadDownloaded }
+                    val mapTotalMb = prefectureStates.filter { it.isMapDownloaded }.sumOf { it.mapSizeBytes } / 1024.0 / 1024.0
+                    val roadTotalMb = RoadDownloadManager.getTotalRoadSizeBytes(context) / 1024.0 / 1024.0
+
                     Text(
-                        if (downloadedCount > 0) "保存済み: $downloadedCount 都県（%.1f MB）".format(totalMb) else "未保存（都県を選択してダウンロードしてください）",
+                        "地図保存: $mapDownloadedCount 都県（%.1f MB） / 道路保存: $roadDownloadedCount 都県（%.1f MB）".format(mapTotalMb, roadTotalMb),
                         style = MaterialTheme.typography.titleSmall
                     )
-                    SettingNote("オフラインで使用する地図データを都県ごとにダウンロードできます。不要な都県は削除して空き容量を確保できます。")
+                    SettingNote("オフラインで使用する地図（PMTiles）とナビ用道路データ（OSM）を都県ごとに管理できます。越境ナビ時はダウンロード済みの複数都県を自動で連結して案内します。")
                     Spacer(Modifier.height(8.dp))
 
-                    for (state in prefectureStates) {
-                        val pref = state.info
-                        val isDownloading = downloadingPrefectureId == pref.id
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(pref.name, style = MaterialTheme.typography.bodyLarge)
-                                val statusText = when {
-                                    isDownloading -> "処理中… ($mapDownloadPercent%)"
-                                    state.isDownloaded -> "保存済み（%.1f MB）".format(state.sizeBytes / 1024.0 / 1024.0)
-                                    pref.id == "tokyo" -> "未保存（アプリ内から即座に復元可能）"
-                                    else -> "未保存（目安: 約${pref.approximateSizeMb} MB）"
+                    // 地域絞り込みボタン
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("関東", "甲信越・東海", "関西・全国", "すべて").forEach { regionFilter ->
+                            val isSelected = selectedRegionFilter == regionFilter
+                            if (isSelected) {
+                                Button(
+                                    onClick = { selectedRegionFilter = regionFilter },
+                                    modifier = Modifier.height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                ) {
+                                    Text(regionFilter, style = MaterialTheme.typography.labelMedium)
                                 }
-                                SettingNote(statusText)
-                                if (isDownloading) {
-                                    Spacer(Modifier.height(4.dp))
-                                    LinearProgressIndicator(
-                                        progress = { mapDownloadPercent / 100f },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                } else if (!state.isDownloaded && pref.id != "tokyo") {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        TextButton(
+                            } else {
+                                OutlinedButton(
+                                    onClick = { selectedRegionFilter = regionFilter },
+                                    modifier = Modifier.height(34.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                ) {
+                                    Text(regionFilter, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    HorizontalDivider()
+
+                    val filteredStates = prefectureStates.filter {
+                        when (selectedRegionFilter) {
+                            "関東" -> it.info.region == "関東"
+                            "甲信越・東海" -> it.info.region in listOf("甲信越", "東海")
+                            "関西・全国" -> it.info.region !in listOf("関東", "甲信越", "東海")
+                            else -> true
+                        }
+                    }
+
+                    for (state in filteredStates) {
+                        val pref = state.info
+                        val isMapDownloading = downloadingPrefectureId == pref.id
+                        val isRoadDownloading = downloadingRoadPrefectureId == pref.id
+
+                        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${pref.name} (${pref.region})",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                            }
+
+                            Spacer(Modifier.height(4.dp))
+
+                            // 1. 地図（PMTiles）行
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    val statusText = when {
+                                        isMapDownloading -> "地図取得中… ($mapDownloadPercent%)"
+                                        state.isMapDownloaded -> "地図: 保存済み（%.1f MB）".format(state.mapSizeBytes / 1024.0 / 1024.0)
+                                        pref.id == "tokyo" -> "地図: 未保存（同梱より即座に復元可）"
+                                        else -> "地図: 未保存（約${pref.approximateSizeMb} MB）"
+                                    }
+                                    SettingNote(statusText)
+                                    if (isMapDownloading) {
+                                        Spacer(Modifier.height(2.dp))
+                                        LinearProgressIndicator(
+                                            progress = { mapDownloadPercent / 100f },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (state.isMapDownloaded) {
+                                        OutlinedButton(
                                             onClick = {
-                                                urlDialogPrefecture = pref
-                                                inputCustomUrl = KantoPrefectures.getDownloadUrl(pref, preferences.customMapBaseUrl)
+                                                if (MapDownloadManager.deletePrefecture(context, pref)) {
+                                                    mapActionMessage = "${pref.name}の地図を削除しました"
+                                                    scope.launch {
+                                                        refreshPrefectureStates()
+                                                        refreshSavedData()
+                                                        onMapUpdated()
+                                                    }
+                                                }
                                             },
+                                            enabled = !isMapDownloading,
                                             modifier = Modifier.height(32.dp),
-                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                                         ) {
-                                            Text("URL指定", style = MaterialTheme.typography.labelMedium)
+                                            Text("地図削除", style = MaterialTheme.typography.labelSmall)
                                         }
-                                        TextButton(
+                                    } else {
+                                        Button(
                                             onClick = {
-                                                importTargetPrefecture = pref
-                                                filePickerLauncher.launch("*/*")
+                                                downloadingPrefectureId = pref.id
+                                                mapDownloadPercent = 0
+                                                val customUrl = if (preferences.customMapBaseUrl.isNotBlank()) {
+                                                    KantoPrefectures.getDownloadUrl(pref, preferences.customMapBaseUrl)
+                                                } else null
+                                                mapActionMessage = "${pref.name}の地図を取得中…"
+                                                scope.launch {
+                                                    val result = MapDownloadManager.downloadPrefecture(context, pref, customUrl) { p ->
+                                                        mapDownloadPercent = p
+                                                    }
+                                                    when (result) {
+                                                        is MapDownloadResult.Success -> {
+                                                            mapActionMessage = "${pref.name}の地図を取得しました"
+                                                            refreshPrefectureStates()
+                                                            refreshSavedData()
+                                                            onMapUpdated()
+                                                        }
+                                                        is MapDownloadResult.Failure -> {
+                                                            mapActionMessage = "${pref.name}の地図取得失敗: ${result.message}"
+                                                        }
+                                                    }
+                                                    downloadingPrefectureId = null
+                                                }
                                             },
+                                            enabled = !isMapDownloading,
                                             modifier = Modifier.height(32.dp),
-                                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                                         ) {
-                                            Text("ファイル選択", style = MaterialTheme.typography.labelMedium)
+                                            Text(if (isMapDownloading) "取得中…" else "地図取得", style = MaterialTheme.typography.labelSmall)
                                         }
                                     }
                                 }
                             }
 
-                            if (state.isDownloaded) {
-                                OutlinedButton(
-                                    onClick = {
-                                        val success = MapDownloadManager.deletePrefecture(context, pref)
-                                        if (success) {
-                                            mapActionMessage = "${pref.name}の地図を削除しました"
-                                            scope.launch {
-                                                refreshPrefectureStates()
-                                                refreshSavedData()
-                                                onMapUpdated()
-                                            }
-                                        }
-                                    },
-                                    enabled = downloadingPrefectureId == null
-                                ) {
-                                    Text("削除")
+                            // 2. 道路データ（OSMナビ）行
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                                    val roadText = when {
+                                        isRoadDownloading -> "道路データ取得中… ($roadDownloadPercent%)"
+                                        state.isRoadDownloaded -> "道路: 保存済み（%.1f MB）".format(state.roadSizeBytes / 1024.0 / 1024.0)
+                                        pref.id == "tokyo" -> "道路: 準備済み（アプリ内同梱）"
+                                        else -> "道路: 未保存（約${pref.roadApproximateSizeMb} MB）"
+                                    }
+                                    SettingNote(roadText)
+                                    if (isRoadDownloading) {
+                                        Spacer(Modifier.height(2.dp))
+                                        LinearProgressIndicator(
+                                            progress = { roadDownloadPercent / 100f },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
                                 }
-                            } else {
-                                Button(
-                                    onClick = {
-                                        downloadingPrefectureId = pref.id
-                                        mapDownloadPercent = 0
-                                        val customUrl = if (preferences.customMapBaseUrl.isNotBlank()) {
-                                            KantoPrefectures.getDownloadUrl(pref, preferences.customMapBaseUrl)
-                                        } else null
-                                        mapActionMessage = "${pref.name}を取得中…"
-                                        scope.launch {
-                                            val result = MapDownloadManager.downloadPrefecture(context, pref, customUrl) { p ->
-                                                mapDownloadPercent = p
-                                            }
-                                            when (result) {
-                                                is MapDownloadResult.Success -> {
-                                                    mapActionMessage = "${pref.name}の取得が完了しました"
-                                                    refreshPrefectureStates()
-                                                    refreshSavedData()
-                                                    onMapUpdated()
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    if (state.isRoadDownloaded) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                if (RoadDownloadManager.deleteRoad(context, pref)) {
+                                                    roadActionMessage = "${pref.name}の道路データを削除しました"
+                                                    scope.launch {
+                                                        refreshPrefectureStates()
+                                                        refreshSavedData()
+                                                    }
                                                 }
-                                                is MapDownloadResult.Failure -> {
-                                                    mapActionMessage = "${pref.name}の取得に失敗しました:\n${result.message}"
-                                                }
-                                            }
-                                            downloadingPrefectureId = null
+                                            },
+                                            enabled = !isRoadDownloading,
+                                            modifier = Modifier.height(32.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                        ) {
+                                            Text("道路削除", style = MaterialTheme.typography.labelSmall)
                                         }
-                                    },
-                                    enabled = downloadingPrefectureId == null
-                                ) {
-                                    Text(if (isDownloading) "取得中…" else "取得")
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                downloadingRoadPrefectureId = pref.id
+                                                roadDownloadPercent = 0
+                                                val customUrl = if (preferences.customMapBaseUrl.isNotBlank()) {
+                                                    KantoPrefectures.getRoadDownloadUrl(pref, preferences.customMapBaseUrl)
+                                                } else null
+                                                roadActionMessage = "${pref.name}の道路データを取得中…"
+                                                scope.launch {
+                                                    val result = RoadDownloadManager.downloadRoad(context, pref, customUrl) { p ->
+                                                        roadDownloadPercent = p
+                                                    }
+                                                    when (result) {
+                                                        is RoadDownloadResult.Success -> {
+                                                            roadActionMessage = "${pref.name}の道路データを取得しました"
+                                                            refreshPrefectureStates()
+                                                            refreshSavedData()
+                                                        }
+                                                        is RoadDownloadResult.Failure -> {
+                                                            roadActionMessage = "${pref.name}の道路データ取得失敗: ${result.message}"
+                                                        }
+                                                    }
+                                                    downloadingRoadPrefectureId = null
+                                                }
+                                            },
+                                            enabled = !isRoadDownloading,
+                                            modifier = Modifier.height(32.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                        ) {
+                                            Text(if (isRoadDownloading) "取得中…" else "道路取得", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
                                 }
                             }
+
+                            // 補助操作（URL指定・ファイル選択）
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        urlDialogPrefecture = pref
+                                        inputCustomUrl = KantoPrefectures.getDownloadUrl(pref, preferences.customMapBaseUrl)
+                                    },
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) {
+                                    Text("地図URL", style = MaterialTheme.typography.labelSmall)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        importTargetPrefecture = pref
+                                        filePickerLauncher.launch("*/*")
+                                    },
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) {
+                                    Text("地図ファイル選択", style = MaterialTheme.typography.labelSmall)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        roadUrlDialogPrefecture = pref
+                                        inputCustomRoadUrl = KantoPrefectures.getRoadDownloadUrl(pref, preferences.customMapBaseUrl)
+                                    },
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) {
+                                    Text("道路URL", style = MaterialTheme.typography.labelSmall)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        importRoadTargetPrefecture = pref
+                                        roadFilePickerLauncher.launch("*/*")
+                                    },
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                                ) {
+                                    Text("道路ファイル選択", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(top = 6.dp))
                         }
-                        HorizontalDivider()
                     }
 
-                    if (mapActionMessage != null) {
+                    if (mapActionMessage != null || roadActionMessage != null) {
                         Spacer(Modifier.height(8.dp))
-                        SettingNote(requireNotNull(mapActionMessage))
+                        mapActionMessage?.let { SettingNote(it) }
+                        roadActionMessage?.let { SettingNote(it) }
                     }
 
                     Spacer(Modifier.height(8.dp))
@@ -375,7 +600,7 @@ fun SettingsScreen(
                     ) {
                         val activeBaseUrl = preferences.customMapBaseUrl.ifBlank { KantoPrefectures.DEFAULT_BASE_URL }
                         Column(modifier = Modifier.weight(1f)) {
-                            SettingNote("配信元URL: $activeBaseUrl")
+                            SettingNote("配信元ベースURL: $activeBaseUrl")
                         }
                         TextButton(
                             onClick = {
@@ -388,6 +613,128 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            // アプリ本体のGitHubアップデート管理グループ
+            item {
+                SettingsGroup("アプリ本体の更新 (GitHub)") {
+                    Text(
+                        "現在のバージョン: v${AppUpdateManager.getCurrentVersionName(context)}",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    SettingNote("GitHubリポジトリ（subsun823-cyber/OfflineTransitMap）の最新ReleaseからAPKを自動取得し、アプリ単体でアップデートします。")
+                    Spacer(Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    isCheckingAppUpdate = true
+                                    appUpdateCheckStatus = "GitHubの最新リリースを確認中…"
+                                    when (val result = AppUpdateManager.checkUpdate(context)) {
+                                        is AppUpdateCheckResult.UpdateAvailable -> {
+                                            availableAppRelease = result.info
+                                            appUpdateCheckStatus = "新しいバージョン（${result.info.tagName}）が見つかりました！"
+                                        }
+                                        is AppUpdateCheckResult.UpToDate -> {
+                                            availableAppRelease = null
+                                            appUpdateCheckStatus = "お使いのアプリは最新バージョンです（${result.currentVersion}）"
+                                        }
+                                        is AppUpdateCheckResult.Error -> {
+                                            availableAppRelease = null
+                                            appUpdateCheckStatus = "確認エラー: ${result.message}"
+                                        }
+                                    }
+                                    isCheckingAppUpdate = false
+                                }
+                            },
+                            enabled = !isCheckingAppUpdate && !isDownloadingAppUpdate
+                        ) {
+                            Text(if (isCheckingAppUpdate) "確認中…" else "最新版を確認")
+                        }
+
+                        availableAppRelease?.let { release ->
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isDownloadingAppUpdate = true
+                                        appUpdateProgressPercent = 0
+                                        appUpdateCheckStatus = "最新APK（${release.apkFileName}）をダウンロード中…"
+                                        val dlResult = AppUpdateManager.downloadApk(context, release) { pct ->
+                                            appUpdateProgressPercent = pct
+                                        }
+                                        when (dlResult) {
+                                            is AppDownloadResult.Success -> {
+                                                appUpdateCheckStatus = "ダウンロード完了。インストーラーを起動します…"
+                                                try {
+                                                    AppUpdateManager.installApk(context, dlResult.apkFile)
+                                                } catch (e: Exception) {
+                                                    appUpdateCheckStatus = "インストーラーの起動に失敗しました: ${e.localizedMessage ?: e.message}"
+                                                }
+                                            }
+                                            is AppDownloadResult.Failure -> {
+                                                appUpdateCheckStatus = "ダウンロード失敗: ${dlResult.message}"
+                                            }
+                                        }
+                                        isDownloadingAppUpdate = false
+                                    }
+                                },
+                                enabled = !isDownloadingAppUpdate
+                            ) {
+                                Text(if (isDownloadingAppUpdate) "ダウンロード中…" else "更新をインストール")
+                            }
+                        }
+                    }
+
+                    if (isDownloadingAppUpdate && appUpdateProgressPercent in 1..99) {
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { appUpdateProgressPercent / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+
+                    appUpdateCheckStatus?.let { status ->
+                        Spacer(Modifier.height(8.dp))
+                        SettingNote(status)
+                    }
+
+                    availableAppRelease?.let { release ->
+                        Spacer(Modifier.height(8.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = androidx.compose.material3.CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(
+                                    "✨ ${release.releaseTitle} (${release.tagName})",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                if (release.apkSize > 0) {
+                                    Text(
+                                        "ファイルサイズ: %.1f MB".format(release.apkSize / 1024.0 / 1024.0),
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                                if (release.releaseNotes.isNotBlank()) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        release.releaseNotes,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 SettingsGroup("オフラインデータ") {
                     if (savedData.isEmpty()) Text("確認中…")
@@ -498,10 +845,10 @@ fun SettingsScreen(
         if (showBaseUrlDialog) {
             AlertDialog(
                 onDismissRequest = { showBaseUrlDialog = false },
-                title = { Text("地図の配信元ベースURL設定") },
+                title = { Text("地図・道路データの配信元ベースURL設定") },
                 text = {
                     Column {
-                        Text("全都県の地図ファイルが配置されているベースURLを設定します。空欄にすると既定のURLに戻ります。")
+                        Text("全都県の地図・道路データファイルが配置されているベースURLを設定します。空欄にすると既定のURLに戻ります。")
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = inputBaseUrl,
@@ -534,7 +881,7 @@ fun SettingsScreen(
         urlDialogPrefecture?.let { pref ->
             AlertDialog(
                 onDismissRequest = { urlDialogPrefecture = null },
-                title = { Text("${pref.name}のURL指定ダウンロード") },
+                title = { Text("${pref.name}の地図URL指定ダウンロード") },
                 text = {
                     Column {
                         Text("PMTiles ファイル（${pref.fileName}）のダウンロードURLを入力してください。")
@@ -556,20 +903,20 @@ fun SettingsScreen(
                             if (urlToDownload.isNotBlank()) {
                                 downloadingPrefectureId = pref.id
                                 mapDownloadPercent = 0
-                                mapActionMessage = "${pref.name}をダウンロード中…"
+                                mapActionMessage = "${pref.name}の地図をダウンロード中…"
                                 scope.launch {
                                     val result = MapDownloadManager.downloadPrefecture(context, pref, urlToDownload) { p ->
                                         mapDownloadPercent = p
                                     }
                                     when (result) {
                                         is MapDownloadResult.Success -> {
-                                            mapActionMessage = "${pref.name}のダウンロードが完了しました"
+                                            mapActionMessage = "${pref.name}の地図ダウンロード完了"
                                             refreshPrefectureStates()
                                             refreshSavedData()
                                             onMapUpdated()
                                         }
                                         is MapDownloadResult.Failure -> {
-                                            mapActionMessage = "${pref.name}のダウンロードに失敗しました:\n${result.message}"
+                                            mapActionMessage = "${pref.name}の地図ダウンロード失敗: ${result.message}"
                                         }
                                     }
                                     downloadingPrefectureId = null
@@ -582,6 +929,62 @@ fun SettingsScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { urlDialogPrefecture = null }) {
+                        Text("キャンセル")
+                    }
+                }
+            )
+        }
+
+        roadUrlDialogPrefecture?.let { pref ->
+            AlertDialog(
+                onDismissRequest = { roadUrlDialogPrefecture = null },
+                title = { Text("${pref.name}の道路データURL指定ダウンロード") },
+                text = {
+                    Column {
+                        Text("SQLite 道路データファイル（${pref.roadFileName}）のダウンロードURLを入力してください。")
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = inputCustomRoadUrl,
+                            onValueChange = { inputCustomRoadUrl = it },
+                            label = { Text("ダウンロードURL") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val urlToDownload = inputCustomRoadUrl.trim()
+                            roadUrlDialogPrefecture = null
+                            if (urlToDownload.isNotBlank()) {
+                                downloadingRoadPrefectureId = pref.id
+                                roadDownloadPercent = 0
+                                roadActionMessage = "${pref.name}の道路データをダウンロード中…"
+                                scope.launch {
+                                    val result = RoadDownloadManager.downloadRoad(context, pref, urlToDownload) { p ->
+                                        roadDownloadPercent = p
+                                    }
+                                    when (result) {
+                                        is RoadDownloadResult.Success -> {
+                                            roadActionMessage = "${pref.name}の道路データダウンロード完了"
+                                            refreshPrefectureStates()
+                                            refreshSavedData()
+                                        }
+                                        is RoadDownloadResult.Failure -> {
+                                            roadActionMessage = "${pref.name}の道路データダウンロード失敗: ${result.message}"
+                                        }
+                                    }
+                                    downloadingRoadPrefectureId = null
+                                }
+                            }
+                        }
+                    ) {
+                        Text("ダウンロード")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { roadUrlDialogPrefecture = null }) {
                         Text("キャンセル")
                     }
                 }

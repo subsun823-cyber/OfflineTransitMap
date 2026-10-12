@@ -10,8 +10,8 @@ import mapbox_vector_tile
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-src_path = 'app/src/main/assets/bootstrap/tokyo.pmtiles'
-out_path = 'app/src/main/assets/bootstrap/roads.db'
+src_path = sys.argv[1] if len(sys.argv) > 1 else 'app/src/main/assets/bootstrap/tokyo.pmtiles'
+out_path = sys.argv[2] if len(sys.argv) > 2 else 'app/src/main/assets/bootstrap/roads.db'
 
 print(f"===========================================================")
 print(f"Building Production roads.db (v9: tile-clipped & stitched) from {src_path}")
