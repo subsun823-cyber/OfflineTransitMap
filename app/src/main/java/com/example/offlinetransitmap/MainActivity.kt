@@ -371,12 +371,16 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         } else {
                             destinationStation?.name?.let { "$it 付近" } ?: "目的地"
                         }
-                        if (startNavImmediately) {
-                            // ナビ即時開始の場合：選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築して即座にナビ開始
+                        val crowDistance = calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
+                        val isCloseDirect = (selectedTravelMode == TravelMode.WALK && crowDistance <= 2000) ||
+                                            (selectedTravelMode == TravelMode.BICYCLE && crowDistance <= 6000)
+
+                        if (startNavImmediately && isCloseDirect) {
+                            // 近距離かつナビ即時開始の場合：選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築して即座にナビ開始
                             val directItin = withContext(Dispatchers.Default) {
                                 val router = roadRouter ?: RoadRouter.open(context)
                                 val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
-                                val distM = roadRes?.distanceMeters ?: calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
+                                val distM = roadRes?.distanceMeters ?: crowDistance
                                 val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
                                 val path = roadRes?.path ?: listOf(curLoc, dest)
                                 val isBike = selectedTravelMode == TravelMode.BICYCLE
@@ -405,7 +409,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             isSearchingForDestination = false
                             startNavigation(directItin, selectedTravelMode)
                         } else {
-                            // ルート確認の場合：電車・バスを含む公共交通候補も検索して提示
+                            // 遠距離の場合、またはルート確認の場合：電車・バスを含む公共交通候補を検索
                             val candidates = withContext(Dispatchers.Default) {
                                 if (searcher != null) {
                                     searcher.findRoutesBetweenCoordinates(
@@ -421,7 +425,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 } else {
                                     val router = roadRouter ?: RoadRouter.open(context)
                                     val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
-                                    val distM = roadRes?.distanceMeters ?: calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
+                                    val distM = roadRes?.distanceMeters ?: crowDistance
                                     val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
                                     val path = roadRes?.path ?: listOf(curLoc, dest)
                                     val isBike = selectedTravelMode == TravelMode.BICYCLE
@@ -450,7 +454,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             isSearchingForDestination = false
                             val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
                             if (bestItin != null) {
-                                selectedItinerary = bestItin
+                                if (startNavImmediately) {
+                                    startNavigation(bestItin, selectedTravelMode)
+                                } else {
+                                    selectedItinerary = bestItin
+                                }
                             } else {
                                 Toast.makeText(context, "目的地への経路が見つかりませんでした", Toast.LENGTH_LONG).show()
                             }

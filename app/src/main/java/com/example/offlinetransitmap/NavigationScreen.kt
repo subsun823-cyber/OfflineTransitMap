@@ -609,20 +609,55 @@ private fun BottomNavigationDashboard(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (guidance != null) {
                         Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = "${guidance.remainingMinutes}",
-                                color = Color(0xFF00E676),
-                                fontSize = 36.sp,
-                                fontWeight = FontWeight.Black,
-                                lineHeight = 36.sp
-                            )
-                            Text(
-                                text = " 分",
-                                color = Color(0xFF00E676),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
+                            if (guidance.remainingMinutes >= 60) {
+                                val h = guidance.remainingMinutes / 60
+                                val m = guidance.remainingMinutes % 60
+                                Text(
+                                    text = "$h",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 36.sp,
+                                    fontWeight = FontWeight.Black,
+                                    lineHeight = 36.sp
+                                )
+                                Text(
+                                    text = " 時間",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(bottom = 4.dp, end = 2.dp)
+                                )
+                                if (m > 0) {
+                                    Text(
+                                        text = "$m",
+                                        color = Color(0xFF00E676),
+                                        fontSize = 36.sp,
+                                        fontWeight = FontWeight.Black,
+                                        lineHeight = 36.sp
+                                    )
+                                    Text(
+                                        text = " 分",
+                                        color = Color(0xFF00E676),
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 4.dp)
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = "${guidance.remainingMinutes}",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 36.sp,
+                                    fontWeight = FontWeight.Black,
+                                    lineHeight = 36.sp
+                                )
+                                Text(
+                                    text = " 分",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                            }
                             val roadM = guidance.remainingRoadMeters
                             if (roadM != null) {
                                 Text(
@@ -861,7 +896,7 @@ private fun TrainLcdTopCard(
                                     fontWeight = FontWeight.Black
                                 )
                                 Text(
-                                    text = "あと約${g.remainingMinutes}分",
+                                    text = "あと約${formatDurationHoursMinutes(g.remainingMinutes)}",
                                     color = Color(0xFFCBD5E1),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium
@@ -1126,20 +1161,55 @@ private fun TrainBottomDashboard(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     if (guidance != null) {
                         Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = "${guidance.remainingMinutes}",
-                                color = Color(0xFF00E676),
-                                fontSize = 32.sp,
-                                fontWeight = FontWeight.Black,
-                                lineHeight = 32.sp
-                            )
-                            Text(
-                                text = " 分",
-                                color = Color(0xFF00E676),
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(bottom = 3.dp)
-                            )
+                            if (guidance.remainingMinutes >= 60) {
+                                val h = guidance.remainingMinutes / 60
+                                val m = guidance.remainingMinutes % 60
+                                Text(
+                                    text = "$h",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Black,
+                                    lineHeight = 32.sp
+                                )
+                                Text(
+                                    text = " 時間",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(bottom = 3.dp, end = 2.dp)
+                                )
+                                if (m > 0) {
+                                    Text(
+                                        text = "$m",
+                                        color = Color(0xFF00E676),
+                                        fontSize = 32.sp,
+                                        fontWeight = FontWeight.Black,
+                                        lineHeight = 32.sp
+                                    )
+                                    Text(
+                                        text = " 分",
+                                        color = Color(0xFF00E676),
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(bottom = 3.dp)
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = "${guidance.remainingMinutes}",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Black,
+                                    lineHeight = 32.sp
+                                )
+                                Text(
+                                    text = " 分",
+                                    color = Color(0xFF00E676),
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(bottom = 3.dp)
+                                )
+                            }
                             Text(
                                 text = " · 終着 ${finalDest}",
                                 color = Color.White,

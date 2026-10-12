@@ -95,7 +95,7 @@ fun summaryText(itin: Itinerary): String {
         itin.knownFare > 0 -> "${itin.knownFare}円+運賃不明の区間"
         else -> "料金不明"
     }
-    return "約${minutes}分 · $transfer · $fare"
+    return "約${formatDurationHoursMinutes(minutes)} · $transfer · $fare"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

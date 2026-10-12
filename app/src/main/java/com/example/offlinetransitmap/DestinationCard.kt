@@ -182,7 +182,7 @@ fun DestinationCard(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "($modePrefix${currentDur}分)",
+                        text = "($modePrefix${formatDurationHoursMinutes(currentDur.toLong())})",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -195,7 +195,7 @@ fun DestinationCard(
             if (nearestStation != null && nearestDistanceMeters != null) {
                 val walkMin = walkDurationMinutes(nearestDistanceMeters)
                 Text(
-                    text = "最寄り駅: ${nearestStation.name} (約${nearestDistanceMeters}m · 徒歩約${walkMin}分)",
+                    text = "最寄り駅: ${nearestStation.name} (約${nearestDistanceMeters}m · 徒歩約${formatDurationHoursMinutes(walkMin.toLong())})",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
                 )

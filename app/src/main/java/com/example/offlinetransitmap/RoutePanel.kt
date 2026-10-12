@@ -58,7 +58,7 @@ private fun buildTimeline(itin: Itinerary): List<TlItem> {
     for ((i, leg) in itin.legs.withIndex()) {
         if (leg.isWalk) {
             if (i == 0) out.add(TlItem.Stop(hm(itin.departure), leg.fromName, "出発", WALK_GRAY, true))
-            out.add(TlItem.Walk("徒歩 約${leg.walkMinutes}分(${leg.walkMeters}m)"))
+            out.add(TlItem.Walk("徒歩 約${formatDurationHoursMinutes(leg.walkMinutes.toLong())}(${leg.walkMeters}m)"))
             if (i == last) out.add(TlItem.Stop(hm(itin.arrival), leg.toName, "到着", WALK_GRAY, true))
         } else {
             val color = Color(leg.lineColor)
@@ -233,7 +233,7 @@ fun RouteDetailPanel(
                                         "${it}円$note"
                                     } ?: "料金不明"
                                     Text(
-                                        text = "約${minutes}分 · $fareText",
+                                        text = "約${formatDurationHoursMinutes(minutes)} · $fareText",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

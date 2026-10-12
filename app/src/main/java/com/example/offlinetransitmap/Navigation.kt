@@ -28,6 +28,22 @@ import java.time.LocalDateTime
 
 enum class GuidanceKind { WALK, BICYCLE, WAIT, RIDE, ARRIVED }
 
+/**
+ * 到着所要時間のフォーマット
+ * 60分未満: "〇分"
+ * 60分以上: "〇時間〇分" または "〇時間" (分が0の場合)
+ */
+fun formatDurationHoursMinutes(minutes: Long): String {
+    if (minutes <= 0) return "今すぐ"
+    if (minutes < 60) return "${minutes}分"
+    val h = minutes / 60
+    val m = minutes % 60
+    return if (m == 0L) "${h}時間" else "${h}時間${m}分"
+}
+
+fun formatDurationHoursMinutes(minutes: Int): String =
+    formatDurationHoursMinutes(minutes.toLong())
+
 enum class ManeuverType {
     STRAIGHT,       // 直進・道なり
     TURN_RIGHT,     // 右折
@@ -314,7 +330,7 @@ fun evaluateRoadTurnByTurn(
         title = "道なりに進む"
     }
 
-    val subtitle = "${destName}方面 · 残り${distShortHelper(totalRemaining)} · 約${remMin}分"
+    val subtitle = "${destName}方面 · 残り${distShortHelper(totalRemaining)} · 約${formatDurationHoursMinutes(remMin)}"
 
     return RoadGuidanceInfo(
         maneuver = turnManeuver,
@@ -385,7 +401,7 @@ fun computeInitialGuidance(itin: Itinerary, travelMode: TravelMode, location: Lo
         return Guidance(
             kind = modeKind,
             title = "${destName}へ",
-            subtitle = "$modeVerb · ${destName}方面 · 約${totalMin}分",
+            subtitle = "$modeVerb · ${destName}方面 · 約${formatDurationHoursMinutes(totalMin)}",
             distanceMeters = d,
             targetLat = destPoint?.first,
             targetLon = destPoint?.second,
@@ -417,7 +433,7 @@ fun computeInitialGuidance(itin: Itinerary, travelMode: TravelMode, location: Lo
         return Guidance(
             kind = GuidanceKind.WALK,
             title = "${firstLeg.toName}へ",
-            subtitle = "徒歩で向かう · 約${firstLeg.walkMinutes}分",
+            subtitle = "徒歩で向かう · 約${formatDurationHoursMinutes(firstLeg.walkMinutes)}",
             distanceMeters = d,
             targetLat = targetPoint?.first,
             targetLon = targetPoint?.second,
@@ -900,7 +916,7 @@ class NavigationService : Service() {
             NavigationState.guidance = Guidance(
                 kind = modeKind,
                 title = "${destName}へ",
-                subtitle = "$modeVerb · ${destName}方面 · 約${totalMin}分",
+                subtitle = "$modeVerb · ${destName}方面 · 約${formatDurationHoursMinutes(totalMin)}",
                 distanceMeters = d,
                 targetLat = destPoint.first,
                 targetLon = destPoint.second,
@@ -949,7 +965,7 @@ class NavigationService : Service() {
                 return
             }
             NavigationState.guidance = Guidance(
-                GuidanceKind.WALK, "${tail.toName}へ", "徒歩で向かう · 約${tail.walkMinutes}分",
+                GuidanceKind.WALK, "${tail.toName}へ", "徒歩で向かう · 約${formatDurationHoursMinutes(tail.walkMinutes)}",
                 d, dest.first, dest.second, "その後、目的地に到着", remaining, r.arrival
             )
             showStatus("徒歩で${tail.toName}へ", "目的地まで${distShort(d)}")

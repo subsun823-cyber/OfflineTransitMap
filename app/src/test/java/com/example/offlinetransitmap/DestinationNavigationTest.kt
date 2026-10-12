@@ -368,5 +368,22 @@ class DestinationNavigationTest {
         assertTrue("ルートから60m離れたらオフコースと判定されること", infoOffRoute.isOffCourse)
         assertTrue("distToPathMetersが正しく記録されていること: ${infoOffRoute.distToPathMeters}", infoOffRoute.distToPathMeters >= 55.0)
     }
+
+    @Test
+    fun testFormatDurationHoursMinutes() {
+        assertEquals("今すぐ", formatDurationHoursMinutes(0L))
+        assertEquals("1分", formatDurationHoursMinutes(1L))
+        assertEquals("15分", formatDurationHoursMinutes(15L))
+        assertEquals("59分", formatDurationHoursMinutes(59L))
+        assertEquals("1時間", formatDurationHoursMinutes(60L))
+        assertEquals("1時間1分", formatDurationHoursMinutes(61L))
+        assertEquals("1時間15分", formatDurationHoursMinutes(75L))
+        assertEquals("2時間", formatDurationHoursMinutes(120L))
+        assertEquals("2時間25分", formatDurationHoursMinutes(145L))
+
+        // Int 版オーバーロード
+        assertEquals("45分", formatDurationHoursMinutes(45))
+        assertEquals("1時間30分", formatDurationHoursMinutes(90))
+    }
 }
 
