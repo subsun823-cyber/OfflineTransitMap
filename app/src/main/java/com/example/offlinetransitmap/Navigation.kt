@@ -418,6 +418,37 @@ fun computeInitialGuidance(itin: Itinerary, travelMode: TravelMode, location: Lo
         val nextIdx = busIdx.firstOrNull()
         val nextLeg = if (nextIdx != null) legs[nextIdx] else null
         val targetPoint = firstLeg.path.lastOrNull()
+        val isBike = travelMode == TravelMode.BICYCLE || firstLeg.lineName == "自転車"
+        val nextText = if (nextLeg != null && nextLeg.depTime != null) {
+            "その後、${hm(nextLeg.depTime)}発 ${nextLeg.lineName} に乗車"
+        } else {
+            "その後、乗換"
+        }
+
+        if (location != null && firstLeg.path.size >= 2) {
+            val roadInfo = evaluateRoadTurnByTurn(
+                path = firstLeg.path,
+                curLat = location.latitude,
+                curLon = location.longitude,
+                destName = firstLeg.toName,
+                isBike = isBike,
+                scheduledArrival = nextLeg?.depTime ?: itin.arrival
+            )
+            return Guidance(
+                kind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK,
+                title = roadInfo.title,
+                subtitle = roadInfo.subtitle,
+                distanceMeters = roadInfo.distToManeuver,
+                targetLat = roadInfo.targetLat,
+                targetLon = roadInfo.targetLon,
+                next = nextText,
+                remainingMinutes = remaining,
+                arrival = itin.arrival,
+                maneuver = roadInfo.maneuver,
+                remainingRoadMeters = roadInfo.totalRemainingMeters
+            )
+        }
+
         val d: Int? = if (location != null && targetPoint != null) {
             val r = FloatArray(1)
             Location.distanceBetween(location.latitude, location.longitude, targetPoint.first, targetPoint.second, r)
@@ -425,21 +456,19 @@ fun computeInitialGuidance(itin: Itinerary, travelMode: TravelMode, location: Lo
         } else {
             firstLeg.walkMeters.takeIf { it > 0 }
         }
-        val nextText = if (nextLeg != null && nextLeg.depTime != null) {
-            "その後、${hm(nextLeg.depTime)}発 ${nextLeg.lineName} に乗車"
-        } else {
-            "その後、乗換"
-        }
+        val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
         return Guidance(
-            kind = GuidanceKind.WALK,
+            kind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK,
             title = "${firstLeg.toName}へ",
-            subtitle = "徒歩で向かう · 約${formatDurationHoursMinutes(firstLeg.walkMinutes)}",
+            subtitle = "$modeVerb · 約${formatDurationHoursMinutes(firstLeg.walkMinutes)}",
             distanceMeters = d,
             targetLat = targetPoint?.first,
             targetLon = targetPoint?.second,
             next = nextText,
             remainingMinutes = remaining,
-            arrival = itin.arrival
+            arrival = itin.arrival,
+            maneuver = ManeuverType.STRAIGHT,
+            remainingRoadMeters = firstLeg.walkMeters
         )
     }
 
@@ -534,7 +563,8 @@ class NavigationService : Service() {
         destPoint: Pair<Double, Double>,
         destName: String,
         isBike: Boolean,
-        currentItin: Itinerary
+        currentItin: Itinerary,
+        legIndexToUpdate: Int = 0
     ) {
         if (isReroutingInProgress) return
         val nowMs = System.currentTimeMillis()
@@ -567,10 +597,16 @@ class NavigationService : Service() {
                             trainType = modeLabel,
                             path = roadRes.path
                         )
+                        val newLegs = currentItin.legs.toMutableList()
+                        if (legIndexToUpdate in newLegs.indices) {
+                            newLegs[legIndexToUpdate] = updatedLeg
+                        } else {
+                            newLegs.add(updatedLeg)
+                        }
                         val now = LocalDateTime.now()
                         val updatedItin = currentItin.copy(
-                            legs = listOf(updatedLeg),
-                            arrival = now.plusMinutes(roadRes.durationMinutes.toLong()),
+                            legs = newLegs,
+                            arrival = if (newLegs.size == 1) now.plusMinutes(roadRes.durationMinutes.toLong()) else currentItin.arrival,
                             routeKey = if (isBike) "bike_direct" else "walk_direct"
                         )
                         route = updatedItin
@@ -950,25 +986,102 @@ class NavigationService : Service() {
             break
         }
 
-        // すべてのバスを降りたあと
+        // すべてのバス・電車を降りたあと (降車駅から最終目的地への徒歩/自転車区間)
         if (cur == -1) {
-            val tail = legs.getOrNull(busIdx.last() + 1)
+            val tailIndex = busIdx.last() + 1
+            val tail = legs.getOrNull(tailIndex)
             val dest = tail?.path?.lastOrNull()
             if (tail == null || dest == null) {
                 stopSelf()
                 return
             }
             val d = distanceTo(dest)
+            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || tail.lineName == "自転車"
+            val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
+
+            // 目的地への道なりターンバイターン案内
+            if (lastLocation != null && tail.path.size >= 2) {
+                val curLat = lastLocation!!.latitude
+                val curLon = lastLocation!!.longitude
+
+                val roadInfo = evaluateRoadTurnByTurn(
+                    path = tail.path,
+                    curLat = curLat,
+                    curLon = curLon,
+                    destName = tail.toName,
+                    isBike = isBike,
+                    scheduledArrival = r.arrival
+                )
+                NavigationState.remainingPath = roadInfo.remainingPath
+
+                // 到着判定
+                if (roadInfo.totalRemainingMeters <= ARRIVE_WALK_M || (d != null && d <= ARRIVE_WALK_M) || now.isAfter(r.arrival.plusMinutes(10))) {
+                    alert("arrive", "到着しました", "${tail.toName}に到着しました")
+                    stopSelf()
+                    return
+                }
+
+                // ルート離脱（オフコース）検知時に自動リルート
+                if (roadInfo.isOffCourse) {
+                    triggerReroute(
+                        curLat = curLat,
+                        curLon = curLon,
+                        destPoint = dest,
+                        destName = tail.toName,
+                        isBike = isBike,
+                        currentItin = r,
+                        legIndexToUpdate = tailIndex
+                    )
+                }
+
+                // 曲がり角接近アラート（50m以内）
+                if (roadInfo.maneuver != ManeuverType.STRAIGHT && roadInfo.maneuver != ManeuverType.ARRIVE && roadInfo.distToManeuver <= 50) {
+                    val alertKey = "turn_${String.format("%.4f", roadInfo.targetLat)}_${String.format("%.4f", roadInfo.targetLon)}"
+                    alert(alertKey, roadInfo.title, "${tail.toName}方面へ")
+                } else if (roadInfo.distToManeuver > 70 || roadInfo.maneuver == ManeuverType.STRAIGHT) {
+                    dismissAlert()
+                }
+
+                val title = if (NavigationState.isRerouting) "ルートを再探索中..." else roadInfo.title
+                val subtitle = if (NavigationState.isRerouting) "最適なルートを計算しています" else roadInfo.subtitle
+
+                NavigationState.guidance = Guidance(
+                    kind = modeKind,
+                    title = title,
+                    subtitle = subtitle,
+                    distanceMeters = roadInfo.distToManeuver,
+                    targetLat = roadInfo.targetLat,
+                    targetLon = roadInfo.targetLon,
+                    next = "目的地に到着",
+                    remainingMinutes = roadInfo.remainingMinutes,
+                    arrival = roadInfo.arrivalTime,
+                    maneuver = if (NavigationState.isRerouting) ManeuverType.STRAIGHT else roadInfo.maneuver,
+                    remainingRoadMeters = roadInfo.totalRemainingMeters
+                )
+                showStatus(title, "$subtitle (残り${distShort(roadInfo.totalRemainingMeters)})")
+                return
+            }
+
             if ((d != null && d <= ARRIVE_WALK_M) || now.isAfter(r.arrival.plusMinutes(10))) {
                 alert("arrive", "到着しました", "${tail.toName}(目的地)に到着しました")
                 stopSelf()
                 return
             }
+            val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
             NavigationState.guidance = Guidance(
-                GuidanceKind.WALK, "${tail.toName}へ", "徒歩で向かう · 約${formatDurationHoursMinutes(tail.walkMinutes)}",
-                d, dest.first, dest.second, "その後、目的地に到着", remaining, r.arrival
+                kind = modeKind,
+                title = "${tail.toName}へ",
+                subtitle = "$modeVerb · 約${formatDurationHoursMinutes(tail.walkMinutes)}",
+                distanceMeters = d,
+                targetLat = dest.first,
+                targetLon = dest.second,
+                next = "その後、目的地に到着",
+                remainingMinutes = remaining,
+                arrival = r.arrival,
+                maneuver = ManeuverType.STRAIGHT,
+                remainingRoadMeters = tail.walkMeters
             )
-            showStatus("徒歩で${tail.toName}へ", "目的地まで${distShort(d)}")
+            showStatus(if (isBike) "自転車で${tail.toName}へ" else "徒歩で${tail.toName}へ", "目的地まで${distShort(d)}")
             return
         }
 
@@ -980,7 +1093,7 @@ class NavigationService : Service() {
         val alightPoint = leg.path.lastOrNull()
 
         if (now.isBefore(dep)) {
-            // 乗る前
+            // 乗る前 (乗車駅へ徒歩/自転車で向かう、または駅構内で乗車待ち)
             val sec = Duration.between(now, dep).seconds
             val platform = if (leg.platform.isBlank()) "" else "(${leg.platform})"
             val boardDist = distanceTo(boardPoint)
@@ -990,17 +1103,100 @@ class NavigationService : Service() {
             } else if (sec <= 300) {
                 alert("board5_$cur", "乗車まであと${minutesCeil(sec)}分", "${hm(dep)}発 $head / ${leg.fromName}$platform")
             }
+
+            val walkLegIndex = if (cur == 0) legs.indexOfFirst { it.isWalk } else busIdx[cur] - 1
+            val walkLeg = if (walkLegIndex >= 0) legs.getOrNull(walkLegIndex) else null
+            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || walkLeg?.lineName == "自転車"
+            val modeKind = if (isBike) GuidanceKind.BICYCLE else GuidanceKind.WALK
+
+            // 駅まで離れており、駅へのアクセスパスが存在する場合はターンバイターン道路案内
             if (boardPoint != null && boardDist != null && boardDist > APPROACH_M) {
+                if (lastLocation != null && walkLeg != null && walkLeg.isWalk && walkLeg.path.size >= 2) {
+                    val curLat = lastLocation!!.latitude
+                    val curLon = lastLocation!!.longitude
+
+                    val roadInfo = evaluateRoadTurnByTurn(
+                        path = walkLeg.path,
+                        curLat = curLat,
+                        curLon = curLon,
+                        destName = leg.fromName,
+                        isBike = isBike,
+                        scheduledArrival = dep
+                    )
+                    NavigationState.remainingPath = roadInfo.remainingPath
+
+                    // 駅へのアプローチ中に離脱した場合のリルート
+                    if (roadInfo.isOffCourse) {
+                        triggerReroute(
+                            curLat = curLat,
+                            curLon = curLon,
+                            destPoint = boardPoint,
+                            destName = leg.fromName,
+                            isBike = isBike,
+                            currentItin = r,
+                            legIndexToUpdate = walkLegIndex
+                        )
+                    }
+
+                    // 曲がり角接近アラート（50m以内）
+                    if (roadInfo.maneuver != ManeuverType.STRAIGHT && roadInfo.maneuver != ManeuverType.ARRIVE && roadInfo.distToManeuver <= 50) {
+                        val alertKey = "turn_${String.format("%.4f", roadInfo.targetLat)}_${String.format("%.4f", roadInfo.targetLon)}"
+                        alert(alertKey, roadInfo.title, "${leg.fromName}方面へ")
+                    } else if (roadInfo.distToManeuver > 70 || roadInfo.maneuver == ManeuverType.STRAIGHT) {
+                        dismissAlert()
+                    }
+
+                    val title = if (NavigationState.isRerouting) "ルートを再探索中..." else roadInfo.title
+                    val subtitle = if (NavigationState.isRerouting) "乗車駅へのルートを計算しています" else "${leg.fromName}方面 · ${hm(dep)}発 $head$platform"
+
+                    NavigationState.guidance = Guidance(
+                        kind = modeKind,
+                        title = title,
+                        subtitle = subtitle,
+                        distanceMeters = roadInfo.distToManeuver,
+                        targetLat = roadInfo.targetLat,
+                        targetLon = roadInfo.targetLon,
+                        next = "その後、${hm(dep)}発 ${leg.lineName} に乗車",
+                        remainingMinutes = remaining,
+                        arrival = r.arrival,
+                        maneuver = if (NavigationState.isRerouting) ManeuverType.STRAIGHT else roadInfo.maneuver,
+                        remainingRoadMeters = roadInfo.totalRemainingMeters
+                    )
+                    showStatus(
+                        title,
+                        "${hm(dep)}発 $head$platform (乗車駅まで残り${distShort(roadInfo.totalRemainingMeters)})"
+                    )
+                    return
+                }
+
+                // 道路パス未取得時などのフォールバック
+                val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
                 NavigationState.guidance = Guidance(
-                    GuidanceKind.WALK, "${leg.fromName}へ", "徒歩で向かう · ${hm(dep)}発 $head$platform",
-                    boardDist, boardPoint.first, boardPoint.second,
-                    "その後、${hm(dep)}発 ${leg.lineName} に乗車", remaining, r.arrival
+                    kind = modeKind,
+                    title = "${leg.fromName}へ",
+                    subtitle = "$modeVerb · ${hm(dep)}発 $head$platform",
+                    distanceMeters = boardDist,
+                    targetLat = boardPoint.first,
+                    targetLon = boardPoint.second,
+                    next = "その後、${hm(dep)}発 ${leg.lineName} に乗車",
+                    remainingMinutes = remaining,
+                    arrival = r.arrival,
+                    maneuver = ManeuverType.STRAIGHT,
+                    remainingRoadMeters = boardDist
                 )
             } else {
+                // 駅ホームまたは乗り場に到着（乗車待ち）
                 NavigationState.guidance = Guidance(
-                    GuidanceKind.WAIT, "${leg.fromName}で乗車待ち",
-                    "${hm(dep)}発 $head$platform · あと${minutesCeil(sec)}分",
-                    null, null, null, "その後、${leg.toName}で降車(${hm(arr)}着)", remaining, r.arrival
+                    kind = GuidanceKind.WAIT,
+                    title = "${leg.fromName}で乗車待ち",
+                    subtitle = "${hm(dep)}発 $head$platform · あと${minutesCeil(sec)}分",
+                    distanceMeters = null,
+                    targetLat = null,
+                    targetLon = null,
+                    next = "その後、${leg.toName}で降車(${hm(arr)}着)",
+                    remainingMinutes = remaining,
+                    arrival = r.arrival,
+                    maneuver = ManeuverType.STRAIGHT
                 )
             }
             showStatus(

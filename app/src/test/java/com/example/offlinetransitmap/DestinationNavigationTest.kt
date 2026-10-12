@@ -385,5 +385,52 @@ class DestinationNavigationTest {
         assertEquals("45分", formatDurationHoursMinutes(45))
         assertEquals("1時間30分", formatDurationHoursMinutes(90))
     }
+
+    @Test
+    fun testMultiModalInitialGuidance() {
+        val now = LocalDateTime.now().plusMinutes(30)
+        val walkLeg = RouteLeg(
+            isWalk = true,
+            fromName = "現在地",
+            toName = "新宿駅",
+            walkMinutes = 5,
+            walkMeters = 400,
+            path = listOf(
+                Pair(35.6896, 139.7006),
+                Pair(35.6900, 139.7006),
+                Pair(35.6910, 139.7006)
+            )
+        )
+        val trainLeg = RouteLeg(
+            isWalk = false,
+            fromName = "新宿駅",
+            toName = "越生駅",
+            depTime = now.minusMinutes(25),
+            arrTime = now,
+            lineName = "JR八高線",
+            path = listOf(
+                Pair(35.6910, 139.7006),
+                Pair(35.9628, 139.2990)
+            )
+        )
+        val itin = Itinerary(
+            legs = listOf(walkLeg, trainLeg),
+            departure = now.minusMinutes(30),
+            arrival = now,
+            transfers = 0,
+            fare = 800,
+            knownFare = 800,
+            routeKey = "transit_hybrid"
+        )
+
+        // 初期ガイダンス評価 (徒歩フェーズ)
+        val guidance = computeInitialGuidance(itin, TravelMode.WALK, null)
+
+        // 電車旅程であっても、最初の徒歩レグ中はターンバイターン (WALK) が案内されること
+        assertEquals(GuidanceKind.WALK, guidance.kind)
+        assertEquals("新宿駅へ", guidance.title)
+        assertTrue("徒歩案内であること: ${guidance.subtitle}", guidance.subtitle.contains("徒歩で向かう"))
+        assertTrue("次の電車乗車予定が含まれていること: ${guidance.next}", guidance.next.contains("JR八高線 に乗車"))
+    }
 }
 

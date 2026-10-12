@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import java.time.LocalDateTime
 
 // 現在地から目標までの、地図に引く点線(GeoJSON)
 fun navLineGeoJson(loc: Location?, g: Guidance?): String? {
@@ -719,7 +720,11 @@ private fun TrainLcdTopCard(
     modifier: Modifier = Modifier
 ) {
     val legs = itinerary?.legs ?: emptyList()
-    val trainLeg = legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
+    val now = LocalDateTime.now()
+    val trainLeg = legs.firstOrNull { leg ->
+        !leg.isWalk && leg.lineName != "自転車" &&
+        (leg.arrTime == null || now.isBefore(leg.arrTime.plusMinutes(2)))
+    } ?: legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
     val lineColor = if (trainLeg != null && trainLeg.lineColor != 0L) Color(trainLeg.lineColor) else Color(0xFFF15A22)
     val lineName = trainLeg?.lineName ?: "電車"
     val trainType = trainLeg?.trainType?.ifBlank { "各停" } ?: "普通"
@@ -960,7 +965,11 @@ private fun TrainCabSpeedometer(
     modifier: Modifier = Modifier
 ) {
     val legs = itinerary?.legs ?: emptyList()
-    val trainLeg = legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
+    val now = LocalDateTime.now()
+    val trainLeg = legs.firstOrNull { leg ->
+        !leg.isWalk && leg.lineName != "自転車" &&
+        (leg.arrTime == null || now.isBefore(leg.arrTime.plusMinutes(2)))
+    } ?: legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
     val trainType = trainLeg?.trainType?.ifBlank { "快速" } ?: "快速"
 
     val animatedSpeed by animateFloatAsState(
@@ -1278,15 +1287,11 @@ fun NavigationOverlay(
     }
     val hasGps = location != null
 
-    // 電車ルートの案内中かどうか判定
-    val isTrainNav = guidance?.kind == GuidanceKind.RIDE ||
-            guidance?.kind == GuidanceKind.WAIT ||
-            (NavigationState.itinerary != null &&
-                    NavigationState.itinerary?.legs?.any { !it.isWalk && it.lineName != "自転車" } == true &&
-                    guidance?.kind != GuidanceKind.BICYCLE)
+    // 電車・バス乗車中または駅で待機中かどうか判定（トレインビジョンや鉄道計器の表示対象）
+    val isTrainLcdMode = guidance?.kind == GuidanceKind.RIDE || guidance?.kind == GuidanceKind.WAIT
 
     Box(modifier = modifier.fillMaxSize()) {
-        // 上部: 案内カード (電車モード時はトレインビジョン、道路ナビ時はターンバイターン)
+        // 上部: 案内カード (電車乗車・待機時はトレインビジョン/発車標、徒歩・自転車移動時はターンバイターン案内)
         Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -1294,7 +1299,7 @@ fun NavigationOverlay(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (isTrainNav) {
+            if (isTrainLcdMode) {
                 TrainLcdTopCard(
                     guidance = guidance,
                     itinerary = NavigationState.itinerary
@@ -1361,8 +1366,8 @@ fun NavigationOverlay(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 左下: 電車モードなら鉄道運転台計器、通常なら車のナビ風速度計
-                if (isTrainNav) {
+                // 左下: 電車乗車・待機中なら鉄道運転台計器、徒歩・自転車移動中はナビ風速度計
+                if (isTrainLcdMode) {
                     TrainCabSpeedometer(
                         speedKmh = speedKmh,
                         hasGps = hasGps,
@@ -1406,8 +1411,8 @@ fun NavigationOverlay(
                 }
             }
 
-            // 最下部: 電車モードなら鉄道ダッシュボード、通常なら自動車ナビ風ダッシュボードバー
-            if (isTrainNav) {
+            // 最下部: 電車乗車・待機中なら鉄道ダッシュボード、徒歩・自転車移動中はナビゲーションダッシュボード
+            if (isTrainLcdMode) {
                 TrainBottomDashboard(
                     guidance = guidance,
                     itinerary = NavigationState.itinerary,
