@@ -55,8 +55,9 @@ object TrainPhotoResolver {
             // 南武線: E233系8000番台
             lineLower.contains("南武") -> "nambu"
 
-            // 総武快速線 / 横須賀線: E235系1000番台
-            lineLower.contains("総武快速") || lineLower.contains("総武線快速") ||
+            // 総武本線 / 総武快速線 / 横須賀線: E235系1000番台
+            lineLower.contains("総武本線") || lineLower.contains("総武快速") ||
+                    lineLower.contains("総武線快速") ||
                     (lineLower.contains("総武") && lineLower.contains("快速")) ||
                     lineLower.contains("横須賀") -> "sobu_rapid"
 
@@ -67,7 +68,20 @@ object TrainPhotoResolver {
             lineLower.contains("京葉") -> "keiyo"
 
             // 常磐緩行線 (各駅停車): E233系2000番台
-            lineLower.contains("常磐") && (lineLower.contains("各駅") || lineLower.contains("緩行") || !lineLower.contains("快速")) -> "joban_local"
+            lineLower.contains("常磐") && (lineLower.contains("各駅") || lineLower.contains("緩行") || lineLower.contains("各停")) -> "joban_local"
+
+            // 常磐快速線 / 成田線我孫子支線: E231系0番台 (緑快速)
+            (lineLower.contains("常磐") && lineLower.contains("快速")) ||
+                    (lineLower.contains("成田") && (
+                            lineLower.contains("我孫子") || stationLower.contains("我孫子") ||
+                            stationLower.contains("東我孫子") || stationLower.contains("湖北") ||
+                            stationLower.contains("新木") || stationLower.contains("布佐") ||
+                            stationLower.contains("木下") || stationLower.contains("小林") ||
+                            stationLower.contains("安食") || stationLower.contains("下総松崎")
+                    )) -> "joban_rapid_e231"
+
+            // 常磐線 (中距離・本線): E531系
+            lineLower.contains("常磐") -> "joban_e531"
 
             // 八高線: E231系3000番台
             lineLower.contains("八高") -> "hachiko"
@@ -75,10 +89,9 @@ object TrainPhotoResolver {
             // 武蔵野線: E231系0番台 (武蔵野線向け)
             lineLower.contains("武蔵野") -> "musashino"
 
-            // 房総各線 (総武本線・内房線・外房線・成田線・東金線): 209系2000番台
-            lineLower.contains("総武本線") || lineLower.contains("内房") ||
-                    lineLower.contains("外房") || lineLower.contains("成田") ||
-                    lineLower.contains("東金") -> "boso_209"
+            // 房総各線 (内房線・外房線・成田線本線・東金線): 209系2000番台 (※総武本線は除外済み)
+            lineLower.contains("内房") || lineLower.contains("外房") ||
+                    lineLower.contains("成田") || lineLower.contains("東金") -> "boso_209"
 
             // JR 中央線・青梅線・五日市線: E233系0番台
             lineLower.contains("中央") || lineLower.contains("青梅") || lineLower.contains("五日市") -> "chuo"

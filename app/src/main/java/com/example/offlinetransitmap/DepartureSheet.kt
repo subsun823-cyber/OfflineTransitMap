@@ -28,15 +28,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -134,9 +137,11 @@ fun DepartureSheet(
     }
 
     val baseSurface = MaterialTheme.colorScheme.surface
-    // 路線カラーが存在する場合、ほんの少し（約8%）路線カラーに寄せる
+    val isDark = baseSurface.luminance() < 0.5f
+    // 路線カラーが存在する場合、ほんの少し路線カラーに寄せる
     val tintedSurface = if (photoKey != null && targetLineColor != null && targetLineColor != 0L) {
-        lerp(baseSurface, Color(targetLineColor), 0.08f)
+        val tintFactor = if (isDark) 0.06f else 0.08f
+        lerp(baseSurface, Color(targetLineColor), tintFactor)
     } else {
         baseSurface
     }
@@ -145,48 +150,55 @@ fun DepartureSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         sheetGesturesEnabled = false,
+        dragHandle = null,
         containerColor = if (photoKey != null) {
-            tintedSurface.copy(alpha = 0.90f)
+            tintedSurface.copy(alpha = if (isDark) 0.94f else 0.90f)
         } else {
-            MaterialTheme.colorScheme.surface
-        }
+            baseSurface
+        },
+        contentColor = MaterialTheme.colorScheme.onSurface
     ) {
-        Box(modifier = Modifier.fillMaxWidth()) {
-            // matchParentSize() を指定することで、Column の自然な高さを引き伸ばさず、
-            // バス停と全く同じ自然なシート面積（コンテンツに合わせた高さ）にする
-            TrainPhotoWatermark(
-                photoKey = photoKey,
-                modifier = Modifier.matchParentSize()
-            )
-
-            // さらにほんのり路線カラーを透かしの上にブレンド
-            if (photoKey != null && targetLineColor != null && targetLineColor != 0L) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(Color(targetLineColor).copy(alpha = 0.04f))
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+            Box(modifier = Modifier.fillMaxWidth()) {
+                // matchParentSize() を指定することで、Column の自然な高さを引き伸ばさず、
+                // 最上部の閉じるバーから最下部まで写真背景をぴったり適用する
+                TrainPhotoWatermark(
+                    photoKey = photoKey,
+                    modifier = Modifier.matchParentSize()
                 )
-            }
 
-            Column(modifier = Modifier.fillMaxWidth()) {
-                // 詳細表示中の「戻る」操作は、シートを閉じずに一覧へ戻る
-                BackHandler(enabled = selected != null) { selected = null }
-
-                val detail = selected
-                if (detail == null) {
-                    Text(
-                        text = stationName,
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                // さらにほんのり路線カラーを透かしの上にブレンド
+                if (photoKey != null && targetLineColor != null && targetLineColor != 0L) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(Color(targetLineColor).copy(alpha = 0.04f))
                     )
-                    if (note != null) {
+                }
+
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // 最上部にドラッグハンドル（閉じるバー）を配置。写真画像がバーの背後まで完全に広がる
+                    BottomSheetDefaults.DragHandle()
+
+                    // 詳細表示中の「戻る」操作は、シートを閉じずに一覧へ戻る
+                    BackHandler(enabled = selected != null) { selected = null }
+
+                    val detail = selected
+                    if (detail == null) {
                         Text(
-                            text = note,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 24.dp)
+                            text = stationName,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
                         )
-                    }
+                        if (note != null) {
+                            Text(
+                                text = note,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 24.dp)
+                            )
+                        }
 
                     // 複数路線が乗り入れている駅のみ路線選択チップを表示(単独駅やバス停は今まで通り非表示)
                     if (railLines.size >= 2) {
@@ -298,6 +310,7 @@ fun DepartureSheet(
         }
     }
 }
+}
 
 @Composable
 private fun DateHeader(label: String) {
@@ -345,11 +358,12 @@ private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
         val shortType = cleanTrainType(d.trainType)
         if (shortType.isNotBlank()) {
             Spacer(Modifier.width(6.dp))
+            val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
             Text(
                 text = shortType,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
+                color = if (isDark) Color(0xFF64B5F6) else MaterialTheme.colorScheme.primary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -358,6 +372,7 @@ private fun LineTitle(d: Departure, modifier: Modifier = Modifier) {
         Text(
             text = d.headsign + if (d.isBus || d.tripNo != 0L) "行き" else "方面",
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false)
@@ -468,13 +483,13 @@ fun DepartureRow(d: Departure, minutes: Long, onClick: (() -> Unit)? = null) {
         Column(horizontalAlignment = Alignment.End) {
             if (within1Hour) {
                 if (minutes <= 0) {
-                    Text("今すぐ", style = MaterialTheme.typography.titleMedium)
+                    Text("今すぐ", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 } else {
-                    Text("$minutes", style = MaterialTheme.typography.titleLarge)
-                    Text("分後", style = MaterialTheme.typography.labelSmall)
+                    Text("$minutes", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                    Text("分後", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
-                Text(formatTime(d.time), style = MaterialTheme.typography.titleLarge)
+                Text(formatTime(d.time), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
             }
         }
     }
