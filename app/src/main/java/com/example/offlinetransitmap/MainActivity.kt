@@ -326,7 +326,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         val mode = pendingNavMode
         pendingNavItinerary = null
         if (granted && itin != null) {
-            NavigationController.start(context, itin, mode)
+            runCatching {
+                NavigationController.start(context, itin, mode)
+            }.onFailure {
+                Toast.makeText(context, "ナビを開始できませんでした", Toast.LENGTH_SHORT).show()
+            }
         } else {
             Toast.makeText(context, "通知が許可されていないため、ナビを開始できません", Toast.LENGTH_LONG).show()
         }
@@ -349,7 +353,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             pendingNavMode = effectiveMode
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            NavigationController.start(context, itin, effectiveMode)
+            runCatching {
+                NavigationController.start(context, itin, effectiveMode)
+            }.onFailure {
+                Toast.makeText(context, "ナビを開始できませんでした", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 

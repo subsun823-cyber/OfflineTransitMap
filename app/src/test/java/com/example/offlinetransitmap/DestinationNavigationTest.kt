@@ -452,5 +452,80 @@ class DestinationNavigationTest {
         assertTrue(modes.contains("BICYCLE"))
         assertTrue(modes.contains("TRANSIT"))
     }
+
+    @Test
+    fun testComputeInitialGuidanceRobustness() {
+        val now = LocalDateTime.now()
+        // 1. 空の legs
+        val emptyItin = Itinerary(
+            legs = emptyList(),
+            departure = now,
+            arrival = now.plusMinutes(10),
+            transfers = 0,
+            fare = 0,
+            knownFare = 0,
+            routeKey = "walk_direct"
+        )
+        val g1 = computeInitialGuidance(emptyItin, TravelMode.WALK, null)
+        assertTrue(g1.title.isNotEmpty())
+
+        // 2. path が空の leg
+        val noPathLeg = RouteLeg(
+            isWalk = true,
+            fromName = "A",
+            toName = "B",
+            walkMinutes = 5,
+            walkMeters = 300,
+            path = emptyList()
+        )
+        val noPathItin = Itinerary(
+            legs = listOf(noPathLeg),
+            departure = now,
+            arrival = now.plusMinutes(5),
+            transfers = 0,
+            fare = 0,
+            knownFare = 0,
+            routeKey = "walk_direct"
+        )
+        val g2 = computeInitialGuidance(noPathItin, TravelMode.WALK, null)
+        assertEquals("Bへ", g2.title)
+
+        // 3. 1要素のみの path
+        val singlePointLeg = RouteLeg(
+            isWalk = true,
+            fromName = "A",
+            toName = "B",
+            walkMinutes = 1,
+            walkMeters = 0,
+            path = listOf(Pair(35.68, 139.70))
+        )
+        val singlePointItin = Itinerary(
+            legs = listOf(singlePointLeg),
+            departure = now,
+            arrival = now.plusMinutes(1),
+            transfers = 0,
+            fare = 0,
+            knownFare = 0,
+            routeKey = "walk_direct"
+        )
+        val g3 = computeInitialGuidance(singlePointItin, TravelMode.WALK, null)
+        assertEquals("Bへ", g3.title)
+    }
+
+    @Test
+    fun testEvaluateRoadTurnByTurnRobustness() {
+        val now = LocalDateTime.now()
+        // 空パス
+        val r0 = evaluateRoadTurnByTurn(emptyList(), 35.68, 139.70, "目標", false, now)
+        assertEquals("道なりに進む", r0.title)
+
+        // 1点パス
+        val r1 = evaluateRoadTurnByTurn(listOf(Pair(35.68, 139.70)), 35.68, 139.70, "目標", false, now)
+        assertTrue(r1.title.isNotEmpty())
+
+        // 2点パス
+        val r2 = evaluateRoadTurnByTurn(listOf(Pair(35.68, 139.70), Pair(35.69, 139.71)), 35.68, 139.70, "目標", false, now)
+        assertTrue(r2.title.isNotEmpty())
+    }
 }
 

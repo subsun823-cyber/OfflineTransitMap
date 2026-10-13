@@ -405,51 +405,81 @@ fun MapLibreMapView(
             return@LaunchedEffect
         }
         if (followMode) {
-            map.locationComponent.cameraMode = CameraMode.TRACKING_COMPASS
-            map.locationComponent.zoomWhileTracking(17.0)
+            val success = runCatching {
+                map.locationComponent.cameraMode = CameraMode.TRACKING_COMPASS
+                map.locationComponent.zoomWhileTracking(17.0)
+            }.isSuccess
+            if (!success) {
+                runCatching {
+                    map.locationComponent.cameraMode = CameraMode.TRACKING
+                    map.locationComponent.zoomWhileTracking(17.0)
+                }
+            }
             return@LaunchedEffect
         }
-        val loc = map.locationComponent.lastKnownLocation ?: return@LaunchedEffect
-        map.animateCamera(
-            CameraUpdateFactory.newLatLngZoom(
-                LatLng(loc.latitude, loc.longitude),
-                maxOf(map.cameraPosition.zoom, START_ZOOM)
-            ),
-            800
-        )
+        val loc = runCatching { map.locationComponent.lastKnownLocation }.getOrNull() ?: return@LaunchedEffect
+        runCatching {
+            map.animateCamera(
+                CameraUpdateFactory.newLatLngZoom(
+                    LatLng(loc.latitude, loc.longitude),
+                    maxOf(map.cameraPosition.zoom, START_ZOOM)
+                ),
+                800
+            )
+        }
     }
 
     // ナビ中: 進む向きが上になるように、現在地に追従させる
     var wasFollowing by remember { mutableStateOf(false) }
     LaunchedEffect(followMode, mapState, loadedStyle, locationGranted) {
         val map = mapState ?: return@LaunchedEffect
-        val density = context.resources.displayMetrics.density
-        // ナビ中は上部の経路案内カード(約150dp)の下にコンパスを退避させ、重なりを防止
-        val topMarginPx = (density * if (followMode) 165f else 72f).toInt()
-        val rightMarginPx = (density * 16f).toInt()
-        map.uiSettings.setCompassMargins(0, topMarginPx, rightMarginPx, 0)
+        runCatching {
+            val density = context.resources.displayMetrics.density
+            // ナビ中は上部の経路案内カード(約150dp)の下にコンパスを退避させ、重なりを防止
+            val topMarginPx = (density * if (followMode) 165f else 72f).toInt()
+            val rightMarginPx = (density * 16f).toInt()
+            map.uiSettings.setCompassMargins(0, topMarginPx, rightMarginPx, 0)
+        }
 
         val style = loadedStyle ?: return@LaunchedEffect
         if (!locationGranted) return@LaunchedEffect
-        enableLocationMarker(context, map, style)
+        runCatching { enableLocationMarker(context, map, style) }
         val lc = map.locationComponent
         if (followMode) {
             wasFollowing = true
-            lc.renderMode = RenderMode.COMPASS
-            lc.cameraMode = CameraMode.TRACKING_COMPASS
-            lc.zoomWhileTracking(17.0)
+            val compassSuccess = runCatching {
+                lc.renderMode = RenderMode.COMPASS
+                lc.cameraMode = CameraMode.TRACKING_COMPASS
+                lc.zoomWhileTracking(17.0)
+            }.isSuccess
+
+            if (!compassSuccess) {
+                // コンパスセンサー未搭載または位置情報待機中の場合は、通常の追従モードにフォールバック
+                runCatching {
+                    lc.renderMode = RenderMode.NORMAL
+                    lc.cameraMode = CameraMode.TRACKING
+                    lc.zoomWhileTracking(17.0)
+                }
+            }
+
             while (true) {
-                onFollowLostChange(lc.cameraMode == CameraMode.NONE)
-                onBearingChange(map.cameraPosition.bearing)
+                runCatching {
+                    onFollowLostChange(lc.cameraMode == CameraMode.NONE)
+                    onBearingChange(map.cameraPosition.bearing)
+                }
                 delay(300)
             }
         } else {
-            lc.renderMode = RenderMode.NORMAL
-            lc.cameraMode = CameraMode.NONE
+            runCatching {
+                lc.renderMode = RenderMode.NORMAL
+                lc.cameraMode = CameraMode.NONE
+            }
             onFollowLostChange(false)
             if (wasFollowing) {
                 wasFollowing = false
-                map.animateCamera(CameraUpdateFactory.bearingTo(0.0), 500)
+                runCatching {
+                    map.animateCamera(CameraUpdateFactory.bearingTo(0.0), 500)
+                }
             }
         }
     }

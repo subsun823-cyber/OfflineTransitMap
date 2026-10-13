@@ -498,7 +498,9 @@ fun computeInitialGuidance(itin: Itinerary, travelMode: TravelMode, location: Lo
 // ナビの開始・終了
 object NavigationController {
     fun start(context: Context, itin: Itinerary, travelMode: TravelMode = TravelMode.WALK) {
-        if (!itin.arrival.isAfter(LocalDateTime.now())) {
+        val now = LocalDateTime.now()
+        // 到着時刻が明らかに過去(30分以上前)の場合のみ警告
+        if (itin.arrival.isBefore(now.minusMinutes(30))) {
             Toast.makeText(context, "過去の経路ではナビを開始できません", Toast.LENGTH_LONG).show()
             return
         }
@@ -509,7 +511,20 @@ object NavigationController {
         }
         NavigationState.itinerary = itin
         NavigationState.travelMode = effectiveMode
-        val initGuidance = computeInitialGuidance(itin, effectiveMode, NavigationState.location)
+        val initGuidance = runCatching {
+            computeInitialGuidance(itin, effectiveMode, NavigationState.location)
+        }.getOrNull() ?: Guidance(
+            kind = if (effectiveMode == TravelMode.BICYCLE) GuidanceKind.BICYCLE else GuidanceKind.WALK,
+            title = "案内を開始しました",
+            subtitle = "目的地へ向かいます",
+            distanceMeters = null,
+            targetLat = null,
+            targetLon = null,
+            next = "目的地に到着",
+            remainingMinutes = 0,
+            arrival = itin.arrival,
+            maneuver = ManeuverType.STRAIGHT
+        )
         NavigationState.guidance = initGuidance
         NavigationState.remainingPath = itin.legs.flatMap { it.path }
         NavigationState.active = true
@@ -519,13 +534,12 @@ object NavigationController {
                 Intent(context, NavigationService::class.java)
             )
         } catch (e: Exception) {
-            NavigationState.active = false
-            Toast.makeText(context, "ナビを開始できませんでした", Toast.LENGTH_LONG).show()
+            // XiaomiなどのFGS制約でサービス起動が拒否されても、アプリ画面内ナビは継続できるようにする
         }
     }
 
     fun stop(context: Context) {
-        context.stopService(Intent(context, NavigationService::class.java))
+        runCatching { context.stopService(Intent(context, NavigationService::class.java)) }
         NavigationState.active = false
         NavigationState.guidance = null
         NavigationState.remainingPath = null
@@ -656,36 +670,42 @@ class NavigationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
+        try {
+            if (intent?.action == ACTION_STOP) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            val itin = NavigationState.itinerary
+            if (itin == null) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            route = itin
+            firedAlerts.clear()
+            finished.clear()
+            runCatching { createChannels() }
+            val isBike = NavigationState.travelMode == TravelMode.BICYCLE || itin.routeKey == "bike_direct" || itin.legs.any { it.lineName == "自転車" }
+            val destName = itin.legs.lastOrNull()?.toName ?: "目的地"
+            val statusTitle = if (isBike) "自転車で${destName}へ" else "徒歩で${destName}へ"
+            val initialNotif = runCatching { buildStatus(statusTitle, "案内を開始しました") }.getOrNull()
+            if (initialNotif != null) {
+                startAsForeground(initialNotif)
+            }
+            requestLocation()
+            runCatching { evaluate() }
+            handler.removeCallbacks(ticker)
+            handler.post(ticker)
+        } catch (e: Throwable) {
+            // プロセス強制終了を防止
             stopSelf()
-            return START_NOT_STICKY
         }
-        val itin = NavigationState.itinerary
-        if (itin == null) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        route = itin
-        firedAlerts.clear()
-        finished.clear()
-        createChannels()
-        val isBike = NavigationState.travelMode == TravelMode.BICYCLE || itin.routeKey == "bike_direct" || itin.legs.any { it.lineName == "自転車" }
-        val destName = itin.legs.lastOrNull()?.toName ?: "目的地"
-        val statusTitle = if (isBike) "自転車で${destName}へ" else "徒歩で${destName}へ"
-        startAsForeground(buildStatus(statusTitle, "案内を開始しました"))
-        requestLocation()
-        evaluate()
-        handler.removeCallbacks(ticker)
-        handler.post(ticker)
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
-        try {
-            (getSystemService(Context.LOCATION_SERVICE) as LocationManager).removeUpdates(listener)
-        } catch (e: Exception) {
-            // 何もしない
+        runCatching {
+            (getSystemService(Context.LOCATION_SERVICE) as? LocationManager)?.removeUpdates(listener)
         }
         dismissAlert()
         NavigationState.isRerouting = false
@@ -695,48 +715,64 @@ class NavigationService : Service() {
 
     private fun startAsForeground(n: Notification) {
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIF_STATUS, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            val success = runCatching {
+                startForeground(NOTIF_STATUS, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            }.isSuccess
+            if (!success) {
+                // FOREGROUND_SERVICE_TYPE_LOCATION で失敗した場合、標準ForegroundServiceにフォールバック
+                runCatching {
+                    startForeground(NOTIF_STATUS, n)
+                }
+            }
         } else {
-            startForeground(NOTIF_STATUS, n)
+            runCatching {
+                startForeground(NOTIF_STATUS, n)
+            }
         }
     }
 
     private fun createChannels() {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_STATUS, "ナビ(案内中の表示)", NotificationManager.IMPORTANCE_LOW)
-        )
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ALERT, "ナビ(お知らせ)", NotificationManager.IMPORTANCE_HIGH)
-        )
+        runCatching {
+            val nm = getSystemService(NotificationManager::class.java) ?: return
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_STATUS, "ナビ(案内中の表示)", NotificationManager.IMPORTANCE_LOW)
+            )
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ALERT, "ナビ(お知らせ)", NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun requestLocation() {
-        val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
+        val hasFine = ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val hasCoarse = ContextCompat.checkSelfPermission(this, android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (!hasFine && !hasCoarse) return
+
         try {
-            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                lm.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER, 3000L, 3f, listener, Looper.getMainLooper()
-                )
+            if (hasFine && lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                runCatching {
+                    lm.requestLocationUpdates(
+                        LocationManager.GPS_PROVIDER, 3000L, 3f, listener, Looper.getMainLooper()
+                    )
+                }
             }
             if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                lm.requestLocationUpdates(
-                    LocationManager.NETWORK_PROVIDER, 10000L, 20f, listener, Looper.getMainLooper()
-                )
+                runCatching {
+                    lm.requestLocationUpdates(
+                        LocationManager.NETWORK_PROVIDER, 10000L, 20f, listener, Looper.getMainLooper()
+                    )
+                }
             }
             // 最後に取得した位置があれば、最初の位置として使う
             for (p in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-                val l = try {
-                    lm.getLastKnownLocation(p)
-                } catch (e: Exception) {
-                    null
-                }
+                val l = runCatching { lm.getLastKnownLocation(p) }.getOrNull()
                 if (l != null && (lastLocation == null || l.time > lastLocation!!.time)) lastLocation = l
             }
             NavigationState.location = lastLocation
-        } catch (e: SecurityException) {
-            stopSelf()
+        } catch (e: Exception) {
+            // プロバイダや権限の例外でサービス全体を落とさない
         }
     }
 
@@ -755,7 +791,7 @@ class NavigationService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         return NotificationCompat.Builder(this, CHANNEL_STATUS)
-            .setSmallIcon(android.R.drawable.ic_menu_directions)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -768,29 +804,33 @@ class NavigationService : Service() {
     }
 
     private fun showStatus(title: String, text: String) {
-        getSystemService(NotificationManager::class.java).notify(NOTIF_STATUS, buildStatus(title, text))
+        runCatching {
+            getSystemService(NotificationManager::class.java)?.notify(NOTIF_STATUS, buildStatus(title, text))
+        }
     }
 
     // 音や振動つきのお知らせ(同じ key では1回だけ、通知が溜まらないよう最新1件に上書き)
     private fun alert(key: String, title: String, text: String) {
         if (!firedAlerts.add(key)) return
-        val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
-            .setSmallIcon(android.R.drawable.ic_menu_directions)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setAutoCancel(true)
-            .setContentIntent(openAppIntent())
-            .build()
-        getSystemService(NotificationManager::class.java).notify(NOTIF_ALERT, n)
+        runCatching {
+            val n = NotificationCompat.Builder(this, CHANNEL_ALERT)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setAutoCancel(true)
+                .setContentIntent(openAppIntent())
+                .build()
+            getSystemService(NotificationManager::class.java)?.notify(NOTIF_ALERT, n)
+        }
     }
 
     private fun dismissAlert() {
-        try {
-            getSystemService(NotificationManager::class.java).cancel(NOTIF_ALERT)
-        } catch (e: Exception) {}
+        runCatching {
+            getSystemService(NotificationManager::class.java)?.cancel(NOTIF_ALERT)
+        }
     }
 
     private fun distanceTo(point: Pair<Double, Double>?): Int? {
