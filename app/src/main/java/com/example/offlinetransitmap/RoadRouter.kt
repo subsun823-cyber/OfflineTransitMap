@@ -301,7 +301,7 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
         return if (expanded != null && expanded.second <= 4000) expanded else null
     }
 
-    // 2点間の道路ナビ経路を探索 (徒歩 / 自転車)
+        // 2点間の道路ナビ経路を探索 (徒歩 / 自転車)
     fun route(
         originLat: Double,
         originLon: Double,
@@ -323,67 +323,104 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             return directFallback
         }
 
-        val startSnap = findNearestNode(originLat, originLon, mode) ?: return directFallback
-        val goalSnap = findNearestNode(destLat, destLon, mode) ?: return directFallback
+        return try {
+            val startSnap = findNearestNode(originLat, originLon, mode) ?: return directFallback
+            val goalSnap = findNearestNode(destLat, destLon, mode) ?: return directFallback
 
-        val startNodeId = startSnap.first
-        val goalNodeId = goalSnap.first
+            val startNodeId = startSnap.first
+            val goalNodeId = goalSnap.first
 
-        // 探索領域のノードとエッジを読み込み
-        // 長距離(20km超)ではマージンを0.035に調整してセル肥大化を抑えつつ迂回路を確保
-        val margin = if (directMeters > 20000) 0.035 else 0.05
-        val minLat = minOf(originLat, destLat) - margin
-        val maxLat = maxOf(originLat, destLat) + margin
-        val minLon = minOf(originLon, destLon) - margin
-        val maxLon = maxOf(originLon, destLon) + margin
+            // 探索領域のノードとエッジを読み込み
+            val margin = if (directMeters > 20000) 0.035 else 0.05
+            val minLat = minOf(originLat, destLat) - margin
+            val maxLat = maxOf(originLat, destLat) + margin
+            val minLon = minOf(originLon, destLon) - margin
+            val maxLon = maxOf(originLon, destLon) + margin
 
-        val yMin = (minLat / GRID_CELL_DEG).toInt()
-        val yMax = (maxLat / GRID_CELL_DEG).toInt()
-        val xMin = (minLon / GRID_CELL_DEG).toInt()
-        val xMax = (maxLon / GRID_CELL_DEG).toInt()
+            val yMin = (minLat / GRID_CELL_DEG).toInt()
+            val yMax = (maxLat / GRID_CELL_DEG).toInt()
+            val xMin = (minLon / GRID_CELL_DEG).toInt()
+            val xMax = (maxLon / GRID_CELL_DEG).toInt()
 
-        val gridKeys = ArrayList<Int>()
-        for (y in yMin..yMax) {
-            for (x in xMin..xMax) {
-                gridKeys.add(((y and 0xFFFF) shl 16) or (x and 0xFFFF))
+            val gridKeySet = HashSet<Int>()
+            for (y in yMin..yMax) {
+                for (x in xMin..xMax) {
+                    gridKeySet.add(((y and 0xFFFF) shl 16) or (x and 0xFFFF))
+                }
             }
-        }
 
-        // 最大セル数を5000（約70km四方）まで大幅拡大
-        if (gridKeys.isEmpty() || gridKeys.size > 5000) return directFallback
-
-        // 領域内のノードをマップに展開 (全DB)
-        val nodesMap = HashMap<Long, GraphNode>()
-        for ((dbIdx, db) in databases.withIndex()) {
-            if (!db.isOpen) continue
-            for (chunk in gridKeys.chunked(500)) {
-                val inClause = chunk.joinToString(",")
-                val nodeCursor = try {
-                    db.rawQuery(
-                        "SELECT id, lat, lon FROM road_nodes WHERE grid IN ($inClause)",
-                        null
-                    )
-                } catch (e: Exception) {
-                    null
-                } ?: continue
-
-                nodeCursor.use {
-                    val idCol = it.getColumnIndexOrThrow("id")
-                    val latCol = it.getColumnIndexOrThrow("lat")
-                    val lonCol = it.getColumnIndexOrThrow("lon")
-                    while (it.moveToNext()) {
-                        val nid = it.getInt(idCol)
-                        val globalId = makeGlobalNodeId(dbIdx, nid)
-                        nodesMap[globalId] = GraphNode(globalId, it.getDouble(latCol), it.getDouble(lonCol), dbIdx)
+            // スタート地点・ゴール地点の近傍3x3グリッドを確実に包含（エッジ未展開の断絶を完全防止）
+            fun addNeighborhood(lat: Double, lon: Double) {
+                val cy = (lat / GRID_CELL_DEG).toInt()
+                val cx = (lon / GRID_CELL_DEG).toInt()
+                for (dy in -1..1) {
+                    for (dx in -1..1) {
+                        gridKeySet.add((((cy + dy) and 0xFFFF) shl 16) or (((cx + dx) and 0xFFFF)))
                     }
                 }
             }
-        }
+            addNeighborhood(originLat, originLon)
+            addNeighborhood(destLat, destLon)
 
-        if (startNodeId == goalNodeId) {
-            val node = nodesMap[startNodeId]
-            if (node != null) {
-                val p = listOf(Pair(originLat, originLon), Pair(node.lat, node.lon), Pair(destLat, destLon))
+            val gridKeys = gridKeySet.toList()
+
+            // 最大セル数を5000（約70km四方）まで大幅拡大
+            if (gridKeys.isEmpty() || gridKeys.size > 5000) return directFallback
+
+            // 領域内のノードをマップに展開 (全DB)
+            val nodesMap = HashMap<Long, GraphNode>()
+            for ((dbIdx, db) in databases.withIndex()) {
+                if (!db.isOpen) continue
+                for (chunk in gridKeys.chunked(500)) {
+                    val inClause = chunk.joinToString(",")
+                    val nodeCursor = try {
+                        db.rawQuery(
+                            "SELECT id, lat, lon FROM road_nodes WHERE grid IN ($inClause)",
+                            null
+                        )
+                    } catch (e: Exception) {
+                        null
+                    } ?: continue
+
+                    nodeCursor.use {
+                        val idCol = it.getColumnIndexOrThrow("id")
+                        val latCol = it.getColumnIndexOrThrow("lat")
+                        val lonCol = it.getColumnIndexOrThrow("lon")
+                        while (it.moveToNext()) {
+                            val nid = it.getInt(idCol)
+                            val globalId = makeGlobalNodeId(dbIdx, nid)
+                            nodesMap[globalId] = GraphNode(globalId, it.getDouble(latCol), it.getDouble(lonCol), dbIdx)
+                        }
+                    }
+                }
+            }
+
+            // startNodeId と goalNodeId がバウンディングボックス端にあっても確実にロードするフォールバック
+            fun ensureNodeLoaded(globalId: Long) {
+                if (nodesMap.containsKey(globalId)) return
+                val dbIdx = (globalId shr 32).toInt()
+                val localId = (globalId and 0xFFFFFFFFL).toInt()
+                val db = databases.getOrNull(dbIdx) ?: return
+                if (!db.isOpen) return
+                val cursor = try {
+                    db.rawQuery("SELECT lat, lon FROM road_nodes WHERE id = $localId", null)
+                } catch (_: Exception) { null } ?: return
+                cursor.use {
+                    if (it.moveToNext()) {
+                        val nLat = it.getDouble(0)
+                        val nLon = it.getDouble(1)
+                        nodesMap[globalId] = GraphNode(globalId, nLat, nLon, dbIdx)
+                    }
+                }
+            }
+            ensureNodeLoaded(startNodeId)
+            ensureNodeLoaded(goalNodeId)
+
+            val startNode = nodesMap[startNodeId] ?: return directFallback
+            val goalNode = nodesMap[goalNodeId] ?: return directFallback
+
+            if (startNodeId == goalNodeId) {
+                val p = listOf(Pair(originLat, originLon), Pair(startNode.lat, startNode.lon), Pair(destLat, destLon))
                 return RoadRouteResult(
                     path = p,
                     distanceMeters = directMeters,
@@ -391,355 +428,299 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                     isRoadBased = true
                 )
             }
-            return directFallback
-        }
 
-        // startNodeId と goalNodeId がバウンディングボックス端にあっても確実にロードするフォールバック
-        fun ensureNodeLoaded(globalId: Long) {
-            if (nodesMap.containsKey(globalId)) return
-            val dbIdx = (globalId shr 32).toInt()
-            val localId = (globalId and 0xFFFFFFFFL).toInt()
-            val db = databases.getOrNull(dbIdx) ?: return
-            if (!db.isOpen) return
-            val cursor = try {
-                db.rawQuery("SELECT lat, lon FROM road_nodes WHERE id = $localId", null)
-            } catch (_: Exception) { null } ?: return
-            cursor.use {
-                if (it.moveToNext()) {
-                    nodesMap[globalId] = GraphNode(globalId, it.getDouble(0), it.getDouble(1), dbIdx)
-                }
-            }
-        }
-        ensureNodeLoaded(startNodeId)
-        ensureNodeLoaded(goalNodeId)
-
-        if (!nodesMap.containsKey(startNodeId) || !nodesMap.containsKey(goalNodeId)) {
-            return directFallback
-        }
-
-        val goalNode = nodesMap[goalNodeId] ?: return directFallback
-
-        // 領域内のエッジを隣接リストに展開 (全DB)
-        val modeColumn = if (mode == TravelMode.BICYCLE) "is_bike" else "is_walk"
-        val adj = HashMap<Long, ArrayList<GraphEdge>>()
-        for ((dbIdx, db) in databases.withIndex()) {
-            if (!db.isOpen) continue
-            for (chunk in gridKeys.chunked(500)) {
-                val inClause = chunk.joinToString(",")
-                val edgeCursor = try {
-                    db.rawQuery(
-                        "SELECT u, v, dist_m, is_walk, is_bike, road_class FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
+            // 領域内のエッジを隣接リストに展開 (全DB) - 高速な空間グリッドインデックス(idx_road_edges_grid)のみを使用
+            val modeColumn = if (mode == TravelMode.BICYCLE) "is_bike" else "is_walk"
+            val adj = HashMap<Long, ArrayList<GraphEdge>>()
+            for ((dbIdx, db) in databases.withIndex()) {
+                if (!db.isOpen) continue
+                for (chunk in gridKeys.chunked(500)) {
+                    val inClause = chunk.joinToString(",")
+                    val edgeCursor = try {
+                        db.rawQuery(
+                            "SELECT u, v, dist_m, is_walk, is_bike, road_class FROM road_edges WHERE $modeColumn = 1 AND grid IN ($inClause)",
+                            null
+                        )
+                    } catch (e: Exception) {
                         null
-                    )
-                } catch (e: Exception) {
-                    null
-                } ?: continue
+                    } ?: continue
 
-                edgeCursor.use {
-                    val uCol = it.getColumnIndexOrThrow("u")
-                    val vCol = it.getColumnIndexOrThrow("v")
-                    val distCol = it.getColumnIndexOrThrow("dist_m")
-                    val walkCol = it.getColumnIndexOrThrow("is_walk")
-                    val bikeCol = it.getColumnIndexOrThrow("is_bike")
-                    val rcCol = it.getColumnIndexOrThrow("road_class")
+                    edgeCursor.use {
+                        val uCol = it.getColumnIndexOrThrow("u")
+                        val vCol = it.getColumnIndexOrThrow("v")
+                        val distCol = it.getColumnIndexOrThrow("dist_m")
+                        val walkCol = it.getColumnIndexOrThrow("is_walk")
+                        val bikeCol = it.getColumnIndexOrThrow("is_bike")
+                        val rcCol = it.getColumnIndexOrThrow("road_class")
 
-                    while (it.moveToNext()) {
-                        val localU = it.getInt(uCol)
-                        val localV = it.getInt(vCol)
-                        val d = it.getInt(distCol)
-                        val isWalk = it.getInt(walkCol) == 1
-                        val isBike = it.getInt(bikeCol) == 1
-                        val rc = it.getInt(rcCol)
+                        while (it.moveToNext()) {
+                            val localU = it.getInt(uCol)
+                            val localV = it.getInt(vCol)
+                            val d = it.getInt(distCol)
+                            val isWalk = it.getInt(walkCol) == 1
+                            val isBike = it.getInt(bikeCol) == 1
+                            val rc = it.getInt(rcCol)
 
-                        val u = makeGlobalNodeId(dbIdx, localU)
-                        val v = makeGlobalNodeId(dbIdx, localV)
+                            val u = makeGlobalNodeId(dbIdx, localU)
+                            val v = makeGlobalNodeId(dbIdx, localV)
 
-                        if (nodesMap.containsKey(u) && nodesMap.containsKey(v)) {
-                            adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike, rc))
-                            adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike, rc))
-                        }
-                    }
-                }
-            }
-        }
-
-        // スタート・ゴールノードが境界付近でエッジ未展開だった場合の個別エッジ補完
-        fun ensureEdgesForNode(globalId: Long) {
-            if ((adj[globalId]?.size ?: 0) > 0) return
-            val dbIdx = (globalId shr 32).toInt()
-            val localId = (globalId and 0xFFFFFFFFL).toInt()
-            val db = databases.getOrNull(dbIdx) ?: return
-            if (!db.isOpen) return
-            val edgeCursor = try {
-                db.rawQuery(
-                    "SELECT u, v, dist_m, is_walk, is_bike, road_class FROM road_edges WHERE $modeColumn = 1 AND (u = $localId OR v = $localId)",
-                    null
-                )
-            } catch (_: Exception) { null } ?: return
-            edgeCursor.use {
-                val uCol = it.getColumnIndexOrThrow("u")
-                val vCol = it.getColumnIndexOrThrow("v")
-                val distCol = it.getColumnIndexOrThrow("dist_m")
-                val walkCol = it.getColumnIndexOrThrow("is_walk")
-                val bikeCol = it.getColumnIndexOrThrow("is_bike")
-                val rcCol = it.getColumnIndexOrThrow("road_class")
-                while (it.moveToNext()) {
-                    val u = makeGlobalNodeId(dbIdx, it.getInt(uCol))
-                    val v = makeGlobalNodeId(dbIdx, it.getInt(vCol))
-                    val d = it.getInt(distCol)
-                    val isWalk = it.getInt(walkCol) == 1
-                    val isBike = it.getInt(bikeCol) == 1
-                    val rc = it.getInt(rcCol)
-                    ensureNodeLoaded(u)
-                    ensureNodeLoaded(v)
-                    if (nodesMap.containsKey(u) && nodesMap.containsKey(v)) {
-                        adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike, rc))
-                        adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike, rc))
-                    }
-                }
-            }
-        }
-        ensureEdgesForNode(startNodeId)
-        ensureEdgesForNode(goalNodeId)
-
-        // 既存エッジのペアを収集（重複エッジの追加を厳格に防止）
-        val existingPairs = HashSet<Pair<Long, Long>>()
-        for ((u, edges) in adj) {
-            for (edge in edges) {
-                existingPairs.add(Pair(minOf(u, edge.toNode), maxOf(u, edge.toNode)))
-            }
-        }
-
-        // 高速ノード間ステッチング（FINE_GRID法: 0.001度 約100mセルで高速探索）
-        // 都県境・タイル境界・行き止まり・未分割交差点の隙間（最大35m以内）を高速縫合（数ミリ秒以内）
-        val fineDeg = 0.001 // 約100m
-        val fineGrid = HashMap<Long, ArrayList<GraphNode>>()
-        for (node in nodesMap.values) {
-            val fy = (node.lat / fineDeg).toLong()
-            val fx = (node.lon / fineDeg).toLong()
-            val fKey = (fy shl 32) or (fx and 0xFFFFFFFFL)
-            fineGrid.getOrPut(fKey) { ArrayList() }.add(node)
-        }
-
-        // デッドエンドノード(接続数<=1)および境界・少数接続ノード(接続数<=2)を対象にステッチング
-        val stitchCandidates = ArrayList<Long>()
-        for (nid in nodesMap.keys) {
-            val edgeCount = adj[nid]?.size ?: 0
-            if (edgeCount <= 2) {
-                stitchCandidates.add(nid)
-            }
-        }
-
-        for (u in stitchCandidates) {
-            val uNode = nodesMap[u] ?: continue
-            val uEdgeCount = adj[u]?.size ?: 0
-            val maxGap = if (uEdgeCount <= 1) 35 else 22
-            val fy = (uNode.lat / fineDeg).toLong()
-            val fx = (uNode.lon / fineDeg).toLong()
-
-            var bestV: Long? = null
-            var bestD = Int.MAX_VALUE
-
-            for (dy in -1L..1L) {
-                for (dx in -1L..1L) {
-                    val fKey = ((fy + dy) shl 32) or ((fx + dx) and 0xFFFFFFFFL)
-                    val neighbors = fineGrid[fKey] ?: continue
-                    for (vNode in neighbors) {
-                        val v = vNode.id
-                        if (v == u) continue
-                        val pairKey = Pair(minOf(u, v), maxOf(u, v))
-                        if (existingPairs.contains(pairKey)) continue
-
-                        val d = calcDistanceMeters(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
-                        if (d <= maxGap && d < bestD) {
-                            bestD = d
-                            bestV = v
-                        }
-                    }
-                }
-            }
-
-            if (bestV != null) {
-                val d = maxOf(1, bestD)
-                val pairKey = Pair(minOf(u, bestV), maxOf(u, bestV))
-                existingPairs.add(pairKey)
-                adj.getOrPut(u) { ArrayList() }.add(GraphEdge(bestV, d, isWalk = true, isBike = true, roadClass = 4))
-                adj.getOrPut(bestV) { ArrayList() }.add(GraphEdge(u, d, isWalk = true, isBike = true, roadClass = 4))
-            }
-        }
-
-        // A* 探索 (大通り優先・走りやすさ・右左折ペナルティを考慮した高品質経路探索)
-        val dist = HashMap<Long, Double>()
-        val prev = HashMap<Long, Pair<Long, GraphEdge>>()
-        val pq = PriorityQueue<SearchState>()
-
-        dist[startNodeId] = 0.0
-        val initialH = calcDistanceMeters(nodesMap[startNodeId]!!.lat, nodesMap[startNodeId]!!.lon, goalNode.lat, goalNode.lon) * 0.70
-        pq.add(SearchState(startNodeId, 0.0, initialH))
-
-        var found = false
-        var bestNodeId = startNodeId
-        var bestDistToGoal = calcDistanceMeters(nodesMap[startNodeId]!!.lat, nodesMap[startNodeId]!!.lon, goalNode.lat, goalNode.lon)
-
-        var searchSteps = 0
-        val maxSearchSteps = 250_000 // 巨大グラフにおける異常ブロッキング・ハングアップ防止ガード
-
-        while (pq.isNotEmpty() && searchSteps < maxSearchSteps) {
-            searchSteps++
-            val curr = pq.poll() ?: break
-            val u = curr.nodeId
-
-            val uNode = nodesMap[u] ?: continue
-            val distToGoal = calcDistanceMeters(uNode.lat, uNode.lon, goalNode.lat, goalNode.lon)
-            if (distToGoal < bestDistToGoal) {
-                bestDistToGoal = distToGoal
-                bestNodeId = u
-            }
-
-            if (u == goalNodeId) {
-                found = true
-                break
-            }
-
-            if (curr.cost > (dist[u] ?: Double.MAX_VALUE)) {
-                continue
-            }
-
-            val edges = adj[u] ?: continue
-            for (edge in edges) {
-                val v = edge.toNode
-                val vNode = nodesMap[v] ?: continue
-
-                // 道路種別によるコスト係数（走りやすさ・大通りの優先度）
-                val classFactor = when (mode) {
-                    TravelMode.BICYCLE -> when (edge.roadClass) {
-                        1 -> 0.80   // 大通り・主要幹線 (幅広・舗装状態良好・直進性高: 20%優遇)
-                        2 -> 0.85   // 主要中規模道 (15%優遇)
-                        3 -> 0.82   // 専用自転車道 (18%優遇: 幹線道路からの不要な離脱を防止)
-                        4 -> 1.00   // 一般生活道路 (基準)
-                        5 -> 1.20   // 歩行者道・広場 (徐行・押し歩き)
-                        6 -> 1.45   // 細街路・裏道・路地 (見通し悪く低速・回避)
-                        7 -> 1.70   // 未舗装路 (走行困難)
-                        8 -> 8.00   // 階段
-                        else -> 1.00
-                    }
-                    TravelMode.WALK, TravelMode.TRANSIT -> when (edge.roadClass) {
-                        1 -> 0.85   // 大通り (幅広歩道・街灯・わかりやすい: 15%優遇)
-                        2 -> 0.88   // 主要道
-                        3 -> 0.85   // 自転車・歩行者専用道
-                        4 -> 1.00   // 生活道路 (基準)
-                        5 -> 0.80   // 歩行者専用道・緑道・公園道 (快適安全: 20%優遇)
-                        6 -> 1.30   // 細い路地・裏道 (迷いやすく見通しが悪い)
-                        7 -> 1.40   // 未舗装路
-                        8 -> 1.50   // 階段 (疲れるため迂回路があれば回避)
-                        else -> 1.00
-                    }
-                }
-
-                var edgeCost = edge.distMeters * classFactor
-
-                // 直進性・右左折ペナルティ（無駄な曲がり角・ジグザグ・頻繁な右左折の強力な抑制）
-                if (prev.containsKey(u)) {
-                    val fromNodeId = prev[u]!!.first
-                    val prevEdge = prev[u]!!.second
-                    val fromNode = nodesMap[fromNodeId]
-                    if (fromNode != null) {
-                        val b1 = calcBearing(fromNode.lat, fromNode.lon, uNode.lat, uNode.lon)
-                        val b2 = calcBearing(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
-                        val diff = kotlin.math.abs(angleDiff(b1, b2))
-
-                        var isConsecutive = false
-                        if (diff > 35.0 && prev.containsKey(fromNodeId)) {
-                            val fromFromNodeId = prev[fromNodeId]!!.first
-                            val fromFromNode = nodesMap[fromFromNodeId]
-                            if (fromFromNode != null) {
-                                val b0 = calcBearing(fromFromNode.lat, fromFromNode.lon, fromNode.lat, fromNode.lon)
-                                isConsecutive = kotlin.math.abs(angleDiff(b0, b1)) > 35.0
+                            if (nodesMap.containsKey(u) && nodesMap.containsKey(v)) {
+                                adj.getOrPut(u) { ArrayList() }.add(GraphEdge(v, d, isWalk, isBike, rc))
+                                adj.getOrPut(v) { ArrayList() }.add(GraphEdge(u, d, isWalk, isBike, rc))
                             }
                         }
+                    }
+                }
+            }
 
-                        val turnPenalty = computeTurnPenalty(
-                            angleDiffDeg = diff,
-                            prevEdgeDistMeters = prevEdge.distMeters.toDouble(),
-                            isConsecutiveTurn = isConsecutive,
-                            prevRoadClass = prevEdge.roadClass,
-                            currRoadClass = edge.roadClass,
-                            mode = mode
-                        )
-                        edgeCost += turnPenalty
+            // 既存エッジのペアを収集（重複エッジの追加を厳格に防止）
+            val existingPairs = HashSet<Pair<Long, Long>>()
+            for ((u, edges) in adj) {
+                for (edge in edges) {
+                    existingPairs.add(Pair(minOf(u, edge.toNode), maxOf(u, edge.toNode)))
+                }
+            }
+
+            // 高速ノード間ステッチング（FINE_GRID法: 0.001度 約100mセルで高速探索）
+            // 都県境・タイル境界・行き止まり・未分割交差点の隙間（最大35m以内）を高速縫合（数ミリ秒以内）
+            val fineDeg = 0.001 // 約100m
+            val fineGrid = HashMap<Long, ArrayList<GraphNode>>()
+            for (node in nodesMap.values) {
+                val fy = (node.lat / fineDeg).toLong()
+                val fx = (node.lon / fineDeg).toLong()
+                val fKey = (fy shl 32) or (fx and 0xFFFFFFFFL)
+                fineGrid.getOrPut(fKey) { ArrayList() }.add(node)
+            }
+
+            // デッドエンドノード(接続数<=1)および境界・少数接続ノード(接続数<=2)を対象にステッチング
+            val stitchCandidates = ArrayList<Long>()
+            for (nid in nodesMap.keys) {
+                val edgeCount = adj[nid]?.size ?: 0
+                if (edgeCount <= 2) {
+                    stitchCandidates.add(nid)
+                }
+            }
+
+            for (u in stitchCandidates) {
+                val uNode = nodesMap[u] ?: continue
+                val uEdgeCount = adj[u]?.size ?: 0
+                val maxGap = if (uEdgeCount <= 1) 35 else 22
+                val fy = (uNode.lat / fineDeg).toLong()
+                val fx = (uNode.lon / fineDeg).toLong()
+
+                var bestV: Long? = null
+                var bestD = Int.MAX_VALUE
+
+                for (dy in -1L..1L) {
+                    for (dx in -1L..1L) {
+                        val fKey = ((fy + dy) shl 32) or ((fx + dx) and 0xFFFFFFFFL)
+                        val neighbors = fineGrid[fKey] ?: continue
+                        for (vNode in neighbors) {
+                            val v = vNode.id
+                            if (v == u) continue
+                            val pairKey = Pair(minOf(u, v), maxOf(u, v))
+                            if (existingPairs.contains(pairKey)) continue
+
+                            val d = calcDistanceMeters(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
+                            if (d <= maxGap && d < bestD) {
+                                bestD = d
+                                bestV = v
+                            }
+                        }
                     }
                 }
 
-                val newCost = curr.cost + edgeCost
-
-                if (newCost < (dist[v] ?: Double.MAX_VALUE)) {
-                    dist[v] = newCost
-                    prev[v] = Pair(u, edge)
-                    // A* のヒューリスティック関数 (大通りの最大割引係数 0.70 を乗算して許容性を保持)
-                    val h = calcDistanceMeters(vNode.lat, vNode.lon, goalNode.lat, goalNode.lon) * 0.70
-                    pq.add(SearchState(v, newCost, newCost + h))
+                if (bestV != null) {
+                    val d = maxOf(1, bestD)
+                    val pairKey = Pair(minOf(u, bestV), maxOf(u, bestV))
+                    existingPairs.add(pairKey)
+                    adj.getOrPut(u) { ArrayList() }.add(GraphEdge(bestV, d, isWalk = true, isBike = true, roadClass = 4))
+                    adj.getOrPut(bestV) { ArrayList() }.add(GraphEdge(u, d, isWalk = true, isBike = true, roadClass = 4))
                 }
             }
-        }
 
-        // ゴール到達または最接近ノードへのベストエフォート道なりフォールバック（画面全体の一直線化を根絶）
-        val targetNodeId = if (found) goalNodeId else bestNodeId
+            // A* 探索 (大通り優先・走りやすさ・右左折ペナルティを考慮した高品質経路探索)
+            val dist = HashMap<Long, Double>()
+            val prev = HashMap<Long, Pair<Long, GraphEdge>>()
+            val pq = PriorityQueue<SearchState>()
 
-        // スタートから1歩も進めずゴールにも届かなかった場合のみ directFallback
-        if (!found && targetNodeId == startNodeId) {
-            return directFallback
-        }
+            dist[startNodeId] = 0.0
+            val initialH = calcDistanceMeters(startNode.lat, startNode.lon, goalNode.lat, goalNode.lon) * 0.70
+            pq.add(SearchState(startNodeId, 0.0, initialH))
 
-        // 経路の復元 (通過ノード列を復元)
-        val pathNodes = ArrayList<Long>()
-        var curr = targetNodeId
-        pathNodes.add(curr)
-        while (curr != startNodeId) {
-            val p = prev[curr] ?: break
-            curr = p.first
+            var found = false
+            var bestNodeId = startNodeId
+            var bestDistToGoal = calcDistanceMeters(startNode.lat, startNode.lon, goalNode.lat, goalNode.lon)
+
+            var searchSteps = 0
+            val maxSearchSteps = 100_000 // 巨大グラフにおける異常ブロッキング・ハングアップ・ANR完全防止ガード
+
+            while (pq.isNotEmpty() && searchSteps < maxSearchSteps) {
+                searchSteps++
+                val curr = pq.poll() ?: break
+                val u = curr.nodeId
+
+                val uNode = nodesMap[u] ?: continue
+                val distToGoal = calcDistanceMeters(uNode.lat, uNode.lon, goalNode.lat, goalNode.lon)
+                if (distToGoal < bestDistToGoal) {
+                    bestDistToGoal = distToGoal
+                    bestNodeId = u
+                }
+
+                if (u == goalNodeId) {
+                    found = true
+                    break
+                }
+
+                if (curr.cost > (dist[u] ?: Double.MAX_VALUE)) {
+                    continue
+                }
+
+                val edges = adj[u] ?: continue
+                for (edge in edges) {
+                    val v = edge.toNode
+                    val vNode = nodesMap[v] ?: continue
+
+                    // 道路種別によるコスト係数（走りやすさ・大通りの優先度）
+                    val classFactor = when (mode) {
+                        TravelMode.BICYCLE -> when (edge.roadClass) {
+                            1 -> 0.80   // 大通り・主要幹線 (幅広・舗装状態良好・直進性高: 20%優遇)
+                            2 -> 0.85   // 主要中規模道 (15%優遇)
+                            3 -> 0.82   // 専用自転車道 (18%優遇: 幹線道路からの不要な離脱を防止)
+                            4 -> 1.00   // 一般生活道路 (基準)
+                            5 -> 1.20   // 歩行者道・広場 (徐行・押し歩き)
+                            6 -> 1.45   // 細街路・裏道・路地 (見通し悪く低速・回避)
+                            7 -> 1.70   // 未舗装路 (走行困難)
+                            8 -> 8.00   // 階段
+                            else -> 1.00
+                        }
+                        TravelMode.WALK, TravelMode.TRANSIT -> when (edge.roadClass) {
+                            1 -> 0.85   // 大通り (幅広歩道・街灯・わかりやすい: 15%優遇)
+                            2 -> 0.88   // 主要道
+                            3 -> 0.85   // 自転車・歩行者専用道
+                            4 -> 1.00   // 生活道路 (基準)
+                            5 -> 0.80   // 歩行者専用道・緑道・公園道 (快適安全: 20%優遇)
+                            6 -> 1.30   // 細い路地・裏道 (迷いやすく見通しが悪い)
+                            7 -> 1.40   // 未舗装路
+                            8 -> 1.50   // 階段 (疲れるため迂回路があれば回避)
+                            else -> 1.00
+                        }
+                    }
+
+                    var edgeCost = edge.distMeters * classFactor
+
+                    // 直進性・右左折ペナルティ（無駄な曲がり角・ジグザグ・頻繁な右左折の強力な抑制）
+                    if (prev.containsKey(u)) {
+                        val fromNodeId = prev[u]!!.first
+                        val prevEdge = prev[u]!!.second
+                        val fromNode = nodesMap[fromNodeId]
+                        if (fromNode != null) {
+                            val b1 = calcBearing(fromNode.lat, fromNode.lon, uNode.lat, uNode.lon)
+                            val b2 = calcBearing(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
+                            val diff = kotlin.math.abs(angleDiff(b1, b2))
+
+                            var isConsecutive = false
+                            if (diff > 35.0 && prev.containsKey(fromNodeId)) {
+                                val fromFromNodeId = prev[fromNodeId]!!.first
+                                val fromFromNode = nodesMap[fromFromNodeId]
+                                if (fromFromNode != null) {
+                                    val b0 = calcBearing(fromFromNode.lat, fromFromNode.lon, fromNode.lat, fromNode.lon)
+                                    isConsecutive = kotlin.math.abs(angleDiff(b0, b1)) > 35.0
+                                }
+                            }
+
+                            val turnPenalty = computeTurnPenalty(
+                                angleDiffDeg = diff,
+                                prevEdgeDistMeters = prevEdge.distMeters.toDouble(),
+                                isConsecutiveTurn = isConsecutive,
+                                prevRoadClass = prevEdge.roadClass,
+                                currRoadClass = edge.roadClass,
+                                mode = mode
+                            )
+                            edgeCost += turnPenalty
+                        }
+                    }
+
+                    val newCost = curr.cost + edgeCost
+
+                    if (newCost < (dist[v] ?: Double.MAX_VALUE)) {
+                        dist[v] = newCost
+                        prev[v] = Pair(u, edge)
+                        // A* のヒューリスティック関数 (大通りの最大割引係数 0.70 を乗算して許容性を保持)
+                        val h = calcDistanceMeters(vNode.lat, vNode.lon, goalNode.lat, goalNode.lon) * 0.70
+                        pq.add(SearchState(v, newCost, newCost + h))
+                    }
+                }
+            }
+
+            // ゴール到達または最接近ノードへのベストエフォート道なりフォールバック（画面全体の一直線化を根絶）
+            val targetNodeId = if (found) goalNodeId else bestNodeId
+
+            // スタートから1歩も進めずゴールにも届かなかった場合のみ directFallback
+            if (!found && targetNodeId == startNodeId) {
+                return directFallback
+            }
+
+            // 経路の復元 (通過ノード列を復元、閉路防止・上限ガードつき)
+            val pathNodes = ArrayList<Long>()
+            val visitedInPath = HashSet<Long>()
+            var curr = targetNodeId
             pathNodes.add(curr)
-        }
-        pathNodes.reverse()
-
-        // 道路座標列の構築
-        val fullPath = ArrayList<Pair<Double, Double>>()
-        fullPath.add(Pair(originLat, originLon))
-
-        for (nid in pathNodes) {
-            val node = nodesMap[nid]
-            if (node != null) {
-                fullPath.add(Pair(node.lat, node.lon))
+            visitedInPath.add(curr)
+            while (curr != startNodeId && pathNodes.size < 50_000) {
+                val p = prev[curr] ?: break
+                curr = p.first
+                if (!visitedInPath.add(curr)) {
+                    // 閉路を検出した場合は安全に打ち切り
+                    break
+                }
+                pathNodes.add(curr)
             }
-        }
+            pathNodes.reverse()
 
-        fullPath.add(Pair(destLat, destLon))
+            // 道路座標列の構築
+            val fullPath = ArrayList<Pair<Double, Double>>()
+            fullPath.add(Pair(originLat, originLon))
 
-        // 重複する連続点の除去
-        val cleanedPath = ArrayList<Pair<Double, Double>>()
-        for (pt in fullPath) {
-            if (cleanedPath.isEmpty() ||
-                calcDistanceMeters(cleanedPath.last().first, cleanedPath.last().second, pt.first, pt.second) >= 2) {
-                cleanedPath.add(pt)
+            for (nid in pathNodes) {
+                val node = nodesMap[nid]
+                if (node != null) {
+                    fullPath.add(Pair(node.lat, node.lon))
+                }
             }
-        }
 
-        // 道なり総距離の計算
-        var totalRoadDist = 0
-        for (i in 0 until cleanedPath.size - 1) {
-            totalRoadDist += calcDistanceMeters(
-                cleanedPath[i].first, cleanedPath[i].second,
-                cleanedPath[i + 1].first, cleanedPath[i + 1].second
+            fullPath.add(Pair(destLat, destLon))
+
+            // 重複する連続点の除去
+            val cleanedPath = ArrayList<Pair<Double, Double>>()
+            for (pt in fullPath) {
+                if (cleanedPath.isEmpty() ||
+                    calcDistanceMeters(cleanedPath.last().first, cleanedPath.last().second, pt.first, pt.second) >= 2) {
+                    cleanedPath.add(pt)
+                }
+            }
+
+            // 道なり総距離の計算
+            var totalRoadDist = 0
+            for (i in 0 until cleanedPath.size - 1) {
+                totalRoadDist += calcDistanceMeters(
+                    cleanedPath[i].first, cleanedPath[i].second,
+                    cleanedPath[i + 1].first, cleanedPath[i + 1].second
+                )
+            }
+
+            val totalDuration = travelDurationMinutes(totalRoadDist, mode)
+
+            RoadRouteResult(
+                path = cleanedPath,
+                distanceMeters = totalRoadDist,
+                durationMinutes = totalDuration,
+                isRoadBased = true
             )
+        } catch (e: Throwable) {
+            android.util.Log.e("RoadRouter", "Road route search failed gracefully", e)
+            directFallback
         }
-
-        val totalDuration = travelDurationMinutes(totalRoadDist, mode)
-
-        return RoadRouteResult(
-            path = cleanedPath,
-            distanceMeters = totalRoadDist,
-            durationMinutes = totalDuration,
-            isRoadBased = true
-        )
     }
 }
 

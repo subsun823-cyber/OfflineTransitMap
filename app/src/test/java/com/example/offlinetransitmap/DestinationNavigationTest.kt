@@ -590,6 +590,27 @@ class DestinationNavigationTest {
         assertEquals(57L, totalMinutes)
         assertEquals(490, itin.fare)
     }
+
+    @Test
+    fun testComputeTurnPenalty() {
+        // 直進 (35度以下) はペナルティ0
+        assertEquals(0.0, computeTurnPenalty(20.0, 100.0, false, 4, 4, TravelMode.WALK), 0.001)
+        assertEquals(0.0, computeTurnPenalty(35.0, 100.0, false, 4, 4, TravelMode.BICYCLE), 0.001)
+
+        // 90度ターン (自転車の方が歩行者より曲がり角を嫌うためペナルティ大)
+        val walkTurn = computeTurnPenalty(90.0, 100.0, false, 4, 4, TravelMode.WALK)
+        val bikeTurn = computeTurnPenalty(90.0, 100.0, false, 4, 4, TravelMode.BICYCLE)
+        assertTrue(walkTurn > 0.0)
+        assertTrue(bikeTurn > walkTurn)
+
+        // 短区間での連続ターン（70m未満）ペナルティ加算
+        val bikeShortTurn = computeTurnPenalty(90.0, 50.0, false, 4, 4, TravelMode.BICYCLE)
+        assertTrue(bikeShortTurn > bikeTurn)
+
+        // 連続ターン累積ペナルティ加算
+        val bikeConsecutive = computeTurnPenalty(90.0, 100.0, true, 4, 4, TravelMode.BICYCLE)
+        assertTrue(bikeConsecutive > bikeTurn)
+    }
 }
 
 

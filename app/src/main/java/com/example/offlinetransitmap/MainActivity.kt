@@ -386,89 +386,106 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 } else {
                     isSearchingForDestination = true
                     scope.launch {
-                        val resolvedName = if (destinationTitle != "目的地を設定しました" && destinationTitle != "目的地") {
-                            destinationTitle
-                        } else {
-                            destinationStation?.name?.let { "$it 付近" } ?: "目的地"
-                        }
-                        val crowDistance = calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
-
-                        if (selectedTravelMode == TravelMode.WALK || selectedTravelMode == TravelMode.BICYCLE) {
-                            // 選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築
-                            val directItin = withContext(Dispatchers.Default) {
-                                val router = roadRouter ?: RoadRouter.open(context)
-                                val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
-                                val distM = roadRes?.distanceMeters ?: crowDistance
-                                val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
-                                val path = roadRes?.path ?: listOf(curLoc, dest)
-                                val isBike = selectedTravelMode == TravelMode.BICYCLE
-                                val modeLabel = if (isBike) "自転車" else "徒歩"
-                                val leg = RouteLeg(
-                                    isWalk = true,
-                                    fromName = "現在地",
-                                    toName = resolvedName,
-                                    walkMinutes = durM,
-                                    walkMeters = distM,
-                                    lineName = modeLabel,
-                                    trainType = modeLabel,
-                                    path = path
-                                )
-                                val now = LocalDateTime.now()
-                                Itinerary(
-                                    legs = listOf(leg),
-                                    departure = now,
-                                    arrival = now.plusMinutes(durM.toLong()),
-                                    transfers = 0,
-                                    fare = 0,
-                                    knownFare = 0,
-                                    routeKey = if (isBike) "bike_direct" else "walk_direct"
-                                )
-                            }
-                            isSearchingForDestination = false
-                            if (startNavImmediately) {
-                                startNavigation(directItin, selectedTravelMode)
+                        try {
+                            val resolvedName = if (destinationTitle != "目的地を設定しました" && destinationTitle != "目的地") {
+                                destinationTitle
                             } else {
-                                candidateItineraries = listOf(directItin)
-                                selectedItinerary = directItin
+                                destinationStation?.name?.let { "$it 付近" } ?: "目的地"
                             }
-                        } else {
-                            // selectedTravelMode == TravelMode.TRANSIT (公共交通機関：電車・バス)
-                            // ユーザー要望: 公共交通機関は重さを回避し確実に確認できるよう、必ず最初にルート・経由地一覧を表示し、詳細パネルからナビを開始できるようにする
-                            val candidates = withContext(Dispatchers.Default) {
-                                val cached = cachedTransitRoutes
-                                if (cached != null && cached.isNotEmpty()) {
-                                    cached
+                            val crowDistance = calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
+
+                            if (selectedTravelMode == TravelMode.WALK || selectedTravelMode == TravelMode.BICYCLE) {
+                                // 選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築
+                                val directItin = withContext(Dispatchers.Default) {
+                                    val router = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
+                                    val roadRes = runCatching {
+                                        router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
+                                    }.getOrNull()
+                                    val distM = roadRes?.distanceMeters ?: crowDistance
+                                    val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
+                                    val path = roadRes?.path ?: listOf(curLoc, dest)
+                                    val isBike = selectedTravelMode == TravelMode.BICYCLE
+                                    val modeLabel = if (isBike) "自転車" else "徒歩"
+                                    val leg = RouteLeg(
+                                        isWalk = true,
+                                        fromName = "現在地",
+                                        toName = resolvedName,
+                                        walkMinutes = durM,
+                                        walkMeters = distM,
+                                        lineName = modeLabel,
+                                        trainType = modeLabel,
+                                        path = path
+                                    )
+                                    val now = LocalDateTime.now()
+                                    Itinerary(
+                                        legs = listOf(leg),
+                                        departure = now,
+                                        arrival = now.plusMinutes(durM.toLong()),
+                                        transfers = 0,
+                                        fare = 0,
+                                        knownFare = 0,
+                                        routeKey = if (isBike) "bike_direct" else "walk_direct"
+                                    )
+                                }
+                                isSearchingForDestination = false
+                                if (startNavImmediately) {
+                                    runCatching {
+                                        startNavigation(directItin, selectedTravelMode)
+                                    }.onFailure {
+                                        Toast.makeText(context, "ナビを開始できませんでした", Toast.LENGTH_SHORT).show()
+                                    }
                                 } else {
-                                    transitSearchJob?.join()
-                                    val afterJoin = cachedTransitRoutes
-                                    if (afterJoin != null && afterJoin.isNotEmpty()) {
-                                        afterJoin
-                                    } else if (searcher != null) {
-                                        val computed = searcher.findRoutesBetweenCoordinates(
-                                            originLat = curLoc.first,
-                                            originLon = curLoc.second,
-                                            destLat = dest.first,
-                                            destLon = dest.second,
-                                            now = LocalDateTime.now(),
-                                            destName = resolvedName,
-                                            travelMode = TravelMode.TRANSIT,
-                                            roadRouter = roadRouter ?: RoadRouter.open(context)
-                                        )
-                                        cachedTransitRoutes = computed
-                                        computed
-                                    } else {
+                                    candidateItineraries = listOf(directItin)
+                                    selectedItinerary = directItin
+                                }
+                            } else {
+                                // selectedTravelMode == TravelMode.TRANSIT (公共交通機関：電車・バス)
+                                // ユーザー要望: 公共交通機関は重さを回避し確実に確認できるよう、必ず最初にルート・経由地一覧を表示し、詳細パネルからナビを開始できるようにする
+                                val candidates = withContext(Dispatchers.Default) {
+                                    try {
+                                        val cached = cachedTransitRoutes
+                                        if (cached != null && cached.isNotEmpty()) {
+                                            cached
+                                        } else {
+                                            runCatching { transitSearchJob?.join() }
+                                            val afterJoin = cachedTransitRoutes
+                                            if (afterJoin != null && afterJoin.isNotEmpty()) {
+                                                afterJoin
+                                            } else if (searcher != null) {
+                                                val computed = searcher.findRoutesBetweenCoordinates(
+                                                    originLat = curLoc.first,
+                                                    originLon = curLoc.second,
+                                                    destLat = dest.first,
+                                                    destLon = dest.second,
+                                                    now = LocalDateTime.now(),
+                                                    destName = resolvedName,
+                                                    travelMode = TravelMode.TRANSIT,
+                                                    roadRouter = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
+                                                )
+                                                cachedTransitRoutes = computed
+                                                computed
+                                            } else {
+                                                emptyList()
+                                            }
+                                        }
+                                    } catch (e: Throwable) {
+                                        android.util.Log.e("MainActivity", "Transit route computation failed", e)
                                         emptyList()
                                     }
                                 }
+                                isSearchingForDestination = false
+                                val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
+                                if (bestItin != null) {
+                                    candidateItineraries = candidates
+                                    selectedItinerary = bestItin
+                                } else {
+                                    Toast.makeText(context, "公共交通機関による経路が見つかりませんでした", Toast.LENGTH_LONG).show()
+                                }
                             }
+                        } catch (e: Throwable) {
+                            android.util.Log.e("MainActivity", "handleDestinationSearch unexpected failure", e)
                             isSearchingForDestination = false
-                            val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
-                            if (bestItin != null) {
-                                candidateItineraries = candidates
-                                selectedItinerary = bestItin
-                            } else {
-                                Toast.makeText(context, "公共交通機関による経路が見つかりませんでした", Toast.LENGTH_LONG).show()
-                            }
+                            Toast.makeText(context, "経路の計算中にエラーが発生しました", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -689,45 +706,53 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationBicycleDuration = bicycleDurationMinutes(directDist)
                             destinationTransitDuration = null
                             scope.launch(Dispatchers.Default) {
-                                val router = roadRouter ?: RoadRouter.open(context)
-                                val roadWalk = router?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.WALK)
-                                val roadBike = router?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.BICYCLE)
-                                withContext(Dispatchers.Main) {
-                                    if (destinationPoint == Pair(lat, lon)) {
-                                        if (roadWalk != null && roadWalk.isRoadBased) {
-                                            destinationCurrentDistance = roadWalk.distanceMeters
-                                            destinationCurrentDuration = roadWalk.durationMinutes
-                                        }
-                                        if (roadBike != null && roadBike.isRoadBased) {
-                                            destinationBicycleDuration = roadBike.durationMinutes
+                                try {
+                                    val router = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
+                                    val roadWalk = router?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.WALK)
+                                    val roadBike = router?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.BICYCLE)
+                                    withContext(Dispatchers.Main) {
+                                        if (destinationPoint == Pair(lat, lon)) {
+                                            if (roadWalk != null && roadWalk.isRoadBased) {
+                                                destinationCurrentDistance = roadWalk.distanceMeters
+                                                destinationCurrentDuration = roadWalk.durationMinutes
+                                            }
+                                            if (roadBike != null && roadBike.isRoadBased) {
+                                                destinationBicycleDuration = roadBike.durationMinutes
+                                            }
                                         }
                                     }
+                                } catch (e: Throwable) {
+                                    android.util.Log.e("MainActivity", "onMapLongClick road calculation failed", e)
                                 }
                             }
                             cachedTransitRoutes = null
                             transitSearchJob?.cancel()
                             transitSearchJob = scope.launch(Dispatchers.Default) {
-                                if (searcher != null) {
-                                    val routes = searcher.findRoutesBetweenCoordinates(
-                                        originLat = curLoc.first,
-                                        originLon = curLoc.second,
-                                        destLat = lat,
-                                        destLon = lon,
-                                        now = LocalDateTime.now(),
-                                        destName = "目的地",
-                                        travelMode = TravelMode.TRANSIT,
-                                        roadRouter = roadRouter ?: RoadRouter.open(context)
-                                    )
-                                    withContext(Dispatchers.Main) {
-                                        if (destinationPoint == Pair(lat, lon)) {
-                                            cachedTransitRoutes = routes
-                                            val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
-                                            if (best != null) {
-                                                val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
-                                                destinationTransitDuration = dur
+                                try {
+                                    if (searcher != null) {
+                                        val routes = searcher.findRoutesBetweenCoordinates(
+                                            originLat = curLoc.first,
+                                            originLon = curLoc.second,
+                                            destLat = lat,
+                                            destLon = lon,
+                                            now = LocalDateTime.now(),
+                                            destName = "目的地",
+                                            travelMode = TravelMode.TRANSIT,
+                                            roadRouter = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
+                                        )
+                                        withContext(Dispatchers.Main) {
+                                            if (destinationPoint == Pair(lat, lon)) {
+                                                cachedTransitRoutes = routes
+                                                val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
+                                                if (best != null) {
+                                                    val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
+                                                    destinationTransitDuration = dur
+                                                }
                                             }
                                         }
                                     }
+                                } catch (e: Throwable) {
+                                    android.util.Log.e("MainActivity", "transitSearchJob background failure", e)
                                 }
                             }
                         } else {
@@ -911,42 +936,50 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         val curLoc = searchLocation
                         if (curLoc != null) {
                             scope.launch(Dispatchers.Default) {
-                                val router = roadRouter ?: RoadRouter.open(context)
-                                val roadWalk = router?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.WALK)
-                                val roadBike = router?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.BICYCLE)
-                                withContext(Dispatchers.Main) {
-                                    if (destinationPoint == point) {
-                                        if (roadWalk != null && roadWalk.isRoadBased) {
-                                            destinationCurrentDistance = roadWalk.distanceMeters
-                                            destinationCurrentDuration = roadWalk.durationMinutes
-                                        }
-                                        if (roadBike != null && roadBike.isRoadBased) {
-                                            destinationBicycleDuration = roadBike.durationMinutes
-                                        }
-                                    }
-                                }
-                            }
-                            scope.launch(Dispatchers.Default) {
-                                if (searcher != null) {
-                                    val routes = searcher.findRoutesBetweenCoordinates(
-                                        originLat = curLoc.first,
-                                        originLon = curLoc.second,
-                                        destLat = p.lat,
-                                        destLon = p.lon,
-                                        now = LocalDateTime.now(),
-                                        destName = p.name,
-                                        travelMode = TravelMode.TRANSIT,
-                                        roadRouter = roadRouter ?: RoadRouter.open(context)
-                                    )
-                                    val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
-                                    if (best != null) {
-                                        val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
-                                        withContext(Dispatchers.Main) {
-                                            if (destinationPoint == point) {
-                                                destinationTransitDuration = dur
+                                try {
+                                    val router = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
+                                    val roadWalk = router?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.WALK)
+                                    val roadBike = router?.route(curLoc.first, curLoc.second, p.lat, p.lon, TravelMode.BICYCLE)
+                                    withContext(Dispatchers.Main) {
+                                        if (destinationPoint == point) {
+                                            if (roadWalk != null && roadWalk.isRoadBased) {
+                                                destinationCurrentDistance = roadWalk.distanceMeters
+                                                destinationCurrentDuration = roadWalk.durationMinutes
+                                            }
+                                            if (roadBike != null && roadBike.isRoadBased) {
+                                                destinationBicycleDuration = roadBike.durationMinutes
                                             }
                                         }
                                     }
+                                } catch (e: Throwable) {
+                                    android.util.Log.e("MainActivity", "onSelectPlace road calculation failed", e)
+                                }
+                            }
+                            scope.launch(Dispatchers.Default) {
+                                try {
+                                    if (searcher != null) {
+                                        val routes = searcher.findRoutesBetweenCoordinates(
+                                            originLat = curLoc.first,
+                                            originLon = curLoc.second,
+                                            destLat = p.lat,
+                                            destLon = p.lon,
+                                            now = LocalDateTime.now(),
+                                            destName = p.name,
+                                            travelMode = TravelMode.TRANSIT,
+                                            roadRouter = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
+                                        )
+                                        val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
+                                        if (best != null) {
+                                            val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
+                                            withContext(Dispatchers.Main) {
+                                                if (destinationPoint == point) {
+                                                    destinationTransitDuration = dur
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch (e: Throwable) {
+                                    android.util.Log.e("MainActivity", "onSelectPlace transit search failed", e)
                                 }
                             }
                         }
