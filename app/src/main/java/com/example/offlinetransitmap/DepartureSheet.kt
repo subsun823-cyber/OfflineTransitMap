@@ -28,8 +28,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -106,6 +108,7 @@ fun DepartureSheet(
     onSelectLine: (String?) -> Unit = {},
     note: String? = null,
     loadTripStops: (Departure) -> List<TripStop> = { emptyList() },
+    onNavigateToStation: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val now = remember { LocalDateTime.now().truncatedTo(ChronoUnit.MINUTES) }
@@ -185,12 +188,33 @@ fun DepartureSheet(
 
                     val detail = selected
                     if (detail == null) {
-                        Text(
-                            text = stationName,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp)
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stationName,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (onNavigateToStation != null) {
+                                FilledTonalButton(
+                                    onClick = onNavigateToStation,
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(34.dp)
+                                ) {
+                                    Text(
+                                        text = "🧭 ここへ行く",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
                         if (note != null) {
                             Text(
                                 text = note,

@@ -51,6 +51,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -67,14 +71,14 @@ import java.time.ZoneOffset
 
 private val WALK_GRAY = Color(0xFF9E9E9E)
 
-// 縦の流れに並べるもの:停留所、バスに乗っている区間、徒歩の区間
+// 縦の流れに並べるもの:停留所、乗車区間、徒歩区間
 private sealed interface TlItem {
     data class Stop(
         val time: String,
         val name: String,
         val sub: String,
         val color: Color,
-        val big: Boolean
+        val isTerminal: Boolean
     ) : TlItem
 
     data class Ride(val leg: RouteLeg) : TlItem
@@ -87,7 +91,7 @@ private fun buildTimeline(itin: Itinerary): List<TlItem> {
     for ((i, leg) in itin.legs.withIndex()) {
         if (leg.isWalk) {
             if (i == 0) out.add(TlItem.Stop(hm(itin.departure), leg.fromName, "出発", WALK_GRAY, true))
-            out.add(TlItem.Walk("徒歩 約${formatDurationHoursMinutes(leg.walkMinutes.toLong())}(${leg.walkMeters}m)"))
+            out.add(TlItem.Walk("徒歩 約${formatDurationHoursMinutes(leg.walkMinutes.toLong())} (${leg.walkMeters}m)"))
             if (i == last) out.add(TlItem.Stop(hm(itin.arrival), leg.toName, "到着", WALK_GRAY, true))
         } else {
             val color = Color(leg.lineColor)
@@ -101,7 +105,7 @@ private fun buildTimeline(itin: Itinerary): List<TlItem> {
                     time = "${prev.time} → ${hm(dep)}",
                     sub = sub,
                     color = color,
-                    big = false
+                    isTerminal = false
                 )
             } else {
                 out.add(TlItem.Stop(hm(dep), leg.fromName, leg.platform, color, i == 0))
@@ -113,11 +117,12 @@ private fun buildTimeline(itin: Itinerary): List<TlItem> {
     return out
 }
 
-// 左に縦の線と丸、右に内容を並べる1行
+// 左に縦の線と丸、右に内容を並べる1行 (モダンなタイムライン)
 @Composable
 private fun TimelineRow(
     lineColor: Color,
-    dotSize: Dp,
+    isWalk: Boolean = false,
+    dotContent: (@Composable () -> Unit)? = null,
     content: @Composable RowScope.() -> Unit
 ) {
     Row(
@@ -129,34 +134,38 @@ private fun TimelineRow(
     ) {
         Box(
             modifier = Modifier
-                .width(24.dp)
+                .width(28.dp)
                 .fillMaxHeight(),
             contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .fillMaxHeight()
-                    .background(lineColor)
-            )
-            if (dotSize > 0.dp) {
+            if (isWalk) {
                 Box(
                     modifier = Modifier
-                        .size(dotSize)
-                        .background(Color.White, CircleShape)
-                        .border(2.dp, lineColor, CircleShape)
+                        .width(3.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(1.5.dp))
+                        .background(WALK_GRAY.copy(alpha = 0.5f))
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .width(5.dp)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(lineColor)
                 )
             }
+            dotContent?.invoke()
         }
         Spacer(Modifier.width(12.dp))
         content()
     }
 }
 
-// 画面下に出す、経路の詳細パネル
+// 画面下に出す、経路の詳細パネル (洗練されたデザイン & 運行なし時の案内対応)
 @Composable
 fun RouteDetailPanel(
-    itin: Itinerary,
+    itin: Itinerary?,
     candidates: List<Itinerary>? = null,
     onSelectCandidate: ((Itinerary) -> Unit)? = null,
     originName: String = "出発地",
@@ -165,6 +174,7 @@ fun RouteDetailPanel(
     targetTime: LocalDateTime = LocalDateTime.now(),
     timeType: TimeTargetType = TimeTargetType.DEPART,
     onTimeChanged: ((LocalDateTime, TimeTargetType) -> Unit)? = null,
+    onSearchTomorrowMorning: (() -> Unit)? = null,
     onSwapOriginDest: (() -> Unit)? = null,
     onAddVia: (() -> Unit)? = null,
     onRemoveVia: ((Int) -> Unit)? = null,
@@ -178,42 +188,79 @@ fun RouteDetailPanel(
     onStartNavigation: (() -> Unit)? = null,
     onStopNavigation: (() -> Unit)? = null
 ) {
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.65f).dp
-    val timeline = remember(itin) { buildTimeline(itin) }
+    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.72f).dp
+    val timeline = remember(itin) { if (itin != null) buildTimeline(itin) else emptyList() }
     var showTimeDialog by remember { mutableStateOf(false) }
     var showDateDialog by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
         Column(modifier = Modifier.heightIn(max = maxHeight)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 8.dp)
+            // 最上部: ドラッグハンドルバー ＆ 閉じるボタン
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, start = 16.dp, end = 16.dp, bottom = 4.dp)
             ) {
-                TextButton(onClick = onClose) { Text("‹ 地図に戻る") }
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onClose) { Text("閉じる") }
+                Box(
+                    modifier = Modifier
+                        .size(width = 36.dp, height = 4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
+                        .align(Alignment.Center)
+                )
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .align(Alignment.CenterEnd)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "閉じる",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
-            // 出発地・経由地・目的地 ボックス (入れ替え・経由地追加機能つき)
+            // 出発地・経由地・目的地 コネクタボックス
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 2.dp),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 左側: コネクタ表示 (🟢 ─ 🟡 ─ 🔴)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 4.dp, end = 10.dp)
+                    ) {
+                        Box(modifier = Modifier.size(10.dp).background(Color(0xFF2E7D32), CircleShape))
+                        Box(modifier = Modifier.width(2.dp).height(24.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                        if (viaNames.isNotEmpty()) {
+                            viaNames.forEach { _ ->
+                                Box(modifier = Modifier.size(8.dp).background(Color(0xFFF57C00), CircleShape))
+                                Box(modifier = Modifier.width(2.dp).height(24.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                            }
+                        }
+                        Box(modifier = Modifier.size(10.dp).background(Color(0xFFD32F2F), CircleShape))
+                    }
+
+                    // 中央: 出発・経由・目的地 テキスト
                     Column(
                         modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         // 出発地
                         Row(
@@ -222,10 +269,8 @@ fun RouteDetailPanel(
                                 .fillMaxWidth()
                                 .clickable(enabled = onClickOrigin != null) { onClickOrigin?.invoke() }
                         ) {
-                            Text(text = "🟢", style = MaterialTheme.typography.bodySmall)
-                            Spacer(Modifier.width(6.dp))
                             Text(
-                                text = "出発: ",
+                                text = "発: ",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -234,6 +279,7 @@ fun RouteDetailPanel(
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
                             if (onClickOrigin != null) {
@@ -245,7 +291,7 @@ fun RouteDetailPanel(
                             }
                         }
 
-                        // 経由地リスト
+                        // 経由地
                         viaNames.forEachIndexed { index, viaName ->
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -253,8 +299,6 @@ fun RouteDetailPanel(
                                     .fillMaxWidth()
                                     .clickable(enabled = onClickVia != null) { onClickVia?.invoke(index) }
                             ) {
-                                Text(text = "🟡", style = MaterialTheme.typography.bodySmall)
-                                Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = "経由${if (viaNames.size > 1) "${index + 1}" else ""}: ",
                                     style = MaterialTheme.typography.labelMedium,
@@ -265,17 +309,18 @@ fun RouteDetailPanel(
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f)
                                 )
                                 if (onRemoveVia != null) {
                                     IconButton(
                                         onClick = { onRemoveVia(index) },
-                                        modifier = Modifier.size(24.dp)
+                                        modifier = Modifier.size(22.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Close,
                                             contentDescription = "経由地を削除",
-                                            modifier = Modifier.size(16.dp),
+                                            modifier = Modifier.size(14.dp),
                                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
@@ -290,10 +335,8 @@ fun RouteDetailPanel(
                                 .fillMaxWidth()
                                 .clickable(enabled = onClickDest != null) { onClickDest?.invoke() }
                         ) {
-                            Text(text = "🔴", style = MaterialTheme.typography.bodySmall)
-                            Spacer(Modifier.width(6.dp))
                             Text(
-                                text = "目的: ",
+                                text = "着: ",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -302,6 +345,7 @@ fun RouteDetailPanel(
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
                             if (onClickDest != null) {
@@ -313,21 +357,19 @@ fun RouteDetailPanel(
                             }
                         }
 
-                        // 経由地追加ボタン (経由地が2個未満の場合)
+                        // 経由地追加リンク
                         if (onAddVia != null && viaNames.size < 2) {
                             Text(
                                 text = "＋ 経由地を追加",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier
-                                    .padding(top = 2.dp)
-                                    .clickable { onAddVia() }
+                                modifier = Modifier.clickable { onAddVia() }
                             )
                         }
                     }
 
-                    // 右側の入れ替えボタン (スワップ)
+                    // 右側: 出発・目的地スワップボタン
                     if (onSwapOriginDest != null) {
                         Spacer(Modifier.width(8.dp))
                         FilledTonalIconButton(
@@ -345,11 +387,11 @@ fun RouteDetailPanel(
                 }
             }
 
-            // 出発日・時刻設定バー (日付と時刻をそれぞれ変更可能)
+            // 出発日・時刻設定バー
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 2.dp)
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
                     .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -360,12 +402,12 @@ fun RouteDetailPanel(
                 val dateLabel = "${curDate.monthValue}/${curDate.dayOfMonth}($dow)"
                 Surface(
                     onClick = { showDateDialog = true },
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(text = "📅", style = MaterialTheme.typography.bodySmall)
@@ -390,12 +432,12 @@ fun RouteDetailPanel(
                 val timeLabel = "${hm(targetTime)} $typeLabel"
                 Surface(
                     onClick = { showTimeDialog = true },
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(text = "🕒", style = MaterialTheme.typography.bodySmall)
@@ -415,19 +457,19 @@ fun RouteDetailPanel(
                     }
                 }
 
-                // 3. 「現在時刻」リセットボタン
+                // 3. 現在時刻ボタン
                 OutlinedButton(
                     onClick = {
                         onTimeChanged?.invoke(LocalDateTime.now(), TimeTargetType.DEPART)
                     },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
                     modifier = Modifier.height(32.dp)
                 ) {
                     Text("現在", style = MaterialTheme.typography.labelSmall)
                 }
             }
 
-            // 日付選択ダイアログ
+            // 日付ダイアログ
             if (showDateDialog) {
                 val pickerState = rememberDatePickerState(
                     initialSelectedDateMillis = targetTime.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
@@ -458,7 +500,7 @@ fun RouteDetailPanel(
                 }
             }
 
-            // 時刻選択ダイアログ
+            // 時刻ダイアログ
             if (showTimeDialog) {
                 RouteTimePickerDialog(
                     initialTime = targetTime,
@@ -471,131 +513,370 @@ fun RouteDetailPanel(
                 )
             }
 
-            if (candidates != null && candidates.size > 1 && onSelectCandidate != null) {
-                Row(
+            if (itin != null) {
+                // 候補ルートタブ (複数ある場合)
+                if (candidates != null && candidates.size > 1 && onSelectCandidate != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        candidates.forEachIndexed { index, candidate ->
+                            val isSelected = candidate === itin || (candidate.departure == itin.departure && candidate.arrival == itin.arrival && candidate.routeKey == itin.routeKey)
+                            val durMin = java.time.temporal.ChronoUnit.MINUTES.between(candidate.departure, candidate.arrival)
+                            val isFastest = index == 0
+                            Surface(
+                                onClick = { onSelectCandidate(candidate) },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                border = if (isSelected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary) else null
+                            ) {
+                                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "ルート${index + 1}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (isFastest) {
+                                            Spacer(Modifier.width(4.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.primary
+                                            ) {
+                                                Text(
+                                                    text = "最速",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onPrimary,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        text = "${hm(candidate.departure)} → ${hm(candidate.arrival)} (${formatDurationHoursMinutes(durMin)})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // サマリーヘッダー (発着時刻・所要時間・乗換回数・運賃バッジ & ナビボタン)
+                val durMin = Duration.between(itin.departure, itin.arrival).toMinutes()
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 2.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f))
                 ) {
-                    candidates.forEachIndexed { index, candidate ->
-                        val isSelected = candidate === itin || (candidate.departure == itin.departure && candidate.arrival == itin.arrival && candidate.routeKey == itin.routeKey)
-                        val durMin = java.time.temporal.ChronoUnit.MINUTES.between(candidate.departure, candidate.arrival)
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onSelectCandidate(candidate) },
-                            label = {
-                                Text(
-                                    text = "ルート${index + 1} (${formatDurationHoursMinutes(durMin)})",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        )
-                    }
-                }
-            }
-            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)) {
-                Text(
-                    text = "${hm(itin.departure)} → ${hm(itin.arrival)}",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = summaryText(itin),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (onStartNavigation != null || onStopNavigation != null) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (navigating) {
-                        Text(
-                            text = "ナビ中(通知でお知らせします)",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedButton(onClick = { onStopNavigation?.invoke() }) { Text("ナビ終了") }
-                    } else {
-                        Button(onClick = { onStartNavigation?.invoke() }) { Text("ナビ開始") }
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
-                items(timeline) { item ->
-                    when (item) {
-                        is TlItem.Stop -> TimelineRow(item.color, if (item.big) 16.dp else 11.dp) {
-                            Column(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(vertical = 8.dp)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
                             ) {
                                 Text(
-                                    text = item.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold
+                                    text = hm(itin.departure),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
-                                if (item.sub.isNotBlank()) {
-                                    Text(
-                                        text = item.sub,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                Text(
+                                    text = "  ➔  ",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = hm(itin.arrival),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
                             }
-                            Text(text = item.time, style = MaterialTheme.typography.bodyMedium)
-                        }
 
-                        is TlItem.Ride -> {
-                            val leg = item.leg
-                            val minutes = if (leg.depTime != null && leg.arrTime != null) {
-                                Duration.between(leg.depTime, leg.arrTime).toMinutes()
-                            } else {
-                                0L
-                            }
-                            TimelineRow(Color(leg.lineColor), 0.dp) {
-                                Column(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .padding(vertical = 6.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        LineBadge(leg.lineName, leg.lineColor)
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(
-                                            text = (if (leg.trainType.isBlank()) "" else "${leg.trainType} ") + "${leg.headsign}行き",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            modifier = Modifier.weight(1f)
-                                        )
+                            if (onStartNavigation != null || onStopNavigation != null) {
+                                if (navigating) {
+                                    OutlinedButton(
+                                        onClick = { onStopNavigation?.invoke() },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(34.dp)
+                                    ) {
+                                        Text("ナビ終了", style = MaterialTheme.typography.labelMedium)
                                     }
-                                    val fareText = leg.fare?.let {
-                                        val note = if (!leg.fareNote.isNullOrBlank()) " (${leg.fareNote})" else ""
-                                        "${it}円$note"
-                                    } ?: "料金不明"
-                                    Text(
-                                        text = "約${formatDurationHoursMinutes(minutes)} · $fareText",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                } else if (onStartNavigation != null) {
+                                    Button(
+                                        onClick = onStartNavigation,
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(34.dp)
+                                    ) {
+                                        Text("🧭 ナビ開始", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
 
-                        is TlItem.Walk -> TimelineRow(WALK_GRAY.copy(alpha = 0.6f), 0.dp) {
-                            Text(
-                                text = item.text,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 6.dp)
-                            )
+                        Spacer(Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = "所要 約${formatDurationHoursMinutes(durMin)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = if (itin.transfers == 0) "乗換なし (直通)" else "乗換 ${itin.transfers}回",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            if (itin.fare != null || itin.knownFare > 0) {
+                                val f = itin.fare ?: itin.knownFare
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+                                ) {
+                                    Text(
+                                        text = "${f}円",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.tertiary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
-                item { Spacer(Modifier.height(16.dp)) }
+
+                Spacer(Modifier.height(4.dp))
+
+                // タイムライン一覧
+                LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                    items(timeline) { item ->
+                        when (item) {
+                            is TlItem.Stop -> TimelineRow(
+                                lineColor = item.color,
+                                dotContent = {
+                                    if (item.isTerminal) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(18.dp)
+                                                .background(MaterialTheme.colorScheme.surface, CircleShape)
+                                                .border(3.dp, item.color, CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(6.dp)
+                                                    .background(item.color, CircleShape)
+                                            )
+                                        }
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(14.dp)
+                                                .background(item.color, CircleShape)
+                                                .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                                        )
+                                    }
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = item.name,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (item.sub.isNotBlank()) {
+                                                Spacer(Modifier.width(8.dp))
+                                                Surface(
+                                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                                    shape = RoundedCornerShape(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = item.sub,
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = item.time,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            is TlItem.Ride -> {
+                                val leg = item.leg
+                                val minutes = if (leg.depTime != null && leg.arrTime != null) {
+                                    Duration.between(leg.depTime, leg.arrTime).toMinutes()
+                                } else {
+                                    0L
+                                }
+                                TimelineRow(lineColor = Color(leg.lineColor)) {
+                                    Surface(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(vertical = 4.dp),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                val isBus = leg.trainType.contains("バス") || leg.lineName.contains("バス")
+                                                Text(if (isBus) "🚌" else "🚆", fontSize = 16.sp)
+                                                Spacer(Modifier.width(6.dp))
+                                                LineBadge(leg.lineName, leg.lineColor)
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(
+                                                    text = (if (leg.trainType.isBlank()) "" else "${leg.trainType} ") + "${leg.headsign}行き",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                            }
+                                            Spacer(Modifier.height(4.dp))
+                                            val fareText = leg.fare?.let {
+                                                val note = if (!leg.fareNote.isNullOrBlank()) " (${leg.fareNote})" else ""
+                                                "${it}円$note"
+                                            } ?: "運賃込"
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                Text(
+                                                    text = "⏱️ 約${formatDurationHoursMinutes(minutes)}",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = "·",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = "🎫 $fareText",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            is TlItem.Walk -> TimelineRow(lineColor = WALK_GRAY.copy(alpha = 0.6f), isWalk = true) {
+                                Row(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .padding(vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("🚶", fontSize = 14.sp)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = item.text,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    item { Spacer(Modifier.height(16.dp)) }
+                }
+            } else {
+                // 運行便なし (終電後など) プレースホルダー表示
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 28.dp, horizontal = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text("🌙", fontSize = 42.sp)
+                    Text(
+                        text = "指定された日時に運行便がありません",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "終電後などの時間帯です。\n上記の日付・時刻チップから運行時間帯を指定するか、翌朝の便で再検索してください。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    if (onSearchTomorrowMorning != null) {
+                        Button(
+                            onClick = onSearchTomorrowMorning,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Text("翌朝 06:00 で再検索", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
     }

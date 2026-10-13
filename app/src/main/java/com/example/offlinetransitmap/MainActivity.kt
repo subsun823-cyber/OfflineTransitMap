@@ -33,7 +33,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -107,7 +109,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private data class SelectedStation(val id: String, val name: String)
+private data class SelectedStation(val id: String, val name: String, val lat: Double = 0.0, val lon: Double = 0.0)
 
 // 端末が最後に取得した現在地(緯度, 経度)。無ければ null
 @SuppressLint("MissingPermission")
@@ -184,6 +186,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     // 結果から選ばれた経路(地図に線を出し、詳細パネルを表示する)
     var selectedItinerary by remember { mutableStateOf<Itinerary?>(null) }
     var candidateItineraries by remember { mutableStateOf<List<Itinerary>?>(null) }
+    var isTransitRoutePanelOpen by remember { mutableStateOf(false) }
+    var showNoTransitDialog by remember { mutableStateOf(false) }
 
     // 施設・場所・駅・バス停の検索
     val poiDb = remember { PoiDatabase.open(context) }
@@ -521,8 +525,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 if (bestItin != null) {
                                     candidateItineraries = candidates
                                     selectedItinerary = bestItin
+                                    isTransitRoutePanelOpen = true
                                 } else {
-                                    Toast.makeText(context, "指定された日時に運行している便がありません（終電後など）。日時を変更してください", Toast.LENGTH_LONG).show()
+                                    candidateItineraries = emptyList()
+                                    selectedItinerary = null
+                                    isTransitRoutePanelOpen = true
+                                    showNoTransitDialog = true
                                 }
                             }
                         } catch (e: Throwable) {
@@ -692,7 +700,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         )
                     }
                 },
-                onStationClick = { id, name ->
+                onStationClick = { id, name, lat, lon ->
                     if (!navMode) {
                         transitSearchJob?.cancel()
                         cachedTransitRoutes = null
@@ -706,7 +714,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationTransitDuration = null
                         selectedTravelMode = TravelMode.WALK
                         targetCameraPoint = null
-                        selectedStation = SelectedStation(id, name)
+                        selectedStation = SelectedStation(id, name, lat, lon)
                     }
                 },
                 onMapClick = { _, _ ->
@@ -993,102 +1001,114 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     onClose = { showPlaceSearch = false }
                 )
             }
-            selectedItinerary?.let { itin ->
-                if (!navMode && !showSettings) {
-                    val originWp = routeOriginWaypoint
-                    val destWp = routeDestWaypoint
-                    val vias = routeViaWaypoints
+            if ((selectedItinerary != null || isTransitRoutePanelOpen) && !navMode && !showSettings) {
+                val originWp = routeOriginWaypoint
+                val destWp = routeDestWaypoint
+                val vias = routeViaWaypoints
 
-                    val recalculateRoutes: (RouteWaypoint, List<RouteWaypoint>, RouteWaypoint, LocalDateTime, TimeTargetType) -> Unit = { o, v, d, tTime, tType ->
-                        val activeSearcher = ensureSearcher()
-                        if (activeSearcher != null) {
-                            isSearchingForDestination = true
-                            scope.launch(Dispatchers.Default) {
-                                val routes = activeSearcher.findRoutesWithWaypoints(
-                                    waypoints = listOf(o) + v + listOf(d),
-                                    now = tTime,
-                                    timeType = tType
-                                )
-                                withContext(Dispatchers.Main) {
-                                    isSearchingForDestination = false
-                                    if (routes.isNotEmpty()) {
-                                        candidateItineraries = routes
-                                        selectedItinerary = routes.first()
-                                    } else {
-                                        Toast.makeText(context, "指定された日時に運行している便がありません（終電後など）。日時を変更してください", Toast.LENGTH_LONG).show()
-                                    }
+                val recalculateRoutes: (RouteWaypoint, List<RouteWaypoint>, RouteWaypoint, LocalDateTime, TimeTargetType) -> Unit = { o, v, d, tTime, tType ->
+                    val activeSearcher = ensureSearcher()
+                    if (activeSearcher != null) {
+                        isSearchingForDestination = true
+                        scope.launch(Dispatchers.Default) {
+                            val routes = activeSearcher.findRoutesWithWaypoints(
+                                waypoints = listOf(o) + v + listOf(d),
+                                now = tTime,
+                                timeType = tType
+                            )
+                            withContext(Dispatchers.Main) {
+                                isSearchingForDestination = false
+                                if (routes.isNotEmpty()) {
+                                    candidateItineraries = routes
+                                    selectedItinerary = routes.first()
+                                } else {
+                                    candidateItineraries = emptyList()
+                                    selectedItinerary = null
+                                    showNoTransitDialog = true
                                 }
                             }
                         }
                     }
-
-                    RouteDetailPanel(
-                        itin = itin,
-                        candidates = candidateItineraries,
-                        onSelectCandidate = { selectedItinerary = it },
-                        originName = originWp?.name ?: "出発地",
-                        destName = destWp?.name ?: destinationTitle,
-                        viaNames = vias.map { it.name },
-                        targetTime = routeTargetTime,
-                        timeType = routeTimeType,
-                        onTimeChanged = { newTime, newType ->
-                            routeTargetTime = newTime
-                            routeTimeType = newType
-                            if (originWp != null && destWp != null) {
-                                recalculateRoutes(originWp, vias, destWp, newTime, newType)
-                            }
-                        },
-                        onSwapOriginDest = if (originWp != null && destWp != null) {
-                            {
-                                val newOrig = destWp
-                                val newDest = originWp
-                                val newVias = vias.reversed()
-                                routeOriginWaypoint = newOrig
-                                routeDestWaypoint = newDest
-                                routeViaWaypoints = newVias
-                                recalculateRoutes(newOrig, newVias, newDest, routeTargetTime, routeTimeType)
-                            }
-                        } else null,
-                        onAddVia = if (vias.size < 2) {
-                            { stationSelectTarget = "via_add" }
-                        } else null,
-                        onRemoveVia = { removeIdx ->
-                            if (originWp != null && destWp != null) {
-                                val newVias = vias.filterIndexed { i, _ -> i != removeIdx }
-                                routeViaWaypoints = newVias
-                                recalculateRoutes(originWp, newVias, destWp, routeTargetTime, routeTimeType)
-                            }
-                        },
-                        onClickOrigin = { stationSelectTarget = "origin" },
-                        onClickDest = { stationSelectTarget = "dest" },
-                        onClickVia = { editIdx -> stationSelectTarget = "via_edit_$editIdx" },
-                        onBackToResults = {
-                            selectedItinerary = null
-                            candidateItineraries = null
-                        },
-                        onClose = {
-                            selectedItinerary = null
-                            candidateItineraries = null
-                        },
-                        modifier = Modifier.align(Alignment.BottomCenter),
-                        navigating = NavigationState.active && NavigationState.itinerary === itin,
-                        onStartNavigation = { startNavigation(itin, selectedTravelMode) },
-                        onStopNavigation = {
-                            NavigationController.stop(context)
-                            transitSearchJob?.cancel()
-                            cachedTransitRoutes = null
-                            destinationPoint = null
-                            destinationStation = null
-                            destinationDistance = null
-                            destinationCurrentDistance = null
-                            destinationCurrentDuration = null
-                            destinationBicycleDuration = null
-                            destinationTransitDuration = null
-                            candidateItineraries = null
-                            targetCameraPoint = null
-                        }
-                    )
                 }
+
+                RouteDetailPanel(
+                    itin = selectedItinerary,
+                    candidates = candidateItineraries,
+                    onSelectCandidate = { selectedItinerary = it },
+                    originName = originWp?.name ?: "出発地",
+                    destName = destWp?.name ?: destinationTitle,
+                    viaNames = vias.map { it.name },
+                    targetTime = routeTargetTime,
+                    timeType = routeTimeType,
+                    onTimeChanged = { newTime, newType ->
+                        routeTargetTime = newTime
+                        routeTimeType = newType
+                        if (originWp != null && destWp != null) {
+                            recalculateRoutes(originWp, vias, destWp, newTime, newType)
+                        }
+                    },
+                    onSearchTomorrowMorning = {
+                        val baseDate = if (routeTargetTime.hour < 4) routeTargetTime.toLocalDate() else routeTargetTime.toLocalDate().plusDays(1)
+                        val nextMorning = baseDate.atTime(6, 0)
+                        routeTargetTime = nextMorning
+                        routeTimeType = TimeTargetType.DEPART
+                        if (originWp != null && destWp != null) {
+                            recalculateRoutes(originWp, vias, destWp, nextMorning, TimeTargetType.DEPART)
+                        }
+                    },
+                    onSwapOriginDest = if (originWp != null && destWp != null) {
+                        {
+                            val newOrig = destWp
+                            val newDest = originWp
+                            val newVias = vias.reversed()
+                            routeOriginWaypoint = newOrig
+                            routeDestWaypoint = newDest
+                            routeViaWaypoints = newVias
+                            recalculateRoutes(newOrig, newVias, newDest, routeTargetTime, routeTimeType)
+                        }
+                    } else null,
+                    onAddVia = if (vias.size < 2) {
+                        { stationSelectTarget = "via_add" }
+                    } else null,
+                    onRemoveVia = { removeIdx ->
+                        if (originWp != null && destWp != null) {
+                            val newVias = vias.filterIndexed { i, _ -> i != removeIdx }
+                            routeViaWaypoints = newVias
+                            recalculateRoutes(originWp, newVias, destWp, routeTargetTime, routeTimeType)
+                        }
+                    },
+                    onClickOrigin = { stationSelectTarget = "origin" },
+                    onClickDest = { stationSelectTarget = "dest" },
+                    onClickVia = { editIdx -> stationSelectTarget = "via_edit_$editIdx" },
+                    onBackToResults = {
+                        selectedItinerary = null
+                        candidateItineraries = null
+                        isTransitRoutePanelOpen = false
+                    },
+                    onClose = {
+                        selectedItinerary = null
+                        candidateItineraries = null
+                        isTransitRoutePanelOpen = false
+                    },
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    navigating = selectedItinerary != null && NavigationState.active && NavigationState.itinerary === selectedItinerary,
+                    onStartNavigation = selectedItinerary?.let { itin -> { startNavigation(itin, selectedTravelMode) } },
+                    onStopNavigation = {
+                        NavigationController.stop(context)
+                        transitSearchJob?.cancel()
+                        cachedTransitRoutes = null
+                        destinationPoint = null
+                        destinationStation = null
+                        destinationDistance = null
+                        destinationCurrentDistance = null
+                        destinationCurrentDuration = null
+                        destinationBicycleDuration = null
+                        destinationTransitDuration = null
+                        candidateItineraries = null
+                        targetCameraPoint = null
+                        isTransitRoutePanelOpen = false
+                    }
+                )
             }
 
             stationSelectTarget?.let { target ->
@@ -1257,7 +1277,100 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             onSelectLine = { selectedLine = it },
             note = note,
             loadTripStops = { d -> timetable?.tripStops(d) ?: emptyList() },
+            onNavigateToStation = {
+                scope.launch(Dispatchers.Default) {
+                    val activeSearcher = ensureSearcher()
+                    val stEntry = activeSearcher?.searchStations(station.name)?.firstOrNull { it.id == station.id || it.name == station.name }
+                        ?: activeSearcher?.searchStations(station.name)?.firstOrNull()
+                    val finalLat = if (station.lat != 0.0) station.lat else (stEntry?.lat ?: 35.68)
+                    val finalLon = if (station.lon != 0.0) station.lon else (stEntry?.lon ?: 139.76)
+                    val targetPoint = Pair(finalLat, finalLon)
+
+                    withContext(Dispatchers.Main) {
+                        selectedStation = null
+                        destinationPoint = targetPoint
+                        destinationTitle = station.name
+                        destinationCategoryLabel = "駅"
+                        destinationIconEmoji = "🚉"
+                        destinationStation = stEntry
+                        selectedTravelMode = TravelMode.TRANSIT
+                        targetCameraPoint = targetPoint
+                        handleDestinationSearch(false)
+                    }
+                }
+            },
             onDismiss = { selectedStation = null }
+        )
+    }
+
+    if (showNoTransitDialog) {
+        AlertDialog(
+            onDismissRequest = { showNoTransitDialog = false },
+            icon = { Text("🌙", fontSize = 28.sp) },
+            title = {
+                Text(
+                    text = "運行便が見つかりません",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "指定された時間帯（深夜・終電後など）には運行している電車・バスがありませんでした。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "翌朝の始発時刻で検索するか、日時を変更してください。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showNoTransitDialog = false
+                        val baseDate = if (routeTargetTime.hour < 4) routeTargetTime.toLocalDate() else routeTargetTime.toLocalDate().plusDays(1)
+                        val nextMorning = baseDate.atTime(6, 0)
+                        routeTargetTime = nextMorning
+                        routeTimeType = TimeTargetType.DEPART
+                        val orig = routeOriginWaypoint
+                        val dest = routeDestWaypoint
+                        if (orig != null && dest != null) {
+                            val activeSearcher = ensureSearcher()
+                            if (activeSearcher != null) {
+                                isSearchingForDestination = true
+                                scope.launch(Dispatchers.Default) {
+                                    val routes = activeSearcher.findRoutesWithWaypoints(
+                                        waypoints = listOf(orig) + routeViaWaypoints + listOf(dest),
+                                        now = nextMorning,
+                                        timeType = TimeTargetType.DEPART
+                                    )
+                                    withContext(Dispatchers.Main) {
+                                        isSearchingForDestination = false
+                                        if (routes.isNotEmpty()) {
+                                            candidateItineraries = routes
+                                            selectedItinerary = routes.first()
+                                        } else {
+                                            candidateItineraries = emptyList()
+                                            selectedItinerary = null
+                                            Toast.makeText(context, "翌朝の便も見つかりませんでした。日時をご確認ください", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    Text("翌朝 06:00 で検索", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNoTransitDialog = false }) {
+                    Text("閉じる")
+                }
+            }
         )
     }
 }

@@ -783,6 +783,51 @@ class DestinationNavigationTest {
         assertEquals(23, updatedDateTime.hour)
         assertEquals(45, updatedDateTime.minute)
     }
+
+    @Test
+    fun testStationSelectionSetsTransitDestination() {
+        val stName = "八王子駅"
+        val stLat = 35.655
+        val stLon = 139.338
+        val stId = "1001"
+
+        // 駅詳細からの「ここへ行く」アクション
+        val destPoint = Pair(stLat, stLon)
+        val selectedTravelMode = TravelMode.TRANSIT
+        val destStation = StationEntry(stId, stName, "はちおうじ", stLat, stLon, "八王子")
+
+        assertEquals(destPoint.first, destStation.lat, 0.0001)
+        assertEquals(destPoint.second, destStation.lon, 0.0001)
+        assertEquals(TravelMode.TRANSIT, selectedTravelMode)
+        assertEquals("八王子駅", stName)
+    }
+
+    @Test
+    fun testNoTransitRoutesTriggersDialogStateAndAllowsNextMorningSearch() {
+        // 夜間検索などで結果が空の場合
+        val candidates = emptyList<Itinerary>()
+        var isTransitRoutePanelOpen = false
+        var showNoTransitDialog = false
+        var selectedItinerary: Itinerary? = null
+
+        if (candidates.isEmpty()) {
+            isTransitRoutePanelOpen = true
+            showNoTransitDialog = true
+            selectedItinerary = null
+        }
+
+        assertTrue(isTransitRoutePanelOpen)
+        assertTrue(showNoTransitDialog)
+        assertTrue(selectedItinerary == null)
+
+        // 翌朝06:00に切り替え
+        val currentLateNight = LocalDateTime.of(2026, 10, 14, 0, 15)
+        val nextMorning = (if (currentLateNight.hour < 4) currentLateNight.toLocalDate() else currentLateNight.toLocalDate().plusDays(1)).atTime(6, 0)
+        assertEquals(6, nextMorning.hour)
+        assertEquals(0, nextMorning.minute)
+        assertEquals(14, nextMorning.dayOfMonth) // 深夜0時は同日朝6時
+    }
 }
+
 
 

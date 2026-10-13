@@ -234,7 +234,7 @@ fun MapLibreMapView(
     mapReloadKey: Int = 0,
     onFollowLostChange: (Boolean) -> Unit = {},
     onBearingChange: (Double) -> Unit = {},
-    onStationClick: (id: String, name: String) -> Unit = { _, _ -> },
+    onStationClick: (id: String, name: String, lat: Double, lon: Double) -> Unit = { _, _, _, _ -> },
     onCrossingClick: (id: String, name: String, lat: Double, lon: Double) -> Unit = { _, _, _, _ -> },
     onMapClick: (lat: Double, lon: Double) -> Unit = { _, _ -> },
     onMapLongClick: (lat: Double, lon: Double) -> Unit = { _, _ -> },
@@ -316,7 +316,17 @@ fun MapLibreMapView(
                     val id = feature?.getStringProperty("id") ?: ""
                     val name = feature?.getStringProperty("name")
                     if (name != null) {
-                        currentOnStationClick(id, name)
+                        val geom = feature.geometry()
+                        val sLat: Double
+                        val sLon: Double
+                        if (geom is org.maplibre.geojson.Point) {
+                            sLat = geom.latitude()
+                            sLon = geom.longitude()
+                        } else {
+                            sLat = latLng.latitude
+                            sLon = latLng.longitude
+                        }
+                        currentOnStationClick(id, name, sLat, sLon)
                         true
                     } else {
                         currentOnMapClick(latLng.latitude, latLng.longitude)
