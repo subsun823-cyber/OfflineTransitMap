@@ -872,16 +872,24 @@ class NavigationService : Service() {
     private fun onLegFinished(pos: Int, busIdx: List<Int>, r: Itinerary) {
         val i = busIdx[pos]
         val leg = r.legs[i]
+        val finalDestName = r.legs.lastOrNull()?.toName ?: ""
+        val isDestStation = r.isDestStation ||
+                finalDestName.endsWith("駅") || finalDestName.endsWith("停留所") || finalDestName.endsWith("のりば") ||
+                leg.toName == finalDestName
+
         if (pos == busIdx.lastIndex) {
             val tail = r.legs.getOrNull(i + 1)
-            if (tail != null && tail.isWalk) {
+            if (isDestStation || tail == null || !tail.isWalk) {
+                // 目的地が駅の場合、到着時にお疲れ様でしたのアナウンスと共にナビを即座に終了
+                alert("arrive", "お疲れ様でした。", "${leg.toName}に到着しました")
+                stopSelf()
+                return
+            } else {
                 alert(
                     "alight_last",
                     "${leg.toName}に着きました",
                     "${tail.toName}まで徒歩約${tail.walkMinutes}分です"
                 )
-            } else {
-                alert("arrive", "到着しました", "${leg.toName}(目的地)に到着しました")
             }
         } else {
             val nextIdx = busIdx[pos + 1]
@@ -1014,9 +1022,11 @@ class NavigationService : Service() {
             val leg = legs[i]
             val dep = leg.depTime
             val arr = leg.arrTime
+            val isBus = leg.lineName.contains("バス") || leg.operatorLabel.contains("バス")
             val near = dep != null && now.isAfter(dep) &&
                     (distanceTo(leg.path.lastOrNull()) ?: Int.MAX_VALUE) <= ARRIVE_M
-            val timeOver = arr != null && now.isAfter(arr.plusMinutes(1))
+            val delayAllowanceMin = if (isBus) 15L else 3L
+            val timeOver = arr != null && now.isAfter(arr.plusMinutes(delayAllowanceMin))
             if (near || timeOver) {
                 finished.add(i)
                 onLegFinished(pos, busIdx, r)
@@ -1028,6 +1038,18 @@ class NavigationService : Service() {
 
         // すべてのバス・電車を降りたあと (降車駅から最終目的地への徒歩/自転車区間)
         if (cur == -1) {
+            val lastRideLeg = busIdx.lastOrNull()?.let { legs[it] }
+            val finalDestName = legs.lastOrNull()?.toName ?: ""
+            val isDestStation = r.isDestStation ||
+                    finalDestName.endsWith("駅") || finalDestName.endsWith("停留所") || finalDestName.endsWith("のりば") ||
+                    (lastRideLeg != null && lastRideLeg.toName == finalDestName)
+
+            if (isDestStation) {
+                alert("arrive", "お疲れ様でした。", "${lastRideLeg?.toName ?: "目的地"}に到着しました")
+                stopSelf()
+                return
+            }
+
             val tailIndex = busIdx.last() + 1
             val tail = legs.getOrNull(tailIndex)
             val dest = tail?.path?.lastOrNull()

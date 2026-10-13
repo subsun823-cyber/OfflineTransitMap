@@ -48,6 +48,11 @@ data class RouteLeg(
 enum class SortMode { FASTEST, FEWEST_TRANSFERS, CHEAPEST }
 
 // 1つの経路。fare が null のときは、運賃データが無い区間を含む(knownFare は分かる分の合計)
+enum class TimeTargetType {
+    DEPART,  // 出発時刻指定
+    ARRIVE   // 到着時刻指定(何時までにつくかの指定)
+}
+
 data class Itinerary(
     val legs: List<RouteLeg>,
     val departure: LocalDateTime,
@@ -55,7 +60,8 @@ data class Itinerary(
     val transfers: Int,
     val fare: Int?,
     val knownFare: Int,
-    val routeKey: String
+    val routeKey: String,
+    val isDestStation: Boolean = false
 )
 
 private const val INF = 1_000_000_000
@@ -66,7 +72,7 @@ private const val MAX_TRIPS = 4                 // 乗る便は最大4本(乗換
 private const val BUF_AFTER_BUS = 180           // 降りてから次に乗るまでの余裕(秒)
 private const val BUF_AFTER_WALK = 60           // 歩いたあとの余裕(秒)
 private const val MAX_TRANSFER_WAIT = 90 * 60   // 乗換の待ちは90分まで
-private const val WALK_MAX_M = 300              // 歩いて乗り換えられる距離(m)
+private const val WALK_MAX_M = 500              // 歩いて乗り換えられる距離(m) 駅前バス停等への乗り換えを考慮し500mに拡張
 private const val SAME_STATION_WALK_M = 150     // 同じ名前の駅で、これ未満の移動は「徒歩」として出さない
 private const val HORIZON_SEC = (2.5 * 3600).toInt() // 直近2.5時間以内の便を読む(メモリ・検索負荷を大幅軽量化)
 private const val EXTRA_MAX_MIN = 120L          // 最速より2時間以上遅い経路は出さない
@@ -811,11 +817,18 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         ).use { c ->
             if (c.moveToFirst()) {
                 val platform: String? = c.getString(5)
+                val rawColor = c.getInt(3)
+                val opLabel = shortenLabel(c.getString(1) ?: "", 6)
+                val lColor = if (rawColor != 0) {
+                    0xFF000000L or rawColor.toLong()
+                } else {
+                    if (opLabel.contains("バス")) 0xFF0284C7L else 0xFF2563EBL
+                }
                 info = LegInfo(
                     routeId = c.getString(0),
-                    operatorLabel = shortenLabel(c.getString(1) ?: "", 6),
+                    operatorLabel = opLabel,
                     lineName = shortenLabel(c.getString(2) ?: "", 8),
-                    lineColor = 0xFF000000L or c.getInt(3).toLong(),
+                    lineColor = lColor,
                     headsign = tidyHeadsignText(c.getString(4) ?: ""),
                     platform = if (platform.isNullOrBlank() || platform == "0") "" else "${platform}番のりば",
                     trainType = c.getString(6) ?: ""
@@ -1027,7 +1040,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         destLon: Double,
         now: LocalDateTime,
         destName: String = "目的地",
+        originName: String = "現在地",
         travelMode: TravelMode = TravelMode.WALK,
+        timeType: TimeTargetType = TimeTargetType.DEPART,
         roadRouter: RoadRouter? = null
     ): List<Itinerary> {
         val crowDistM = calcDistanceMeters(originLat, originLon, destLat, destLon)
@@ -1044,7 +1059,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             val directPath = roadResult?.path ?: listOf(Pair(originLat, originLon), Pair(destLat, destLon))
             val directLeg = RouteLeg(
                 isWalk = true,
-                fromName = "現在地",
+                fromName = originName,
                 toName = destName,
                 walkMinutes = directDurationMin,
                 walkMeters = directMeters,
@@ -1059,7 +1074,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 transfers = 0,
                 fare = 0,
                 knownFare = 0,
-                routeKey = if (isBike) "bike_direct" else "walk_direct"
+                routeKey = if (isBike) "bike_direct" else "walk_direct",
+                isDestStation = false
             )
         }
 
@@ -1070,11 +1086,26 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
         // --- travelMode == TravelMode.TRANSIT (公共交通機関：電車・バス) ---
         return try {
-            val originSt = nearestStation(originLat, originLon)
-            // 目的地名称が駅名の場合、その駅を優先採用
+            // 出発駅・バス停の解決（完全一致優先、近接優先、最寄りフォールバック）
+            val originSt = if (originName.isNotEmpty() && originName != "現在地") {
+                net.stations.firstOrNull { it.name == originName }
+                    ?: net.stations.filter {
+                        (originName.contains(it.name) || it.name.contains(originName)) &&
+                        calcDistanceMeters(it.lat, it.lon, originLat, originLon) <= 1500
+                    }.minByOrNull { calcDistanceMeters(it.lat, it.lon, originLat, originLon) }
+                    ?: nearestStation(originLat, originLon)
+            } else {
+                nearestStation(originLat, originLon)
+            }
+
+            // 目的地名称が駅・バス停名の場合、完全一致→近接部分一致→最寄り駅の順で優先採用
             val destSt = if (destName.isNotEmpty() && destName != "目的地") {
-                val match = net.stations.firstOrNull { destName.contains(it.name) || it.name.contains(destName) }
-                match ?: nearestStation(destLat, destLon)
+                net.stations.firstOrNull { it.name == destName }
+                    ?: net.stations.filter {
+                        (destName.contains(it.name) || it.name.contains(destName)) &&
+                        calcDistanceMeters(it.lat, it.lon, destLat, destLon) <= 1500
+                    }.minByOrNull { calcDistanceMeters(it.lat, it.lon, destLat, destLon) }
+                    ?: nearestStation(destLat, destLon)
             } else {
                 nearestStation(destLat, destLon)
             }
@@ -1083,16 +1114,53 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 return listOf(directFallback(TravelMode.WALK))
             }
 
-            val originWalkMeters = calcDistanceMeters(originLat, originLon, originSt.lat, originSt.lon)
+            // 出発地/目的地が駅そのものかどうかの判定
+            val isOriginStation = originName.isNotEmpty() && originName != "現在地" && (
+                originSt.name == originName ||
+                originName.contains(originSt.name) ||
+                originSt.name.contains(originName) ||
+                originName.endsWith("駅") ||
+                originName.endsWith("停留所") ||
+                originName.endsWith("のりば")
+            )
+            val isDestStation = destName.isNotEmpty() && (
+                destSt.name == destName ||
+                destName.contains(destSt.name) ||
+                destSt.name.contains(destName) ||
+                destName.endsWith("駅") ||
+                destName.endsWith("停留所") ||
+                destName.endsWith("のりば")
+            )
+
+            // 出発駅への徒歩（駅そのものが出発地の場合は徒歩なし）
+            val rawOriginWalkM = calcDistanceMeters(originLat, originLon, originSt.lat, originSt.lon)
+            val originWalkMeters = if (isOriginStation || rawOriginWalkM <= 40) 0 else rawOriginWalkM
             val originWalkMin = if (originWalkMeters > 40) walkDurationMinutes(originWalkMeters) else 0
 
-            val destWalkMeters = calcDistanceMeters(destSt.lat, destSt.lon, destLat, destLon)
+            // 目的駅からの徒歩（駅そのものが目的時代は徒歩なし、所在地微差による余分な徒歩を完全排除）
+            val rawDestWalkM = calcDistanceMeters(destSt.lat, destSt.lon, destLat, destLon)
+            val destWalkMeters = if (isDestStation || rawDestWalkM <= 40) 0 else rawDestWalkM
             val destWalkMin = if (destWalkMeters > 40) walkDurationMinutes(destWalkMeters) else 0
 
             val transitSearchTime = now.plusMinutes(originWalkMin.toLong())
 
             val transitRoutes = if (originSt.group != destSt.group) {
-                findRoutes(originSt.id, destSt.id, transitSearchTime)
+                if (timeType == TimeTargetType.ARRIVE) {
+                    // 到着時刻指定: 目標時刻の最大120分前から探索
+                    val searchStart = now.minusMinutes(120)
+                    val allCandidates = findRoutes(originSt.id, destSt.id, searchStart)
+                    // 目標到着時刻(指定時刻)までに到着する便を抽出
+                    val onTime = allCandidates.filter { !it.arrival.isAfter(now.plusSeconds(30)) }
+                    if (onTime.isNotEmpty()) {
+                        // 目標時刻に最も近く到着する便（＝余計な待ち時間が少なく最も遅く出発できる便）を上位に
+                        onTime.sortedByDescending { it.arrival }
+                    } else {
+                        // 間に合わない場合は目標時刻直後に最速で着く便
+                        allCandidates.sortedBy { it.arrival }.take(3)
+                    }
+                } else {
+                    findRoutes(originSt.id, destSt.id, transitSearchTime)
+                }
             } else {
                 emptyList()
             }
@@ -1103,7 +1171,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             for (itin in transitRoutes) {
                 val newLegs = ArrayList<RouteLeg>()
 
-                // 1. 出発地から最初の乗車駅への徒歩レグ（40m以上離れている場合）
+                // 1. 出発地から最初の乗車駅への徒歩レグ（駅が出発地ではない場合のみ）
                 val firstLeg = itin.legs.firstOrNull()
                 if (originWalkMeters > 40 && firstLeg != null) {
                     val boardStationName = firstLeg.fromName
@@ -1111,7 +1179,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     newLegs.add(
                         RouteLeg(
                             isWalk = true,
-                            fromName = "現在地",
+                            fromName = originName,
                             toName = boardStationName,
                             walkMinutes = originWalkMin,
                             walkMeters = originWalkMeters,
@@ -1120,11 +1188,18 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     )
                 }
 
-                // 2. 公共交通のレグ群
-                newLegs.addAll(itin.legs)
+                // 2. 公共交通のレグ群（目的地が駅の場合、末尾の不要な駅構内徒歩レグをトリミング）
+                val rawTransitLegs = ArrayList(itin.legs)
+                if (isDestStation && rawTransitLegs.isNotEmpty()) {
+                    val lastL = rawTransitLegs.last()
+                    if (lastL.isWalk && (lastL.toName == destSt.name || lastL.fromName == destSt.name || lastL.walkMeters < 250)) {
+                        rawTransitLegs.removeAt(rawTransitLegs.lastIndex)
+                    }
+                }
+                newLegs.addAll(rawTransitLegs)
 
-                // 3. 最後の降車駅から目的地への徒歩レグ（40m以上離れている場合）
-                val lastLeg = itin.legs.lastOrNull()
+                // 3. 最後の降車駅から目的地への徒歩レグ（目的地が駅そのものではない場合のみ）
+                val lastLeg = rawTransitLegs.lastOrNull()
                 if (destWalkMeters > 40 && lastLeg != null) {
                     val alightStationName = lastLeg.toName
                     val alightCoord = lastLeg.path.lastOrNull() ?: Pair(destSt.lat, destSt.lon)
@@ -1146,7 +1221,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 val combined = itin.copy(
                     legs = newLegs,
                     departure = dep,
-                    arrival = arr
+                    arrival = arr,
+                    isDestStation = isDestStation
                 )
                 if (seenKeys.add(combined.routeKey)) {
                     results.add(combined)
@@ -1168,7 +1244,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
     // 経由地を含む地点リスト間のルート探索 (例: [出発地, 経由地1, ..., 目的地])
     fun findRoutesWithWaypoints(
         waypoints: List<RouteWaypoint>,
-        now: LocalDateTime
+        now: LocalDateTime,
+        timeType: TimeTargetType = TimeTargetType.DEPART
     ): List<Itinerary> {
         if (waypoints.size < 2) return emptyList()
         if (waypoints.size == 2) {
@@ -1178,8 +1255,10 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 destLat = waypoints[1].lat,
                 destLon = waypoints[1].lon,
                 now = now,
+                originName = waypoints[0].name,
                 destName = waypoints[1].name,
-                travelMode = TravelMode.TRANSIT
+                travelMode = TravelMode.TRANSIT,
+                timeType = timeType
             )
         }
 
@@ -1195,8 +1274,10 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     destLat = pTo.lat,
                     destLon = pTo.lon,
                     now = curTime,
+                    originName = pFrom.name,
                     destName = pTo.name,
-                    travelMode = TravelMode.TRANSIT
+                    travelMode = TravelMode.TRANSIT,
+                    timeType = if (i == waypoints.size - 2) timeType else TimeTargetType.DEPART
                 )
                 val best = rank(segRoutes, SortMode.FASTEST).firstOrNull() ?: segRoutes.firstOrNull()
                 if (best == null) return emptyList()
@@ -1225,6 +1306,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
             val dep = segments.first().departure
             val arr = segments.last().arrival
+            val isDestStation = segments.last().isDestStation
 
             listOf(
                 Itinerary(
@@ -1234,7 +1316,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     transfers = totalTransfers,
                     fare = totalFare,
                     knownFare = knownFare,
-                    routeKey = keyParts.joinToString("||")
+                    routeKey = keyParts.joinToString("||"),
+                    isDestStation = isDestStation
                 )
             )
         } catch (e: Throwable) {

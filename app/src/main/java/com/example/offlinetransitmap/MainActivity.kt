@@ -233,6 +233,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var routeDestWaypoint by remember { mutableStateOf<RouteWaypoint?>(null) }
     var routeViaWaypoints by remember { mutableStateOf<List<RouteWaypoint>>(emptyList()) }
     var stationSelectTarget by remember { mutableStateOf<String?>(null) }
+    var routeTargetTime by remember { mutableStateOf(LocalDateTime.now()) }
+    var routeTimeType by remember { mutableStateOf(TimeTargetType.DEPART) }
     val scope = rememberCoroutineScope()
 
     // ナビ中の経路・案内・地図の向き
@@ -489,6 +491,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 routeOriginWaypoint = originWp
                                 routeDestWaypoint = destWp
                                 routeViaWaypoints = emptyList()
+                                val searchTime = LocalDateTime.now()
+                                routeTargetTime = searchTime
+                                routeTimeType = TimeTargetType.DEPART
 
                                 val candidates = withContext(Dispatchers.Default) {
                                     try {
@@ -498,7 +503,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         } else if (activeSearcher != null) {
                                             val computed = activeSearcher.findRoutesWithWaypoints(
                                                 waypoints = listOf(originWp, destWp),
-                                                now = LocalDateTime.now()
+                                                now = searchTime,
+                                                timeType = TimeTargetType.DEPART
                                             )
                                             cachedTransitRoutes = computed
                                             computed
@@ -993,14 +999,15 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     val destWp = routeDestWaypoint
                     val vias = routeViaWaypoints
 
-                    val recalculateRoutes: (RouteWaypoint, List<RouteWaypoint>, RouteWaypoint) -> Unit = { o, v, d ->
+                    val recalculateRoutes: (RouteWaypoint, List<RouteWaypoint>, RouteWaypoint, LocalDateTime, TimeTargetType) -> Unit = { o, v, d, tTime, tType ->
                         val activeSearcher = ensureSearcher()
                         if (activeSearcher != null) {
                             isSearchingForDestination = true
                             scope.launch(Dispatchers.Default) {
                                 val routes = activeSearcher.findRoutesWithWaypoints(
                                     waypoints = listOf(o) + v + listOf(d),
-                                    now = LocalDateTime.now()
+                                    now = tTime,
+                                    timeType = tType
                                 )
                                 withContext(Dispatchers.Main) {
                                     isSearchingForDestination = false
@@ -1022,6 +1029,15 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         originName = originWp?.name ?: "出発地",
                         destName = destWp?.name ?: destinationTitle,
                         viaNames = vias.map { it.name },
+                        targetTime = routeTargetTime,
+                        timeType = routeTimeType,
+                        onTimeChanged = { newTime, newType ->
+                            routeTargetTime = newTime
+                            routeTimeType = newType
+                            if (originWp != null && destWp != null) {
+                                recalculateRoutes(originWp, vias, destWp, newTime, newType)
+                            }
+                        },
                         onSwapOriginDest = if (originWp != null && destWp != null) {
                             {
                                 val newOrig = destWp
@@ -1030,7 +1046,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 routeOriginWaypoint = newOrig
                                 routeDestWaypoint = newDest
                                 routeViaWaypoints = newVias
-                                recalculateRoutes(newOrig, newVias, newDest)
+                                recalculateRoutes(newOrig, newVias, newDest, routeTargetTime, routeTimeType)
                             }
                         } else null,
                         onAddVia = if (vias.size < 2) {
@@ -1040,7 +1056,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             if (originWp != null && destWp != null) {
                                 val newVias = vias.filterIndexed { i, _ -> i != removeIdx }
                                 routeViaWaypoints = newVias
-                                recalculateRoutes(originWp, newVias, destWp)
+                                recalculateRoutes(originWp, newVias, destWp, routeTargetTime, routeTimeType)
                             }
                         },
                         onClickOrigin = { stationSelectTarget = "origin" },
@@ -1102,7 +1118,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 scope.launch(Dispatchers.Default) {
                                     val routes = activeSearcher.findRoutesWithWaypoints(
                                         waypoints = listOf(o) + v + listOf(d),
-                                        now = LocalDateTime.now()
+                                        now = routeTargetTime,
+                                        timeType = routeTimeType
                                     )
                                     withContext(Dispatchers.Main) {
                                         isSearchingForDestination = false

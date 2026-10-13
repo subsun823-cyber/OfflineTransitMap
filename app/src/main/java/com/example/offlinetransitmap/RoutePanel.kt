@@ -1,5 +1,6 @@
 package com.example.offlinetransitmap
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -38,6 +41,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +56,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.time.Duration
+import java.time.LocalDateTime
+import java.time.LocalTime
 
 private val WALK_GRAY = Color(0xFF9E9E9E)
 
@@ -149,6 +156,9 @@ fun RouteDetailPanel(
     originName: String = "出発地",
     destName: String = "目的地",
     viaNames: List<String> = emptyList(),
+    targetTime: LocalDateTime = LocalDateTime.now(),
+    timeType: TimeTargetType = TimeTargetType.DEPART,
+    onTimeChanged: ((LocalDateTime, TimeTargetType) -> Unit)? = null,
     onSwapOriginDest: (() -> Unit)? = null,
     onAddVia: (() -> Unit)? = null,
     onRemoveVia: ((Int) -> Unit)? = null,
@@ -164,6 +174,7 @@ fun RouteDetailPanel(
 ) {
     val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.65f).dp
     val timeline = remember(itin) { buildTimeline(itin) }
+    var showTimeDialog by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -325,6 +336,67 @@ fun RouteDetailPanel(
                         }
                     }
                 }
+            }
+
+            // 出発時刻 / 到着時刻 設定バー
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val typeLabel = if (timeType == TimeTargetType.DEPART) "出発" else "到着"
+                val timeLabel = "${hm(targetTime)} $typeLabel"
+                Surface(
+                    onClick = { showTimeDialog = true },
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "🕒", style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = timeLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "変更 ▼",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // 「現在時刻」リセットボタン
+                OutlinedButton(
+                    onClick = {
+                        onTimeChanged?.invoke(LocalDateTime.now(), TimeTargetType.DEPART)
+                    },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text("現在時刻", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+
+            if (showTimeDialog) {
+                RouteTimePickerDialog(
+                    initialTime = targetTime,
+                    initialType = timeType,
+                    onConfirm = { newTime, newType ->
+                        onTimeChanged?.invoke(newTime, newType)
+                        showTimeDialog = false
+                    },
+                    onDismiss = { showTimeDialog = false }
+                )
             }
 
             if (candidates != null && candidates.size > 1 && onSelectCandidate != null) {
@@ -578,6 +650,78 @@ fun StationSelectDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("キャンセル") }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RouteTimePickerDialog(
+    initialTime: LocalDateTime,
+    initialType: TimeTargetType,
+    onConfirm: (LocalDateTime, TimeTargetType) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedType by remember { mutableStateOf(initialType) }
+    val timeState = rememberTimePickerState(
+        initialHour = initialTime.hour,
+        initialMinute = initialTime.minute,
+        is24Hour = true
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "日時の設定",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // 出発 / 到着 切り替え
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    FilterChip(
+                        selected = selectedType == TimeTargetType.DEPART,
+                        onClick = { selectedType = TimeTargetType.DEPART },
+                        label = { Text("出発時刻指定") },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    FilterChip(
+                        selected = selectedType == TimeTargetType.ARRIVE,
+                        onClick = { selectedType = TimeTargetType.ARRIVE },
+                        label = { Text("到着時刻指定") }
+                    )
+                }
+
+                // Material3 TimePicker
+                TimePicker(state = timeState)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val newTime = LocalDateTime.of(
+                        initialTime.toLocalDate(),
+                        LocalTime.of(timeState.hour, timeState.minute)
+                    )
+                    onConfirm(newTime, selectedType)
+                }
+            ) {
+                Text("決定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("キャンセル")
+            }
         }
     )
 }

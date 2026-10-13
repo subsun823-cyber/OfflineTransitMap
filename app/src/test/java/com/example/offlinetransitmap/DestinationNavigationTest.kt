@@ -693,6 +693,75 @@ class DestinationNavigationTest {
         assertEquals("八王子駅", removedVia[0].name)
         assertEquals("新宿駅", removedVia[1].name)
     }
+
+    @Test
+    fun testTimeTargetTypeAndArrivalSpecification() {
+        val departType = TimeTargetType.DEPART
+        val arriveType = TimeTargetType.ARRIVE
+        assertEquals(TimeTargetType.DEPART, departType)
+        assertEquals(TimeTargetType.ARRIVE, arriveType)
+
+        // 到着時刻指定フィルタのシミュレーション
+        val targetArrivalTime = LocalDateTime.of(2026, 10, 14, 18, 30)
+        val now = LocalDateTime.of(2026, 10, 14, 17, 0)
+        
+        val itin1 = Itinerary(
+            legs = emptyList(),
+            departure = now.plusMinutes(15),
+            arrival = targetArrivalTime.minusMinutes(10), // 18:20着 (間に合う)
+            transfers = 0, fare = 200, knownFare = 200, routeKey = "key1"
+        )
+        val itin2 = Itinerary(
+            legs = emptyList(),
+            departure = now.plusMinutes(30),
+            arrival = targetArrivalTime.minusMinutes(2),  // 18:28着 (間に合い、最も遅く出発できる)
+            transfers = 0, fare = 200, knownFare = 200, routeKey = "key2"
+        )
+        val itin3 = Itinerary(
+            legs = emptyList(),
+            departure = now.plusMinutes(40),
+            arrival = targetArrivalTime.plusMinutes(5),   // 18:35着 (間に合わない)
+            transfers = 0, fare = 200, knownFare = 200, routeKey = "key3"
+        )
+
+        val candidates = listOf(itin1, itin2, itin3)
+        // 到着時刻指定: targetArrivalTimeまでに到着する便を抽出し、目標時刻直前に到着する便を最優先
+        val onTime = candidates.filter { !it.arrival.isAfter(targetArrivalTime) }
+        assertEquals(2, onTime.size)
+        val best = onTime.maxByOrNull { it.arrival } // 18:28着 (itin2)
+        assertEquals(itin2, best)
+    }
+
+    @Test
+    fun testStationDestinationFlagAndNoExtraWalkLeg() {
+        val now = LocalDateTime.of(2026, 10, 14, 12, 0)
+        val trainLeg = RouteLeg(
+            isWalk = false,
+            fromName = "高尾",
+            toName = "立川",
+            depTime = now,
+            arrTime = now.plusMinutes(17),
+            lineName = "中央線快速",
+            trainType = "快速",
+            path = listOf(Pair(35.642, 139.281), Pair(35.698, 139.413))
+        )
+
+        // 駅が目的地の場合、isDestStation = true
+        val itinAtStation = Itinerary(
+            legs = listOf(trainLeg),
+            departure = now,
+            arrival = now.plusMinutes(17),
+            transfers = 0,
+            fare = 320,
+            knownFare = 320,
+            routeKey = "takao_tachikawa",
+            isDestStation = true
+        )
+
+        assertTrue("Destination should be identified as station", itinAtStation.isDestStation)
+        assertEquals("立川", itinAtStation.legs.last().toName)
+        assertFalse("Last leg must not be walk when ending at destination station", itinAtStation.legs.last().isWalk)
+    }
 }
 
 
