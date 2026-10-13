@@ -432,5 +432,25 @@ class DestinationNavigationTest {
         assertTrue("徒歩案内であること: ${guidance.subtitle}", guidance.subtitle.contains("徒歩で向かう"))
         assertTrue("次の電車乗車予定が含まれていること: ${guidance.next}", guidance.next.contains("JR八高線 に乗車"))
     }
+
+    @Test
+    fun testTravelModeTransitDurationMinutes() {
+        // TravelMode.TRANSIT は徒歩計算を基準とする (400m -> 約6分)
+        val walkMin = travelDurationMinutes(400, TravelMode.WALK)
+        val transitMin = travelDurationMinutes(400, TravelMode.TRANSIT)
+        assertEquals(walkMin, transitMin)
+
+        val bikeMin = travelDurationMinutes(400, TravelMode.BICYCLE)
+        assertTrue("自転車の方が徒歩より所要時間が短いこと: $bikeMin < $walkMin", bikeMin < walkMin)
+    }
+
+    @Test
+    fun testTravelModeValues() {
+        // WALK, BICYCLE, TRANSIT の3種類が揃っていること
+        val modes = TravelMode.values().map { it.name }
+        assertTrue(modes.contains("WALK"))
+        assertTrue(modes.contains("BICYCLE"))
+        assertTrue(modes.contains("TRANSIT"))
+    }
 }
 

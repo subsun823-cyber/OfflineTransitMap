@@ -11,7 +11,8 @@ import kotlin.math.roundToInt
 
 enum class TravelMode {
     WALK,
-    BICYCLE
+    BICYCLE,
+    TRANSIT
 }
 
 data class RoadRouteResult(
@@ -25,7 +26,7 @@ fun bicycleDurationMinutes(meters: Int): Int =
     (meters / 250.0).roundToInt().coerceAtLeast(1)
 
 fun travelDurationMinutes(meters: Int, mode: TravelMode): Int = when (mode) {
-    TravelMode.WALK -> walkDurationMinutes(meters)
+    TravelMode.WALK, TravelMode.TRANSIT -> walkDurationMinutes(meters)
     TravelMode.BICYCLE -> bicycleDurationMinutes(meters)
 }
 
@@ -530,7 +531,7 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                         8 -> 8.00   // 階段
                         else -> 1.00
                     }
-                    TravelMode.WALK -> when (edge.roadClass) {
+                    TravelMode.WALK, TravelMode.TRANSIT -> when (edge.roadClass) {
                         1 -> 0.88   // 大通り (幅広歩道・街灯・わかりやすい: 12%優遇)
                         2 -> 0.90   // 主要道
                         3 -> 0.85   // 自転車・歩行者専用道

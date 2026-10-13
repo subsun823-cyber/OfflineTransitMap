@@ -40,6 +40,7 @@ fun DestinationCard(
     currentLocationDistanceMeters: Int? = null,
     currentLocationDurationMinutes: Int? = null,
     currentLocationBicycleDurationMinutes: Int? = null,
+    currentLocationTransitDurationMinutes: Int? = null,
     selectedTravelMode: TravelMode = TravelMode.WALK,
     onTravelModeChange: (TravelMode) -> Unit = {},
     nearestStation: StationEntry? = null,
@@ -98,7 +99,7 @@ fun DestinationCard(
 
             Spacer(Modifier.height(8.dp))
 
-            // 移動モード切替 (徒歩 / 自転車)
+            // 移動モード切替 (徒歩 / 自転車 / 電車・バス)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -106,6 +107,7 @@ fun DestinationCard(
             ) {
                 val isWalkSelected = selectedTravelMode == TravelMode.WALK
                 val isBikeSelected = selectedTravelMode == TravelMode.BICYCLE
+                val isTransitSelected = selectedTravelMode == TravelMode.TRANSIT
 
                 // 徒歩チップ
                 Box(
@@ -146,6 +148,26 @@ fun DestinationCard(
                         color = if (isBikeSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                // 公共交通チップ
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                        .background(
+                            color = if (isTransitSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .clickable { onTravelModeChange(TravelMode.TRANSIT) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "🚇 電車・バス",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (isTransitSelected) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isTransitSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))
@@ -155,8 +177,19 @@ fun DestinationCard(
                 val distText = formatDistance(currentLocationDistanceMeters)
                 val walkMin = currentLocationDurationMinutes ?: walkDurationMinutes(currentLocationDistanceMeters)
                 val bikeMin = currentLocationBicycleDurationMinutes ?: bicycleDurationMinutes(currentLocationDistanceMeters)
-                val currentDur = if (selectedTravelMode == TravelMode.BICYCLE) bikeMin else walkMin
-                val modePrefix = if (selectedTravelMode == TravelMode.BICYCLE) "🚲 自転車 約" else "🚶 徒歩 約"
+                val transitMin = currentLocationTransitDurationMinutes
+
+                val (modePrefix, durText) = when (selectedTravelMode) {
+                    TravelMode.BICYCLE -> "🚲 自転車 約" to formatDurationHoursMinutes(bikeMin.toLong())
+                    TravelMode.TRANSIT -> {
+                        if (transitMin != null) {
+                            "🚇 電車・バス 約" to formatDurationHoursMinutes(transitMin.toLong())
+                        } else {
+                            "🚇 電車・バス " to "探索可"
+                        }
+                    }
+                    TravelMode.WALK -> "🚶 徒歩 約" to formatDurationHoursMinutes(walkMin.toLong())
+                }
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -182,7 +215,7 @@ fun DestinationCard(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "($modePrefix${formatDurationHoursMinutes(currentDur.toLong())})",
+                        text = "($modePrefix$durText)",
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

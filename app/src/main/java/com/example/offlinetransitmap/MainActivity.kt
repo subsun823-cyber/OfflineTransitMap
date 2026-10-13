@@ -163,12 +163,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     }
     var selectedStation by remember { mutableStateOf<SelectedStation?>(null) }
 
-    // 経路検索の状態(検索画面を閉じても、入力と結果を残す)
-    val searchState = remember { RouteSearchState() }
-    var showSearch by remember { mutableStateOf(false) }
+    // 経路検索・ルート表示の状態
     var searchLocation by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     // 結果から選ばれた経路(地図に線を出し、詳細パネルを表示する)
     var selectedItinerary by remember { mutableStateOf<Itinerary?>(null) }
+    var candidateItineraries by remember { mutableStateOf<List<Itinerary>?>(null) }
 
     // 施設・場所・駅・バス停の検索
     val poiDb = remember { PoiDatabase.open(context) }
@@ -206,6 +205,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var destinationCurrentDistance by remember { mutableStateOf<Int?>(null) }
     var destinationCurrentDuration by remember { mutableStateOf<Int?>(null) }
     var destinationBicycleDuration by remember { mutableStateOf<Int?>(null) }
+    var destinationTransitDuration by remember { mutableStateOf<Int?>(null) }
     var selectedTravelMode by remember { mutableStateOf(TravelMode.WALK) }
     var targetCameraPoint by remember { mutableStateOf<Pair<Double, Double>?>(null) }
     var destinationStation by remember { mutableStateOf<StationEntry?>(null) }
@@ -265,10 +265,10 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var recenterRequest by remember { mutableIntStateOf(0) }
     var mapReloadKey by remember { mutableIntStateOf(0) }
 
-    // 経路の詳細パネルで「戻る」操作をしたら、検索結果の画面に戻る
+    // 経路の詳細パネルで「戻る」操作をしたら、閉じて目的地カードに戻る
     BackHandler(enabled = selectedItinerary != null && !navMode && !showSettings) {
         selectedItinerary = null
-        showSearch = true
+        candidateItineraries = null
     }
 
     // 施設検索画面の戻る操作
@@ -287,6 +287,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         destinationCurrentDistance = null
         destinationCurrentDuration = null
         destinationBicycleDuration = null
+        destinationTransitDuration = null
+        candidateItineraries = null
         selectedTravelMode = TravelMode.WALK
         targetCameraPoint = null
     }
@@ -372,11 +374,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationStation?.name?.let { "$it 付近" } ?: "目的地"
                         }
                         val crowDistance = calcDistanceMeters(curLoc.first, curLoc.second, dest.first, dest.second)
-                        val isDirectCandidate = (selectedTravelMode == TravelMode.WALK && crowDistance <= 15000) ||
-                                                (selectedTravelMode == TravelMode.BICYCLE && crowDistance <= 35000)
 
-                        if (startNavImmediately && isDirectCandidate) {
-                            // 選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築して即座にナビ開始
+                        if (selectedTravelMode == TravelMode.WALK || selectedTravelMode == TravelMode.BICYCLE) {
+                            // 選択された移動モード(徒歩 or 自転車)の道なりダイレクトルートを構築
                             val directItin = withContext(Dispatchers.Default) {
                                 val router = roadRouter ?: RoadRouter.open(context)
                                 val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
@@ -407,9 +407,14 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 )
                             }
                             isSearchingForDestination = false
-                            startNavigation(directItin, selectedTravelMode)
+                            if (startNavImmediately) {
+                                startNavigation(directItin, selectedTravelMode)
+                            } else {
+                                candidateItineraries = listOf(directItin)
+                                selectedItinerary = directItin
+                            }
                         } else {
-                            // 遠距離の場合、またはルート確認の場合：電車・バスを含む公共交通候補を検索
+                            // selectedTravelMode == TravelMode.TRANSIT (公共交通機関：電車・バス)
                             val candidates = withContext(Dispatchers.Default) {
                                 if (searcher != null) {
                                     searcher.findRoutesBetweenCoordinates(
@@ -419,48 +424,24 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         destLon = dest.second,
                                         now = LocalDateTime.now(),
                                         destName = resolvedName,
-                                        travelMode = selectedTravelMode,
+                                        travelMode = TravelMode.TRANSIT,
                                         roadRouter = roadRouter ?: RoadRouter.open(context)
                                     )
                                 } else {
-                                    val router = roadRouter ?: RoadRouter.open(context)
-                                    val roadRes = router?.route(curLoc.first, curLoc.second, dest.first, dest.second, selectedTravelMode)
-                                    val distM = roadRes?.distanceMeters ?: crowDistance
-                                    val durM = roadRes?.durationMinutes ?: travelDurationMinutes(distM, selectedTravelMode)
-                                    val path = roadRes?.path ?: listOf(curLoc, dest)
-                                    val isBike = selectedTravelMode == TravelMode.BICYCLE
-                                    val modeLabel = if (isBike) "自転車" else "徒歩"
-                                    val leg = RouteLeg(
-                                        isWalk = true,
-                                        fromName = "現在地",
-                                        toName = resolvedName,
-                                        walkMinutes = durM,
-                                        walkMeters = distM,
-                                        lineName = modeLabel,
-                                        trainType = modeLabel,
-                                        path = path
-                                    )
-                                    listOf(Itinerary(
-                                        legs = listOf(leg),
-                                        departure = LocalDateTime.now(),
-                                        arrival = LocalDateTime.now().plusMinutes(durM.toLong()),
-                                        transfers = 0,
-                                        fare = 0,
-                                        knownFare = 0,
-                                        routeKey = if (isBike) "bike_direct" else "walk_direct"
-                                    ))
+                                    emptyList()
                                 }
                             }
                             isSearchingForDestination = false
                             val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
                             if (bestItin != null) {
                                 if (startNavImmediately) {
-                                    startNavigation(bestItin, selectedTravelMode)
+                                    startNavigation(bestItin, TravelMode.TRANSIT)
                                 } else {
+                                    candidateItineraries = candidates
                                     selectedItinerary = bestItin
                                 }
                             } else {
-                                Toast.makeText(context, "目的地への経路が見つかりませんでした", Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, "公共交通機関による経路が見つかりませんでした", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -483,7 +464,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     title = { Text("設定") },
                     navigationIcon = { TextButton(onClick = { showSettings = false }) { Text("戻る") } }
                 )
-            } else if (!navMode && !showPlaceSearch && !showSearch) {
+            } else if (!navMode && !showPlaceSearch) {
                 TopAppBar(
                     title = {
                         Surface(
@@ -520,22 +501,6 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         }
                     },
                     actions = {
-                        IconButton(
-                            onClick = {
-                                if (searcher == null) {
-                                    Toast.makeText(
-                                        context,
-                                        "経路検索には、新しい timetable.db が必要です",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                } else {
-                                    searchLocation = if (hasLocationPermission) lastKnownLatLon(context) else null
-                                    showSearch = true
-                                }
-                            }
-                        ) {
-                            Text("🚇", fontSize = 20.sp)
-                        }
                         if (preferences.hobbyCrossingMode) {
                             IconButton(onClick = { showCrossingListDialog = true }) {
                                 Text("🚥", fontSize = 20.sp)
@@ -557,7 +522,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
             }
         },
         floatingActionButton = {
-            if (!showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null && !navMode && destinationPoint == null && selectedCrossing == null) {
+            if (!showSettings && !showPlaceSearch && selectedItinerary == null && !navMode && destinationPoint == null && selectedCrossing == null) {
                 Column(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -671,10 +636,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     }
                 },
                 onMapLongClick = { lat, lon ->
-                    if (!navMode && !showSettings && !showSearch && !showPlaceSearch) {
+                    if (!navMode && !showSettings && !showPlaceSearch) {
                         selectedCrossing = null
                         selectedStation = null
                         selectedItinerary = null
+                        candidateItineraries = null
                         destinationPoint = Pair(lat, lon)
                         destinationTitle = "目的地を設定しました"
                         destinationCategoryLabel = null
@@ -689,6 +655,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationCurrentDistance = directDist
                             destinationCurrentDuration = walkDurationMinutes(directDist)
                             destinationBicycleDuration = bicycleDurationMinutes(directDist)
+                            destinationTransitDuration = null
                             scope.launch(Dispatchers.Default) {
                                 val router = roadRouter ?: RoadRouter.open(context)
                                 val roadWalk = router?.route(curLoc.first, curLoc.second, lat, lon, TravelMode.WALK)
@@ -705,10 +672,34 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     }
                                 }
                             }
+                            scope.launch(Dispatchers.Default) {
+                                if (searcher != null) {
+                                    val routes = searcher.findRoutesBetweenCoordinates(
+                                        originLat = curLoc.first,
+                                        originLon = curLoc.second,
+                                        destLat = lat,
+                                        destLon = lon,
+                                        now = LocalDateTime.now(),
+                                        destName = "目的地",
+                                        travelMode = TravelMode.TRANSIT,
+                                        roadRouter = roadRouter ?: RoadRouter.open(context)
+                                    )
+                                    val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
+                                    if (best != null) {
+                                        val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
+                                        withContext(Dispatchers.Main) {
+                                            if (destinationPoint == Pair(lat, lon)) {
+                                                destinationTransitDuration = dur
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         } else {
                             destinationCurrentDistance = null
                             destinationCurrentDuration = null
                             destinationBicycleDuration = null
+                            destinationTransitDuration = null
                         }
                         scope.launch(Dispatchers.Default) {
                             val nearest = searcher?.nearestStation(lat, lon)
@@ -724,7 +715,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 }
             )
             destinationPoint?.let { point ->
-                if (!navMode && !showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null) {
+                if (!navMode && !showSettings && !showPlaceSearch && selectedItinerary == null) {
                     DestinationCard(
                         point = point,
                         title = destinationTitle,
@@ -733,6 +724,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         currentLocationDistanceMeters = destinationCurrentDistance,
                         currentLocationDurationMinutes = destinationCurrentDuration,
                         currentLocationBicycleDurationMinutes = destinationBicycleDuration,
+                        currentLocationTransitDurationMinutes = destinationTransitDuration,
                         selectedTravelMode = selectedTravelMode,
                         onTravelModeChange = { selectedTravelMode = it },
                         nearestStation = destinationStation,
@@ -747,6 +739,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationCurrentDistance = null
                             destinationCurrentDuration = null
                             destinationBicycleDuration = null
+                            destinationTransitDuration = null
+                            candidateItineraries = null
                             selectedTravelMode = TravelMode.WALK
                             targetCameraPoint = null
                         },
@@ -755,7 +749,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 }
             }
             selectedCrossing?.let { crossing ->
-                if (!navMode && !showSettings && !showSearch && !showPlaceSearch && selectedItinerary == null) {
+                if (!navMode && !showSettings && !showPlaceSearch && selectedItinerary == null) {
                     CrossingDetailCard(
                         crossing = crossing,
                         onStartNavWalk = {
@@ -783,7 +777,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 }
             }
             // 撮影構図ファインダー枠（趣味モード）
-            if (preferences.hobbyCrossingMode && preferences.hobbyCompositionGrid && !showSettings && !showSearch && !showPlaceSearch) {
+            if (preferences.hobbyCrossingMode && preferences.hobbyCompositionGrid && !showSettings && !showPlaceSearch) {
                 CompositionGridOverlay()
             }
             if (showPlaceSearch && !navMode && !showSettings) {
@@ -794,6 +788,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         showPlaceSearch = false
                         selectedStation = null
                         selectedItinerary = null
+                        candidateItineraries = null
                         selectedCrossing = null
                         val p = res.place
                         val point = Pair(p.lat, p.lon)
@@ -804,6 +799,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationCurrentDistance = res.distanceMeters
                         destinationCurrentDuration = res.durationMinutes
                         destinationBicycleDuration = res.distanceMeters?.let { bicycleDurationMinutes(it) }
+                        destinationTransitDuration = null
                         selectedTravelMode = TravelMode.WALK
                         targetCameraPoint = point
                         val curLoc = searchLocation
@@ -824,6 +820,29 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     }
                                 }
                             }
+                            scope.launch(Dispatchers.Default) {
+                                if (searcher != null) {
+                                    val routes = searcher.findRoutesBetweenCoordinates(
+                                        originLat = curLoc.first,
+                                        originLon = curLoc.second,
+                                        destLat = p.lat,
+                                        destLon = p.lon,
+                                        now = LocalDateTime.now(),
+                                        destName = p.name,
+                                        travelMode = TravelMode.TRANSIT,
+                                        roadRouter = roadRouter ?: RoadRouter.open(context)
+                                    )
+                                    val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
+                                    if (best != null) {
+                                        val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
+                                        withContext(Dispatchers.Main) {
+                                            if (destinationPoint == point) {
+                                                destinationTransitDuration = dur
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                         scope.launch(Dispatchers.Default) {
                             val nearest = searcher?.nearestStation(p.lat, p.lon)
@@ -839,35 +858,23 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     onClose = { showPlaceSearch = false }
                 )
             }
-            if (showSearch && searcher != null && !navMode && !showSettings) {
-                RouteSearchScreen(
-                    state = searchState,
-                    searcher = searcher,
-                    currentLocation = searchLocation,
-                    onSelect = { itin ->
-                        selectedItinerary = itin
-                        showSearch = false
-                    },
-                    onStartNavigation = { itin ->
-                        selectedItinerary = itin
-                        showSearch = false
-                        startNavigation(itin)
-                    },
-                    onClose = { showSearch = false }
-                )
-            }
             selectedItinerary?.let { itin ->
                 if (!navMode && !showSettings) {
                     RouteDetailPanel(
                         itin = itin,
+                        candidates = candidateItineraries,
+                        onSelectCandidate = { selectedItinerary = it },
                         onBackToResults = {
                             selectedItinerary = null
-                            showSearch = true
+                            candidateItineraries = null
                         },
-                        onClose = { selectedItinerary = null },
+                        onClose = {
+                            selectedItinerary = null
+                            candidateItineraries = null
+                        },
                         modifier = Modifier.align(Alignment.BottomCenter),
                         navigating = NavigationState.active && NavigationState.itinerary === itin,
-                        onStartNavigation = { startNavigation(itin) },
+                        onStartNavigation = { startNavigation(itin, selectedTravelMode) },
                         onStopNavigation = {
                             NavigationController.stop(context)
                             destinationPoint = null
@@ -875,6 +882,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationDistance = null
                             destinationCurrentDistance = null
                             destinationCurrentDuration = null
+                            destinationBicycleDuration = null
+                            destinationTransitDuration = null
+                            candidateItineraries = null
                             targetCameraPoint = null
                         }
                     )
@@ -895,6 +905,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationDistance = null
                         destinationCurrentDistance = null
                         destinationCurrentDuration = null
+                        destinationBicycleDuration = null
+                        destinationTransitDuration = null
+                        candidateItineraries = null
                         targetCameraPoint = null
                     }
                 )

@@ -2,6 +2,8 @@ package com.example.offlinetransitmap
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -17,12 +19,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
 import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -128,7 +132,9 @@ private fun TimelineRow(
 @Composable
 fun RouteDetailPanel(
     itin: Itinerary,
-    onBackToResults: () -> Unit,
+    candidates: List<Itinerary>? = null,
+    onSelectCandidate: ((Itinerary) -> Unit)? = null,
+    onBackToResults: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
     navigating: Boolean = false,
@@ -147,9 +153,33 @@ fun RouteDetailPanel(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 8.dp)
             ) {
-                TextButton(onClick = onBackToResults) { Text("‹ 結果に戻る") }
+                TextButton(onClick = onClose) { Text("‹ 地図に戻る") }
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onClose) { Text("閉じる") }
+            }
+            if (candidates != null && candidates.size > 1 && onSelectCandidate != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    candidates.forEachIndexed { index, candidate ->
+                        val isSelected = candidate === itin || (candidate.departure == itin.departure && candidate.arrival == itin.arrival && candidate.routeKey == itin.routeKey)
+                        val durMin = java.time.temporal.ChronoUnit.MINUTES.between(candidate.departure, candidate.arrival)
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { onSelectCandidate(candidate) },
+                            label = {
+                                Text(
+                                    text = "ルート${index + 1} (${formatDurationHoursMinutes(durMin)})",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        )
+                    }
+                }
             }
             Column(modifier = Modifier.padding(horizontal = 20.dp)) {
                 Text(
