@@ -8,9 +8,8 @@ import org.maplibre.android.style.layers.PropertyFactory
 // 経路や駅の色は識別に使うため、背景地図の配色だけを変える。
 internal fun mapPaintColor(dark: Boolean, id: String, property: String, light: String): String {
     if (!dark || id.startsWith("route-") || id == "nav-line" || id == "stations" || id == "stations-rail") return light
-    val baseId = id.substringBeforeLast("-protomaps-").let { raw ->
-        KantoPrefectures.all.fold(raw) { acc, p -> acc.removeSuffix("-${p.id}") }
-    }
+    val suffix = id.substringAfterLast("-", "")
+    val baseId = if (KantoPrefectures.nationalList.any { it.id == suffix }) id.removeSuffix("-$suffix") else id
     return when (property) {
         "background-color" -> "#171d25"
         "text-halo-color" -> "#171d25"

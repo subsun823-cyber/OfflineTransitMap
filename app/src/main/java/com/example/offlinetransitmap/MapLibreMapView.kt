@@ -237,7 +237,8 @@ fun MapLibreMapView(
     onStationClick: (id: String, name: String) -> Unit = { _, _ -> },
     onCrossingClick: (id: String, name: String, lat: Double, lon: Double) -> Unit = { _, _, _, _ -> },
     onMapClick: (lat: Double, lon: Double) -> Unit = { _, _ -> },
-    onMapLongClick: (lat: Double, lon: Double) -> Unit = { _, _ -> }
+    onMapLongClick: (lat: Double, lon: Double) -> Unit = { _, _ -> },
+    onCameraIdle: ((lat: Double, lon: Double, zoom: Double) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var mapState by remember { mutableStateOf<MapLibreMap?>(null) }
@@ -247,6 +248,7 @@ fun MapLibreMapView(
     val currentOnCrossingClick by rememberUpdatedState(onCrossingClick)
     val currentOnMapClick by rememberUpdatedState(onMapClick)
     val currentOnMapLongClick by rememberUpdatedState(onMapLongClick)
+    val currentOnCameraIdle by rememberUpdatedState(onCameraIdle)
 
     fun loadStyleForMap(map: MapLibreMap) {
         val downloaded = KantoPrefectures.getDownloadedList(context).map { it to KantoPrefectures.getFile(context, it) }
@@ -326,6 +328,15 @@ fun MapLibreMapView(
                 map.addOnMapLongClickListener { latLng ->
                     currentOnMapLongClick(latLng.latitude, latLng.longitude)
                     true
+                }
+
+                // カメラ停止時の通知（未ダウンロード地域の検知）
+                map.addOnCameraIdleListener {
+                    val target = map.cameraPosition.target
+                    val zoom = map.cameraPosition.zoom
+                    if (target != null) {
+                        currentOnCameraIdle?.invoke(target.latitude, target.longitude, zoom)
+                    }
                 }
             }
         }

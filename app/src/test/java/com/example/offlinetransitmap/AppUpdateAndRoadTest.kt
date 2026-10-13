@@ -101,4 +101,20 @@ class AppUpdateAndRoadTest {
         assertEquals("roads_osaka.db", osaka?.roadFileName)
         assertEquals("osaka.pmtiles", osaka?.fileName)
     }
+
+    @Test
+    fun testMapAppearanceNationalColorResolution() {
+        // 全国のPMTilesレイヤーIDに対して正しいダークテーマ色が解決されること
+        val tokyoWater = mapPaintColor(true, "water-tokyo", "fill-color", "#a6d4f7")
+        val kanagawaWater = mapPaintColor(true, "water-kanagawa", "fill-color", "#a6d4f7")
+        val osakaWater = mapPaintColor(true, "water-osaka", "fill-color", "#a6d4f7")
+        val shizuokaRoad = mapPaintColor(true, "roads-highway-shizuoka", "line-color", "#ffcf6b")
+        val yamanashiGreen = mapPaintColor(true, "natural-green-yamanashi", "fill-color", "#c4e0b7")
+
+        assertEquals("#183e57", tokyoWater)
+        assertEquals("#183e57", kanagawaWater)
+        assertEquals("#183e57", osakaWater)
+        assertEquals("#b9914e", shizuokaRoad)
+        assertEquals("#263c30", yamanashiGreen)
+    }
 }

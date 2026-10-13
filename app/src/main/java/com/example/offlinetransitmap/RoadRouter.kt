@@ -436,56 +436,126 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             }
         }
 
-        // 隙間・デッドエンド・駅前デッキ等の近接自動縫合 (同一DB内および都県境ステッチング)
-        val deadEnds = ArrayList<Long>()
+        // 隙間・デッドエンド・駅前デッキ・交差点エッジ未分割の近接自動縫合 (同一DB内および都県境ステッチング)
+        val nodesByGrid = HashMap<Int, ArrayList<GraphNode>>()
+        for (node in nodesMap.values) {
+            val key = gridCellKey(node.lat, node.lon)
+            nodesByGrid.getOrPut(key) { ArrayList() }.add(node)
+        }
+
+        // 1. ノード間ステッチング (行き止まりおよび孤立分岐ノードの接続補修)
+        val stitchCandidates = ArrayList<Long>()
         for (nid in nodesMap.keys) {
             val edgeCount = adj[nid]?.size ?: 0
-            if (edgeCount <= 1) {
-                deadEnds.add(nid)
+            if (edgeCount <= 2) {
+                stitchCandidates.add(nid)
             }
         }
 
-        if (deadEnds.isNotEmpty()) {
-            val nodesByGrid = HashMap<Int, ArrayList<GraphNode>>()
-            for (node in nodesMap.values) {
-                val key = gridCellKey(node.lat, node.lon)
-                nodesByGrid.getOrPut(key) { ArrayList() }.add(node)
+        for (u in stitchCandidates) {
+            val uNode = nodesMap[u] ?: continue
+            val uKey = gridCellKey(uNode.lat, uNode.lon)
+            val cy = (uKey shr 16) and 0xFFFF
+            val cx = uKey and 0xFFFF
+            var bestV: Long? = null
+            var bestD = Int.MAX_VALUE
+
+            for (dy in -1..1) {
+                for (dx in -1..1) {
+                    val neighborKey = (((cy + dy) and 0xFFFF) shl 16) or ((cx + dx) and 0xFFFF)
+                    val neighborNodes = nodesByGrid[neighborKey] ?: continue
+                    for (vNode in neighborNodes) {
+                        val v = vNode.id
+                        if (v == u) continue
+                        val d = calcDistanceMeters(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
+                        val maxGap = if ((adj[u]?.size ?: 0) <= 1) 35 else 22
+                        if (d <= maxGap && d < bestD) {
+                            val alreadyConnected = adj[u]?.any { it.toNode == v } == true
+                            if (!alreadyConnected) {
+                                bestD = d
+                                bestV = v
+                            }
+                        }
+                    }
+                }
             }
 
-            for (u in deadEnds) {
-                val uNode = nodesMap[u] ?: continue
-                val uKey = gridCellKey(uNode.lat, uNode.lon)
-                val cy = (uKey shr 16) and 0xFFFF
-                val cx = uKey and 0xFFFF
-                var bestV: Long? = null
-                var bestD = Int.MAX_VALUE
+            if (bestV != null) {
+                val d = maxOf(1, bestD)
+                adj.getOrPut(u) { ArrayList() }.add(GraphEdge(bestV, d, isWalk = true, isBike = true, roadClass = 4))
+                adj.getOrPut(bestV) { ArrayList() }.add(GraphEdge(u, d, isWalk = true, isBike = true, roadClass = 4))
+            }
+        }
 
-                for (dy in -1..1) {
-                    for (dx in -1..1) {
-                        val neighborKey = (((cy + dy) and 0xFFFF) shl 16) or ((cx + dx) and 0xFFFF)
-                        val neighborNodes = nodesByGrid[neighborKey] ?: continue
-                        for (vNode in neighborNodes) {
-                            val v = vNode.id
-                            if (v == u) continue
-                            val d = calcDistanceMeters(uNode.lat, uNode.lon, vNode.lat, vNode.lon)
-                            // 35m以内の隙間を縫合
-                            if (d <= 35 && d < bestD) {
-                                val alreadyConnected = adj[u]?.any { it.toNode == v } == true
-                                if (!alreadyConnected) {
-                                    bestD = d
-                                    bestV = v
+        // 2. エッジ直交投影ステッチング (交差点で道路エッジが分割されておらず直進・右左折できずに迂回する問題の根絶)
+        // エッジ AB に対して、その真上・近傍 (22m以内) に交差ノード P がある場合、P を A, B に直接結合
+        val processedEdgePairs = HashSet<Long>()
+        val projectedEdgesToAdd = ArrayList<Triple<Long, Long, GraphEdge>>()
+        for ((u, edges) in adj) {
+            val uNode = nodesMap[u] ?: continue
+            for (edge in edges) {
+                val v = edge.toNode
+                if (edge.distMeters < 15) continue
+                val pairKey = if (u < v) (u shl 32) or (v and 0xFFFFFFFFL) else (v shl 32) or (u and 0xFFFFFFFFL)
+                if (!processedEdgePairs.add(pairKey)) continue
+
+                val vNode = nodesMap[v] ?: continue
+                val latMid = Math.toRadians((uNode.lat + vNode.lat) / 2.0)
+                val cosLat = Math.cos(latMid)
+                val bx = (vNode.lon - uNode.lon) * 111139.0 * cosLat
+                val by = (vNode.lat - uNode.lat) * 111139.0
+                val abLen2 = bx * bx + by * by
+                if (abLen2 < 225.0) continue // 15m未満はスキップ
+
+                // uNode と vNode の周辺グリッドノードを探索
+                val minLat = minOf(uNode.lat, vNode.lat)
+                val maxLat = maxOf(uNode.lat, vNode.lat)
+                val minLon = minOf(uNode.lon, vNode.lon)
+                val maxLon = maxOf(uNode.lon, vNode.lon)
+                val y1 = (minLat / GRID_CELL_DEG).toInt() - 1
+                val y2 = (maxLat / GRID_CELL_DEG).toInt() + 1
+                val x1 = (minLon / GRID_CELL_DEG).toInt() - 1
+                val x2 = (maxLon / GRID_CELL_DEG).toInt() + 1
+
+                for (gy in y1..y2) {
+                    for (gx in x1..x2) {
+                        val gKey = (((gy and 0xFFFF) shl 16) or (gx and 0xFFFF))
+                        val candidateNodes = nodesByGrid[gKey] ?: continue
+                        for (pNode in candidateNodes) {
+                            val pid = pNode.id
+                            if (pid == u || pid == v) continue
+                            val px = (pNode.lon - uNode.lon) * 111139.0 * cosLat
+                            val py = (pNode.lat - uNode.lat) * 111139.0
+
+                            // 投影パラメータ t
+                            val t = (px * bx + py * by) / abLen2
+                            if (t in 0.03..0.97) {
+                                val projX = t * bx
+                                val projY = t * by
+                                val perpDist = Math.hypot(px - projX, py - projY)
+                                if (perpDist <= 22.0) {
+                                    val alreadyU = adj[pid]?.any { it.toNode == u } == true
+                                    val alreadyV = adj[pid]?.any { it.toNode == v } == true
+                                    if (!alreadyU) {
+                                        val distU = maxOf(1, Math.hypot(px, py).roundToInt())
+                                        projectedEdgesToAdd.add(Triple(pid, u, GraphEdge(u, distU, edge.isWalk, edge.isBike, edge.roadClass)))
+                                        projectedEdgesToAdd.add(Triple(u, pid, GraphEdge(pid, distU, edge.isWalk, edge.isBike, edge.roadClass)))
+                                    }
+                                    if (!alreadyV) {
+                                        val distV = maxOf(1, Math.hypot(px - bx, py - by).roundToInt())
+                                        projectedEdgesToAdd.add(Triple(pid, v, GraphEdge(v, distV, edge.isWalk, edge.isBike, edge.roadClass)))
+                                        projectedEdgesToAdd.add(Triple(v, pid, GraphEdge(pid, distV, edge.isWalk, edge.isBike, edge.roadClass)))
+                                    }
                                 }
                             }
                         }
                     }
                 }
-
-                if (bestV != null) {
-                    val d = maxOf(1, bestD)
-                    adj.getOrPut(u) { ArrayList() }.add(GraphEdge(bestV, d, isWalk = true, isBike = true, roadClass = 4))
-                    adj.getOrPut(bestV) { ArrayList() }.add(GraphEdge(u, d, isWalk = true, isBike = true, roadClass = 4))
-                }
             }
+        }
+
+        for (triple in projectedEdgesToAdd) {
+            adj.getOrPut(triple.first) { ArrayList() }.add(triple.third)
         }
 
         // A* 探索 (大通り優先・走りやすさ・右左折ペナルティを考慮した高品質経路探索)
@@ -521,24 +591,24 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                 // 道路種別によるコスト係数（走りやすさ・大通りの優先度）
                 val classFactor = when (mode) {
                     TravelMode.BICYCLE -> when (edge.roadClass) {
-                        1 -> 0.82   // 大通り・主要幹線 (幅広・舗装状態良好・直進性高: 18%優遇)
-                        2 -> 0.88   // 主要中規模道 (12%優遇)
-                        3 -> 0.85   // 専用自転車道 (15%優遇: 幹線道路からの不要な離脱を防止)
+                        1 -> 0.80   // 大通り・主要幹線 (幅広・舗装状態良好・直進性高: 20%優遇)
+                        2 -> 0.85   // 主要中規模道 (15%優遇)
+                        3 -> 0.82   // 専用自転車道 (18%優遇: 幹線道路からの不要な離脱を防止)
                         4 -> 1.00   // 一般生活道路 (基準)
-                        5 -> 1.15   // 歩行者道・広場 (徐行・押し歩き)
-                        6 -> 1.35   // 細街路・裏道・路地 (見通し悪く低速・回避)
-                        7 -> 1.60   // 未舗装路 (走行困難)
+                        5 -> 1.20   // 歩行者道・広場 (徐行・押し歩き)
+                        6 -> 1.45   // 細街路・裏道・路地 (見通し悪く低速・回避)
+                        7 -> 1.70   // 未舗装路 (走行困難)
                         8 -> 8.00   // 階段
                         else -> 1.00
                     }
                     TravelMode.WALK, TravelMode.TRANSIT -> when (edge.roadClass) {
-                        1 -> 0.88   // 大通り (幅広歩道・街灯・わかりやすい: 12%優遇)
-                        2 -> 0.90   // 主要道
+                        1 -> 0.85   // 大通り (幅広歩道・街灯・わかりやすい: 15%優遇)
+                        2 -> 0.88   // 主要道
                         3 -> 0.85   // 自転車・歩行者専用道
                         4 -> 1.00   // 生活道路 (基準)
                         5 -> 0.80   // 歩行者専用道・緑道・公園道 (快適安全: 20%優遇)
-                        6 -> 1.25   // 細い路地・裏道 (迷いやすく見通しが悪い)
-                        7 -> 1.35   // 未舗装路
+                        6 -> 1.30   // 細い路地・裏道 (迷いやすく見通しが悪い)
+                        7 -> 1.40   // 未舗装路
                         8 -> 1.50   // 階段 (疲れるため迂回路があれば回避)
                         else -> 1.00
                     }
@@ -675,17 +745,21 @@ internal fun computeTurnPenalty(
 
     // 頻繁な曲がり（短区間での連続ターン）ペナルティ: 70m未満ですぐまた曲がるのを強力に抑制
     if (prevEdgeDistMeters < 70.0) {
-        penalty += if (mode == TravelMode.BICYCLE) 55.0 else 35.0
+        penalty += if (mode == TravelMode.BICYCLE) 65.0 else 40.0
     }
 
-    // 2連続ターン累積ペナルティ: 直前でも曲がっていた場合
+    // 2連続ターン累積ペナルティ: 直前でも曲がっていた場合 (コの字型迂回の根絶)
     if (isConsecutiveTurn) {
-        penalty += if (mode == TravelMode.BICYCLE) 60.0 else 40.0
+        penalty += if (mode == TravelMode.BICYCLE) 75.0 else 45.0
     }
 
     // 大通りからの離脱ペナルティ: 大通り走行中はできるだけ直進維持 (自転車道への不要な逸脱も防止)
     if (prevRoadClass <= 2 && currRoadClass >= 3) {
-        penalty += if (mode == TravelMode.BICYCLE) 30.0 else 18.0
+        penalty += if (mode == TravelMode.BICYCLE) 50.0 else 30.0
+        // 特に細街路・裏道への逸脱はさらに追加加算
+        if (currRoadClass >= 6) {
+            penalty += if (mode == TravelMode.BICYCLE) 35.0 else 20.0
+        }
     }
 
     // 細街路・生活道路での右左折ペナルティ

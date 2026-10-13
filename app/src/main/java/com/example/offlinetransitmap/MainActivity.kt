@@ -20,6 +20,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,7 +33,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -45,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.zIndex
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -235,6 +239,10 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val navLine = if (navMode && !isDirectRoadNav) navLineGeoJson(NavigationState.location, NavigationState.guidance) else null
     var mapBearing by remember { mutableDoubleStateOf(0.0) }
     var followLost by remember { mutableStateOf(false) }
+
+    var undownloadedPrefecture by remember { mutableStateOf<PrefectureMapInfo?>(null) }
+    var isQuickDownloadingMap by remember { mutableStateOf(false) }
+    var quickDownloadPercent by remember { mutableIntStateOf(0) }
 
     // ナビ中の踏切接近監視（150m以内）
     val navLoc = NavigationState.location
@@ -720,8 +728,77 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             }
                         }
                     }
+                },
+                onCameraIdle = { cLat, cLon, zoom ->
+                    if (zoom >= 8.5) {
+                        val pref = KantoPrefectures.nationalList.firstOrNull { p ->
+                            cLat in p.south..p.north && cLon in p.west..p.east && !KantoPrefectures.isDownloaded(context, p)
+                        }
+                        undownloadedPrefecture = pref
+                    } else {
+                        undownloadedPrefecture = null
+                    }
                 }
             )
+            undownloadedPrefecture?.let { pref ->
+                if (!navMode && !showSettings && !showPlaceSearch) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 10.dp)
+                            .zIndex(10f),
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                        shadowElevation = 4.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (isQuickDownloadingMap) {
+                                CircularProgressIndicator(
+                                    progress = { quickDownloadPercent / 100f },
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Text(
+                                    text = "${pref.name}の地図を取得中… ($quickDownloadPercent%)",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                            } else {
+                                Text(
+                                    text = "📍 ${pref.name}の地図をダウンロードして詳細表示",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                Button(
+                                    onClick = {
+                                        isQuickDownloadingMap = true
+                                        quickDownloadPercent = 0
+                                        scope.launch {
+                                            val customUrl = if (preferences.customMapBaseUrl.isNotBlank()) {
+                                                KantoPrefectures.getDownloadUrl(pref, preferences.customMapBaseUrl)
+                                            } else null
+                                            val res = MapDownloadManager.downloadPrefecture(context, pref, customUrl) { p ->
+                                                quickDownloadPercent = p
+                                            }
+                                            isQuickDownloadingMap = false
+                                            if (res is MapDownloadResult.Success) {
+                                                mapReloadKey++
+                                                undownloadedPrefecture = null
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.height(28.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)
+                                ) {
+                                    Text("取得", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             destinationPoint?.let { point ->
                 if (!navMode && !showSettings && !showPlaceSearch && selectedItinerary == null) {
                     DestinationCard(
