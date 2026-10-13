@@ -2,6 +2,7 @@ package com.example.offlinetransitmap
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,15 +23,26 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -134,6 +146,15 @@ fun RouteDetailPanel(
     itin: Itinerary,
     candidates: List<Itinerary>? = null,
     onSelectCandidate: ((Itinerary) -> Unit)? = null,
+    originName: String = "出発地",
+    destName: String = "目的地",
+    viaNames: List<String> = emptyList(),
+    onSwapOriginDest: (() -> Unit)? = null,
+    onAddVia: (() -> Unit)? = null,
+    onRemoveVia: ((Int) -> Unit)? = null,
+    onClickOrigin: (() -> Unit)? = null,
+    onClickDest: (() -> Unit)? = null,
+    onClickVia: ((Int) -> Unit)? = null,
     onBackToResults: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -141,7 +162,7 @@ fun RouteDetailPanel(
     onStartNavigation: (() -> Unit)? = null,
     onStopNavigation: (() -> Unit)? = null
 ) {
-    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.45f).dp
+    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.65f).dp
     val timeline = remember(itin) { buildTimeline(itin) }
 
     Card(
@@ -157,6 +178,155 @@ fun RouteDetailPanel(
                 Spacer(Modifier.weight(1f))
                 TextButton(onClick = onClose) { Text("閉じる") }
             }
+
+            // 出発地・経由地・目的地 ボックス (入れ替え・経由地追加機能つき)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // 出発地
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = onClickOrigin != null) { onClickOrigin?.invoke() }
+                        ) {
+                            Text(text = "🟢", style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "出発: ",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = originName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (onClickOrigin != null) {
+                                Text(
+                                    text = "変更",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        // 経由地リスト
+                        viaNames.forEachIndexed { index, viaName ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = onClickVia != null) { onClickVia?.invoke(index) }
+                            ) {
+                                Text(text = "🟡", style = MaterialTheme.typography.bodySmall)
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "経由${if (viaNames.size > 1) "${index + 1}" else ""}: ",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = viaName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (onRemoveVia != null) {
+                                    IconButton(
+                                        onClick = { onRemoveVia(index) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "経由地を削除",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 目的地
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = onClickDest != null) { onClickDest?.invoke() }
+                        ) {
+                            Text(text = "🔴", style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "目的: ",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = destName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (onClickDest != null) {
+                                Text(
+                                    text = "変更",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        // 経由地追加ボタン (経由地が2個未満の場合)
+                        if (onAddVia != null && viaNames.size < 2) {
+                            Text(
+                                text = "＋ 経由地を追加",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .padding(top = 2.dp)
+                                    .clickable { onAddVia() }
+                            )
+                        }
+                    }
+
+                    // 右側の入れ替えボタン (スワップ)
+                    if (onSwapOriginDest != null) {
+                        Spacer(Modifier.width(8.dp))
+                        FilledTonalIconButton(
+                            onClick = onSwapOriginDest,
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Text(
+                                text = "⇅",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+
             if (candidates != null && candidates.size > 1 && onSelectCandidate != null) {
                 Row(
                     modifier = Modifier
@@ -181,7 +351,7 @@ fun RouteDetailPanel(
                     }
                 }
             }
-            Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)) {
                 Text(
                     text = "${hm(itin.departure)} → ${hm(itin.arrival)}",
                     style = MaterialTheme.typography.titleMedium
@@ -285,4 +455,129 @@ fun RouteDetailPanel(
             }
         }
     }
+}
+
+@Composable
+fun StationSelectDialog(
+    title: String,
+    onSearch: (String) -> List<StationEntry>,
+    currentLocationStation: StationEntry? = null,
+    onSelectStation: (StationEntry) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    val results = remember(query) {
+        if (query.isBlank()) emptyList() else onSearch(query)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("駅名を入力 (ひらがな可)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        if (query.isNotEmpty()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "クリア")
+                            }
+                        }
+                    }
+                )
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                    if (query.isBlank()) {
+                        if (currentLocationStation != null) {
+                            item {
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onSelectStation(currentLocationStation) }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                                    color = Color.Transparent
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("📍", style = MaterialTheme.typography.bodyMedium)
+                                        Spacer(Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = "現在地最寄り: ${currentLocationStation.name}",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                            if (currentLocationStation.kana.isNotBlank()) {
+                                                Text(
+                                                    text = currentLocationStation.kana,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            item {
+                                Text(
+                                    text = "駅名を入力して検索してください",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+                    } else if (results.isEmpty()) {
+                        item {
+                            Text(
+                                text = "「$query」に一致する駅が見つかりませんでした",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(8.dp)
+                            )
+                        }
+                    } else {
+                        items(results) { st ->
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelectStation(st) }
+                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                                color = Color.Transparent
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("🚉", style = MaterialTheme.typography.bodyMedium)
+                                    Spacer(Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = st.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        if (st.kana.isNotBlank()) {
+                                            Text(
+                                                text = st.kana,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("キャンセル") }
+        }
+    )
 }

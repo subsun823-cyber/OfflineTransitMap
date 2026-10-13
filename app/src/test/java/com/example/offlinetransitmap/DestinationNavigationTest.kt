@@ -668,6 +668,31 @@ class DestinationNavigationTest {
         assertEquals("第1候補は電車ルートであること", "transit_chuo", ranked[0].routeKey)
         assertFalse("第1候補のレグに電車が含まれること", ranked[0].legs.all { it.isWalk })
     }
+
+    @Test
+    fun testRouteWaypointCreationAndCombining() {
+        val wpOrigin = RouteWaypoint(name = "八王子駅", lat = 35.6554, lon = 139.3389, stationId = "JR_HACHIOJI")
+        val wpVia = RouteWaypoint(name = "立川駅", lat = 35.6980, lon = 139.4137, stationId = "JR_TACHIKAWA")
+        val wpDest = RouteWaypoint(name = "新宿駅", lat = 35.6896, lon = 139.7006, stationId = "JR_SHINJUKU")
+
+        val waypoints = listOf(wpOrigin, wpVia, wpDest)
+        assertEquals(3, waypoints.size)
+        assertEquals("八王子駅", waypoints[0].name)
+        assertEquals("立川駅", waypoints[1].name)
+        assertEquals("新宿駅", waypoints[2].name)
+
+        // スワップ（入れ替え）のテスト
+        val swapped = listOf(waypoints.last()) + waypoints.subList(1, waypoints.size - 1).reversed() + listOf(waypoints.first())
+        assertEquals("新宿駅", swapped[0].name)
+        assertEquals("立川駅", swapped[1].name)
+        assertEquals("八王子駅", swapped[2].name)
+
+        // 経由地削除のテスト
+        val removedVia = waypoints.filterIndexed { index, _ -> index != 1 }
+        assertEquals(2, removedVia.size)
+        assertEquals("八王子駅", removedVia[0].name)
+        assertEquals("新宿駅", removedVia[1].name)
+    }
 }
 
 

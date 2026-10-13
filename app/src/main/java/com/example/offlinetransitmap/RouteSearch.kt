@@ -17,6 +17,14 @@ data class StationEntry(
     val group: String
 )
 
+// 出発地・経由地・目的地の地点定義
+data class RouteWaypoint(
+    val name: String,
+    val lat: Double,
+    val lon: Double,
+    val stationId: String? = null
+)
+
 // 経路の1区間(バス・電車1本、または徒歩)
 data class RouteLeg(
     val isWalk: Boolean,
@@ -1154,6 +1162,84 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         } catch (e: Throwable) {
             android.util.Log.e("RouteSearch", "findRoutesBetweenCoordinates failed gracefully", e)
             listOf(directFallback(TravelMode.WALK))
+        }
+    }
+
+    // 経由地を含む地点リスト間のルート探索 (例: [出発地, 経由地1, ..., 目的地])
+    fun findRoutesWithWaypoints(
+        waypoints: List<RouteWaypoint>,
+        now: LocalDateTime
+    ): List<Itinerary> {
+        if (waypoints.size < 2) return emptyList()
+        if (waypoints.size == 2) {
+            return findRoutesBetweenCoordinates(
+                originLat = waypoints[0].lat,
+                originLon = waypoints[0].lon,
+                destLat = waypoints[1].lat,
+                destLon = waypoints[1].lon,
+                now = now,
+                destName = waypoints[1].name,
+                travelMode = TravelMode.TRANSIT
+            )
+        }
+
+        return try {
+            val segments = ArrayList<Itinerary>()
+            var curTime = now
+            for (i in 0 until waypoints.size - 1) {
+                val pFrom = waypoints[i]
+                val pTo = waypoints[i + 1]
+                val segRoutes = findRoutesBetweenCoordinates(
+                    originLat = pFrom.lat,
+                    originLon = pFrom.lon,
+                    destLat = pTo.lat,
+                    destLon = pTo.lon,
+                    now = curTime,
+                    destName = pTo.name,
+                    travelMode = TravelMode.TRANSIT
+                )
+                val best = rank(segRoutes, SortMode.FASTEST).firstOrNull() ?: segRoutes.firstOrNull()
+                if (best == null) return emptyList()
+                segments.add(best)
+                curTime = best.arrival.plusMinutes(2)
+            }
+
+            val mergedLegs = ArrayList<RouteLeg>()
+            var totalFare: Int? = 0
+            var knownFare = 0
+            var totalTransfers = 0
+            val keyParts = ArrayList<String>()
+
+            for ((idx, seg) in segments.withIndex()) {
+                mergedLegs.addAll(seg.legs)
+                totalTransfers += seg.transfers
+                if (idx > 0) totalTransfers += 1
+                if (seg.fare != null && totalFare != null) {
+                    totalFare += seg.fare
+                } else {
+                    totalFare = null
+                }
+                knownFare += seg.knownFare
+                keyParts.add(seg.routeKey)
+            }
+
+            val dep = segments.first().departure
+            val arr = segments.last().arrival
+
+            listOf(
+                Itinerary(
+                    legs = mergedLegs,
+                    departure = dep,
+                    arrival = arr,
+                    transfers = totalTransfers,
+                    fare = totalFare,
+                    knownFare = knownFare,
+                    routeKey = keyParts.joinToString("||")
+                )
+            )
+        } catch (e: Throwable) {
+            android.util.Log.e("RouteSearch", "findRoutesWithWaypoints failed", e)
+            emptyList()
         }
     }
 }
