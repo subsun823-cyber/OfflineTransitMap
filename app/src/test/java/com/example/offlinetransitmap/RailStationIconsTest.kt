@@ -115,4 +115,22 @@ class RailStationIconsTest {
         assertEquals("station-rail-tokyu-metro-toei", railStationIcon(setOf("東急電鉄", "東京メトロ", "都営地下鉄")))
         assertEquals("station-rail-jr-tokyu-metro-toei", railStationIcon(setOf("JR東日本", "東急電鉄", "東京メトロ", "都営地下鉄")))
     }
+
+    @Test fun inferOperatorFromStationIdRestoresJrEastAndPrivateIcons() {
+        assertEquals("JR東日本", inferOperatorFromStationId("JR_1301"))
+        assertEquals("JR東日本", inferOperatorFromStationId("JR_TOKYO"))
+        assertEquals("JR東日本", inferOperatorFromStationId("odpt.Station:JR-East.Yamanote.Shinjuku"))
+        assertEquals("JR東日本", inferOperatorFromStationId("jreast_station_1"))
+        assertEquals("東京メトロ", inferOperatorFromStationId("ODPT_TOKYO_METRO:Ginza.Asakusa"))
+        assertEquals("西武鉄道", inferOperatorFromStationId("ODPT_SEIBU:Ikebukuro.Ikebukuro"))
+        assertEquals("東武鉄道", inferOperatorFromStationId("ODPT_TOBU:Isesaki.Asakusa"))
+        assertEquals("東急電鉄", inferOperatorFromStationId("ODPT_TOKYU:Toyoko.Shibuya"))
+
+        // JR駅IDからJR東日本アイコンが正しく判定されること
+        val jrOp = inferOperatorFromStationId("JR_1301")!!
+        assertEquals("station-jr-east", railStationIcon(setOf(jrOp)))
+
+        val odptJrOp = inferOperatorFromStationId("odpt.Station:JR-East.Chuo.Hachioji")!!
+        assertEquals("station-jr-east", railStationIcon(setOf(odptJrOp)))
+    }
 }

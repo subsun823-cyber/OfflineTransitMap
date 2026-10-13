@@ -460,27 +460,21 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         val cached = cachedTransitRoutes
                                         if (cached != null && cached.isNotEmpty()) {
                                             cached
+                                        } else if (activeSearcher != null) {
+                                            val computed = activeSearcher.findRoutesBetweenCoordinates(
+                                                originLat = curLoc.first,
+                                                originLon = curLoc.second,
+                                                destLat = dest.first,
+                                                destLon = dest.second,
+                                                now = LocalDateTime.now(),
+                                                destName = resolvedName,
+                                                travelMode = TravelMode.TRANSIT,
+                                                roadRouter = null
+                                            )
+                                            cachedTransitRoutes = computed
+                                            computed
                                         } else {
-                                            runCatching { transitSearchJob?.join() }
-                                            val afterJoin = cachedTransitRoutes
-                                            if (afterJoin != null && afterJoin.isNotEmpty()) {
-                                                afterJoin
-                                            } else if (activeSearcher != null) {
-                                                val computed = activeSearcher.findRoutesBetweenCoordinates(
-                                                    originLat = curLoc.first,
-                                                    originLon = curLoc.second,
-                                                    destLat = dest.first,
-                                                    destLon = dest.second,
-                                                    now = LocalDateTime.now(),
-                                                    destName = resolvedName,
-                                                    travelMode = TravelMode.TRANSIT,
-                                                    roadRouter = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
-                                                )
-                                                cachedTransitRoutes = computed
-                                                computed
-                                            } else {
-                                                emptyList()
-                                            }
+                                            emptyList()
                                         }
                                     } catch (e: Throwable) {
                                         android.util.Log.e("MainActivity", "Transit route computation failed", e)
@@ -741,35 +735,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             }
                             cachedTransitRoutes = null
                             transitSearchJob?.cancel()
-                            transitSearchJob = scope.launch(Dispatchers.Default) {
-                                try {
-                                    val activeSearcher = ensureSearcher()
-                                    if (activeSearcher != null) {
-                                        val routes = activeSearcher.findRoutesBetweenCoordinates(
-                                            originLat = curLoc.first,
-                                            originLon = curLoc.second,
-                                            destLat = lat,
-                                            destLon = lon,
-                                            now = LocalDateTime.now(),
-                                            destName = "目的地",
-                                            travelMode = TravelMode.TRANSIT,
-                                            roadRouter = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
-                                        )
-                                        withContext(Dispatchers.Main) {
-                                            if (destinationPoint == Pair(lat, lon)) {
-                                                cachedTransitRoutes = routes
-                                                val best = activeSearcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
-                                                if (best != null) {
-                                                    val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
-                                                    destinationTransitDuration = dur
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (e: Throwable) {
-                                    android.util.Log.e("MainActivity", "transitSearchJob background failure", e)
-                                }
-                            }
+                            transitSearchJob = null
+                            destinationTransitDuration = null
                         } else {
                             destinationCurrentDistance = null
                             destinationCurrentDuration = null
@@ -971,34 +938,10 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     android.util.Log.e("MainActivity", "onSelectPlace road calculation failed", e)
                                 }
                             }
-                            scope.launch(Dispatchers.Default) {
-                                try {
-                                    val activeSearcher = ensureSearcher()
-                                    if (activeSearcher != null) {
-                                        val routes = activeSearcher.findRoutesBetweenCoordinates(
-                                            originLat = curLoc.first,
-                                            originLon = curLoc.second,
-                                            destLat = p.lat,
-                                            destLon = p.lon,
-                                            now = LocalDateTime.now(),
-                                            destName = p.name,
-                                            travelMode = TravelMode.TRANSIT,
-                                            roadRouter = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
-                                        )
-                                        val best = activeSearcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
-                                        if (best != null) {
-                                            val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
-                                            withContext(Dispatchers.Main) {
-                                                if (destinationPoint == point) {
-                                                    destinationTransitDuration = dur
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (e: Throwable) {
-                                    android.util.Log.e("MainActivity", "onSelectPlace transit search failed", e)
-                                }
-                            }
+                            cachedTransitRoutes = null
+                            transitSearchJob?.cancel()
+                            transitSearchJob = null
+                            destinationTransitDuration = null
                         }
                         scope.launch(Dispatchers.Default) {
                             val activeSearcher = ensureSearcher()

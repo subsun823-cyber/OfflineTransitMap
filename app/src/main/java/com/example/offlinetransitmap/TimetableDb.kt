@@ -10,6 +10,7 @@ import java.io.File
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.util.Locale
 
 class TimetableDb private constructor(val db: SQLiteDatabase) {
 
@@ -159,12 +160,24 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         if (!hasStationKind) return emptyMap()
         val operators = mutableMapOf<String, MutableSet<String>>()
         if (hasTable("station_operators")) {
-            db.rawQuery("SELECT DISTINCT COALESCE(s.grp,s.station_id),o.operator FROM stations s JOIN station_operators o ON o.station_id=s.station_id WHERE s.kind='rail'", null).use { c ->
-                while (c.moveToNext()) operators.getOrPut(c.getString(0)) { mutableSetOf() }.add(c.getString(1) ?: "")
+            runCatching {
+                db.rawQuery("SELECT DISTINCT COALESCE(s.grp,s.station_id),o.operator FROM stations s JOIN station_operators o ON o.station_id=s.station_id WHERE s.kind='rail'", null).use { c ->
+                    while (c.moveToNext()) operators.getOrPut(c.getString(0)) { mutableSetOf() }.add(c.getString(1) ?: "")
+                }
             }
-            if (operators.isNotEmpty()) return operators
         }
-        // 数百万レコードの stop_times 全件スキャンはメモリ枯渇・クラッシュを招くため完全排除
+        // station_operators に無い場合やベースDB(JR東日本等)の駅について、station_id / grp から瞬時に事業者を追加判定
+        runCatching {
+            db.rawQuery("SELECT station_id, COALESCE(grp, station_id) FROM stations WHERE kind='rail'", null).use { c ->
+                while (c.moveToNext()) {
+                    val sId = c.getString(0) ?: ""
+                    val grp = c.getString(1) ?: sId
+                    inferOperatorFromStationId(sId)?.let { op ->
+                        operators.getOrPut(grp) { mutableSetOf() }.add(op)
+                    }
+                }
+            }
+        }
         return operators
     }
 
@@ -601,5 +614,24 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
     private fun platformText(platform: String?, isBus: Boolean): String {
         if (platform.isNullOrBlank() || platform == "0") return ""
         return if (isBus) "${platform}番のりば" else "${platform}番線"
+    }
+}
+
+internal fun inferOperatorFromStationId(stationId: String): String? {
+    val lower = stationId.lowercase(Locale.ROOT)
+    return when {
+        lower.startsWith("jr_") || lower.contains("jr-east") || lower.contains("jreast") ||
+                lower.startsWith("jr:") || lower.contains(":jr") || lower.contains("eastjapanrailway") -> "JR東日本"
+        lower.contains("tokyometro") || lower.contains("tokyo_metro") -> "東京メトロ"
+        lower.contains("toei") -> "東京都交通局"
+        lower.contains("seibu") -> "西武鉄道"
+        lower.contains("tobu") -> "東武鉄道"
+        lower.contains("tokyu") -> "東急電鉄"
+        lower.contains("odakyu") -> "小田急電鉄"
+        lower.contains("keio") -> "京王電鉄"
+        lower.contains("keikyu") -> "京浜急行電鉄"
+        lower.contains("keisei") -> "京成電鉄"
+        lower.contains("sotetsu") -> "相模鉄道"
+        else -> null
     }
 }
