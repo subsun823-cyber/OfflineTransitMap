@@ -26,9 +26,11 @@ internal object KeioDatabase {
         "fares" to "route_id,from_zone,to_zone,price"
     )
 
-    fun validate(file: File) {
+    fun validate(file: File, quickCheck: Boolean = false) {
         SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
-            db.rawQuery("PRAGMA quick_check", null).use { c -> check(c.moveToFirst() && c.getString(0) == "ok") { "時刻表DBが破損しています" } }
+            if (quickCheck) {
+                db.rawQuery("PRAGMA quick_check", null).use { c -> check(c.moveToFirst() && c.getString(0) == "ok") { "時刻表DBが破損しています" } }
+            }
             for ((table, names) in columns) db.rawQuery("SELECT $names FROM $table LIMIT 0", null).close()
             db.rawQuery("SELECT key,value FROM meta LIMIT 0", null).close()
             db.rawQuery("SELECT start_date,end_date FROM feeds LIMIT 0", null).close()
@@ -38,6 +40,18 @@ internal object KeioDatabase {
     fun version(file: File, versionKey: String = "keio.version"): String? = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
         val exists = db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_data'", null).use { it.moveToFirst() }
         if (!exists) null else db.rawQuery("SELECT value FROM app_data WHERE key=?", arrayOf(versionKey)).use { if (it.moveToFirst()) it.getString(0) else null }
+    }
+
+    fun getAllVersions(file: File): Map<String, String> = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+        val exists = db.rawQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='app_data'", null).use { it.moveToFirst() }
+        if (!exists) return emptyMap()
+        val map = mutableMapOf<String, String>()
+        db.rawQuery("SELECT key, value FROM app_data WHERE key LIKE '%.version'", null).use { c ->
+            while (c.moveToNext()) {
+                map[c.getString(0)] = c.getString(1)
+            }
+        }
+        map
     }
 
     fun isBootstrapOnly(file: File): Boolean = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->

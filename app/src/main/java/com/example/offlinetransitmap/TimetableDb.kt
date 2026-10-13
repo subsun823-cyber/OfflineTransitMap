@@ -15,13 +15,19 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
 
     companion object {
         private val DAY_COLUMNS = arrayOf("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+        private var cachedStationsGeoJson: String? = null
+        private var cachedDbLastModified: Long = 0L
 
-        // timetable.db を開く。無ければ null。
         // このとき timetable フォルダは、アプリ自身が作る(adb で先に作らない)
         fun open(context: Context): TimetableDb? {
             val dir = context.getExternalFilesDir("timetable") ?: return null
             val file = File(dir, "timetable.db")
             if (!file.exists()) return null
+            val lm = file.lastModified()
+            if (lm != cachedDbLastModified) {
+                cachedStationsGeoJson = null
+                cachedDbLastModified = lm
+            }
             return try {
                 TimetableDb(
                     SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
@@ -34,6 +40,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
 
     // 地図に出す駅の点(GeoJSON)。同じ名前の駅は1点にまとめ、kind は rail(電車)か bus(バス停)
     fun stationsGeoJson(): String {
+        cachedStationsGeoJson?.let { return it }
         val kindExpr = if (hasStationKind) "MAX(CASE WHEN kind = 'rail' THEN 1 ELSE 0 END)" else "0"
         val railOperators = railOperatorsByGroup()
         val features = JSONArray()
@@ -59,10 +66,12 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
                 )
             }
         }
-        return JSONObject()
+        val result = JSONObject()
             .put("type", "FeatureCollection")
             .put("features", features)
             .toString()
+        cachedStationsGeoJson = result
+        return result
     }
 
     private fun railOperatorsByGroup(): Map<String, Set<String>> {

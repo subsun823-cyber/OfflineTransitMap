@@ -36,6 +36,26 @@ import java.util.zip.GZIPInputStream
 internal object OfflineDataSetup {
     private val lock = Mutex()
 
+    internal fun checkFastReadyFiles(mapFile: File, dbFile: File): Boolean {
+        return mapFile.isFile && mapFile.length() >= 1024L &&
+                dbFile.isFile && dbFile.length() >= 1024L &&
+                !File(dbFile.path + "-wal").let { it.exists() && it.length() > 0 }
+    }
+
+    fun isFastReady(context: Context): Boolean {
+        val storage = context.getSharedPreferences("data_setup", Context.MODE_PRIVATE)
+        val accepted = storage.getString("accepted_notice", null) ?: return false
+        val savedVersion = storage.getInt("prepared_app_version", -1)
+        if (savedVersion != BuildConfig.VERSION_CODE) return false
+
+        val mapDir = context.getExternalFilesDir("maps") ?: return false
+        val dbDir = context.getExternalFilesDir("timetable") ?: return false
+        val map = File(mapDir, "tokyo.pmtiles")
+        val timetable = File(dbDir, "timetable.db")
+
+        return checkFastReadyFiles(map, timetable)
+    }
+
     suspend fun prepare(context: Context, allowDownloads: Boolean = true, progress: (String) -> Unit): List<String> = lock.withLock {
         withContext(Dispatchers.IO) {
             val task = currentCoroutineContext()
@@ -52,7 +72,7 @@ internal object OfflineDataSetup {
                 val target = requireNotNull(targets[id]) { "配布設定のファイル種別が不正です" }
                 // 初回配布のみ。手動配置済みのデータや、京王追加済みのDBは上書きしない。
                 if (target.isFile && target.length() > 0) {
-                    val valid = runCatching { if (id == "map") validateMap(target) else KeioDatabase.validate(target) }.isSuccess
+                    val valid = runCatching { if (id == "map") validateMap(target) else KeioDatabase.validate(target, quickCheck = false) }.isSuccess
                     val bootstrapOnly = id == "timetable" && valid && KeioDatabase.isBootstrapOnly(target)
                     if (valid && !bootstrapOnly) continue
                 }
@@ -79,7 +99,7 @@ internal object OfflineDataSetup {
                     DataFileIO.stage(context.assets.open(asset), target, size, hash, report)
                 } else DataFileIO.download(url, target, size, hash, report)
                 try {
-                    if (id == "map") validateMap(part) else KeioDatabase.validate(part)
+                    if (id == "map") validateMap(part) else KeioDatabase.validate(part, quickCheck = false)
                     if (id == "timetable") checkNoWal(target)
                     task.ensureActive()
                     DataFileIO.commit(part, target)
@@ -87,7 +107,10 @@ internal object OfflineDataSetup {
             }
             progress("地下鉄・私鉄・バスの駅・バス停・時刻表を準備中…")
             val target = targets.getValue("timetable")
-            if (target.exists() && target.length() > 0) KeioDatabase.validate(target)
+            val existingVersions = if (target.exists() && target.length() > 0) {
+                runCatching { KeioDatabase.getAllVersions(target) }.getOrDefault(emptyMap())
+            } else emptyMap()
+
             for ((assetName, prefix) in listOf(
                 "keio" to "ODPT_KEIO:",
                 "keio-bus" to KeioDatabase.BUS_PREFIX,
@@ -101,7 +124,7 @@ internal object OfflineDataSetup {
 
                 val info = JSONObject(context.assets.open("bootstrap/$assetName-info.json").bufferedReader().use { it.readText() })
                 val version = info.getString("sha256")
-                if (!target.exists() || target.length() == 0L || KeioDatabase.version(target, "$assetName.version") != version) {
+                if (!target.exists() || target.length() == 0L || existingVersions["$assetName.version"] != version) {
                     // 未チェックポイントのDBをファイルコピーすると内容を失うため停止する。
                     checkNoWal(target)
                     val seedName = File(dbDir, "$assetName-seed.db")
@@ -109,7 +132,7 @@ internal object OfflineDataSetup {
                     val staged = File(dbDir, "timetable.new.db")
                     try {
                         clearStaging(staged)
-                        KeioDatabase.validate(seed)
+                        KeioDatabase.validate(seed, quickCheck = false)
                         val fresh = !target.exists() || target.length() == 0L
                         if (!fresh) target.copyTo(staged, overwrite = true) else seed.copyTo(staged, overwrite = true)
                         KeioDatabase.merge(staged, seed, version, prefix, "$assetName.version")
@@ -154,19 +177,34 @@ internal object OfflineDataSetup {
 @Composable
 internal fun PreparedOfflineApp(content: @Composable (String) -> Unit) {
     val context = LocalContext.current.applicationContext
+    val storage = remember { context.getSharedPreferences("data_setup", Context.MODE_PRIVATE) }
+    val initialCachedNotice = remember { storage.getString("accepted_notice", null) }
+    val initiallyReady = remember { initialCachedNotice != null && OfflineDataSetup.isFastReady(context) }
+
+    if (initiallyReady) {
+        // すでに準備完了済みなら、待ち時間ゼロで即座にアプリを開始
+        content(initialCachedNotice.orEmpty())
+        return
+    }
+
     var attempt by remember { mutableIntStateOf(0) }
     var allowDownloads by remember { mutableStateOf(true) }
     var progress by remember { mutableStateOf("オフラインデータを確認中…") }
     var failure by remember { mutableStateOf<String?>(null) }
     var notes by remember { mutableStateOf<List<String>?>(null) }
     var accepted by remember { mutableStateOf(false) }
-    val storage = remember { context.getSharedPreferences("data_setup", Context.MODE_PRIVATE) }
+
     LaunchedEffect(attempt) {
         failure = null
         try {
             val result = OfflineDataSetup.prepare(context, allowDownloads) { progress = it }
             notes = result
-            accepted = storage.getString("accepted_notice", null) == result.joinToString("\n")
+            val noticeStr = result.joinToString("\n")
+            val isNoticeAccepted = storage.getString("accepted_notice", null) == noticeStr
+            if (isNoticeAccepted) {
+                storage.edit().putInt("prepared_app_version", BuildConfig.VERSION_CODE).apply()
+            }
+            accepted = isNoticeAccepted
         } catch (e: CancellationException) { throw e }
         catch (e: Exception) { failure = "データを準備できませんでした。通信と空き容量を確認してください。\n${e.message.orEmpty()}" }
     }
@@ -185,7 +223,11 @@ internal fun PreparedOfflineApp(content: @Composable (String) -> Unit) {
                     ready.forEach { Text(it) }
                     Text("取得済みのデータは、次回から通信なしで利用できます。")
                     Button(onClick = {
-                        storage.edit().putString("accepted_notice", ready.joinToString("\n")).apply()
+                        val noticeStr = ready.joinToString("\n")
+                        storage.edit()
+                            .putString("accepted_notice", noticeStr)
+                            .putInt("prepared_app_version", BuildConfig.VERSION_CODE)
+                            .apply()
                         accepted = true
                     }) { Text("開始") }
                 } else {
