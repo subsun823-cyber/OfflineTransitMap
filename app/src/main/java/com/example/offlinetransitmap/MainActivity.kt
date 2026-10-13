@@ -154,7 +154,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val preferences = settings.value
     var showSettings by rememberSaveable { mutableStateOf(false) }
     // 時刻表DB。無ければ null(従来どおりサンプル表示)
-    val timetable = remember { TimetableDb.open(context) }
+    var timetableState by remember { mutableStateOf(TimetableDb.open(context)) }
+    val timetable = timetableState
     val stationsGeoJson by produceState(
         initialValue = if (timetable == null) demoStationsGeoJson() else """{"type":"FeatureCollection","features":[]}""",
         key1 = timetable
@@ -162,8 +163,17 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         if (timetable != null) value = withContext(Dispatchers.IO) { timetable.stationsGeoJson() }
     }
     // 経路検索(DBが新しい形式のときだけ使える)
-    val searcher = remember {
+    val searcher = remember(timetable) {
         timetable?.let { RouteSearcher(it.db) }?.takeIf { it.isSupported() }
+    }
+    fun ensureSearcher(): RouteSearcher? {
+        searcher?.let { return it }
+        val t = TimetableDb.open(context)
+        if (t != null) {
+            timetableState = t
+            return RouteSearcher(t.db).takeIf { it.isSupported() }
+        }
+        return null
     }
     var selectedStation by remember { mutableStateOf<SelectedStation?>(null) }
 
@@ -374,7 +384,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val handleDestinationSearch: (startNavImmediately: Boolean) -> Unit = { startNavImmediately ->
         val dest = destinationPoint
         if (dest != null) {
-            if (searcher == null && roadRouter == null) {
+            val currentSearcher = ensureSearcher()
+            if (currentSearcher == null && roadRouter == null) {
                 Toast.makeText(context, "経路検索には、新しいデータが必要です", Toast.LENGTH_LONG).show()
             } else if (!hasLocationPermission) {
                 permissionLauncher.launch(locationPermissions)
@@ -441,6 +452,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             } else {
                                 // selectedTravelMode == TravelMode.TRANSIT (公共交通機関：電車・バス)
                                 // ユーザー要望: 公共交通機関は重さを回避し確実に確認できるよう、必ず最初にルート・経由地一覧を表示し、詳細パネルからナビを開始できるようにする
+                                val activeSearcher = ensureSearcher()
                                 val candidates = withContext(Dispatchers.Default) {
                                     try {
                                         val cached = cachedTransitRoutes
@@ -451,8 +463,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                             val afterJoin = cachedTransitRoutes
                                             if (afterJoin != null && afterJoin.isNotEmpty()) {
                                                 afterJoin
-                                            } else if (searcher != null) {
-                                                val computed = searcher.findRoutesBetweenCoordinates(
+                                            } else if (activeSearcher != null) {
+                                                val computed = activeSearcher.findRoutesBetweenCoordinates(
                                                     originLat = curLoc.first,
                                                     originLon = curLoc.second,
                                                     destLat = dest.first,
@@ -474,7 +486,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     }
                                 }
                                 isSearchingForDestination = false
-                                val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
+                                val bestItin = activeSearcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
                                 if (bestItin != null) {
                                     candidateItineraries = candidates
                                     selectedItinerary = bestItin
@@ -729,8 +741,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             transitSearchJob?.cancel()
                             transitSearchJob = scope.launch(Dispatchers.Default) {
                                 try {
-                                    if (searcher != null) {
-                                        val routes = searcher.findRoutesBetweenCoordinates(
+                                    val activeSearcher = ensureSearcher()
+                                    if (activeSearcher != null) {
+                                        val routes = activeSearcher.findRoutesBetweenCoordinates(
                                             originLat = curLoc.first,
                                             originLon = curLoc.second,
                                             destLat = lat,
@@ -743,7 +756,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         withContext(Dispatchers.Main) {
                                             if (destinationPoint == Pair(lat, lon)) {
                                                 cachedTransitRoutes = routes
-                                                val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
+                                                val best = activeSearcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
                                                 if (best != null) {
                                                     val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
                                                     destinationTransitDuration = dur
@@ -762,7 +775,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             destinationTransitDuration = null
                         }
                         scope.launch(Dispatchers.Default) {
-                            val nearest = searcher?.nearestStation(lat, lon)
+                            val activeSearcher = ensureSearcher()
+                            val nearest = activeSearcher?.nearestStation(lat, lon)
                             val dist = if (nearest != null) calcDistanceMeters(lat, lon, nearest.lat, nearest.lon) else null
                             withContext(Dispatchers.Main) {
                                 if (destinationPoint == Pair(lat, lon)) {
@@ -957,8 +971,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             }
                             scope.launch(Dispatchers.Default) {
                                 try {
-                                    if (searcher != null) {
-                                        val routes = searcher.findRoutesBetweenCoordinates(
+                                    val activeSearcher = ensureSearcher()
+                                    if (activeSearcher != null) {
+                                        val routes = activeSearcher.findRoutesBetweenCoordinates(
                                             originLat = curLoc.first,
                                             originLon = curLoc.second,
                                             destLat = p.lat,
@@ -968,7 +983,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                             travelMode = TravelMode.TRANSIT,
                                             roadRouter = roadRouter ?: runCatching { RoadRouter.open(context) }.getOrNull()
                                         )
-                                        val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
+                                        val best = activeSearcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
                                         if (best != null) {
                                             val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
                                             withContext(Dispatchers.Main) {
@@ -984,7 +999,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             }
                         }
                         scope.launch(Dispatchers.Default) {
-                            val nearest = searcher?.nearestStation(p.lat, p.lon)
+                            val activeSearcher = ensureSearcher()
+                            val nearest = activeSearcher?.nearestStation(p.lat, p.lon)
                             val dist = if (nearest != null) calcDistanceMeters(p.lat, p.lon, nearest.lat, nearest.lon) else null
                             withContext(Dispatchers.Main) {
                                 if (destinationPoint == point) {

@@ -18,11 +18,75 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         private var cachedStationsGeoJson: String? = null
         private var cachedDbLastModified: Long = 0L
 
+        // 端末内にある Timetable.db / timetable.db を大文字小文字無視で自動探索し、最も新しい健全なファイルを標準配置場所に同期・解決する
+        fun resolveDatabaseFile(context: Context): File? {
+            val standardDir = context.getExternalFilesDir("timetable")
+            val standardFile = standardDir?.let { File(it, "timetable.db") }
+
+            // 探索候補ディレクトリ一覧 (大文字小文字や配置場所の違い、外部ストレージ群を包括カバー)
+            val searchDirs = LinkedHashSet<File>()
+            standardDir?.let { searchDirs.add(it) }
+            context.getExternalFilesDir(null)?.let {
+                searchDirs.add(it)
+                searchDirs.add(File(it, "timetable"))
+                searchDirs.add(File(it, "databases"))
+            }
+            try {
+                context.getExternalFilesDirs(null)?.filterNotNull()?.forEach {
+                    searchDirs.add(it)
+                    searchDirs.add(File(it, "timetable"))
+                }
+            } catch (_: Exception) {}
+            searchDirs.add(context.filesDir)
+            searchDirs.add(File(context.filesDir, "timetable"))
+            context.getDatabasePath("timetable.db")?.parentFile?.let { searchDirs.add(it) }
+            context.getExternalFilesDir("database")?.let { searchDirs.add(it) }
+            context.getExternalFilesDir("databases")?.let { searchDirs.add(it) }
+
+            val candidateFiles = ArrayList<File>()
+            for (dir in searchDirs) {
+                if (!dir.exists() || !dir.isDirectory) continue
+                val files = dir.listFiles() ?: continue
+                for (f in files) {
+                    if (f.isFile && f.length() > 1024) {
+                        val nameLower = f.name.lowercase()
+                        if (nameLower == "timetable.db" || (nameLower.contains("timetable") && nameLower.endsWith(".db"))) {
+                            candidateFiles.add(f)
+                        }
+                    }
+                }
+            }
+
+            if (candidateFiles.isEmpty()) {
+                return if (standardFile != null && standardFile.isFile && standardFile.length() > 1024) standardFile else null
+            }
+
+            // 完全一致 (timetable.db) を優先し、その中で最終更新日時が最も新しいものを選択
+            val bestFile = candidateFiles.maxWithOrNull(
+                compareBy<File> { it.name.equals("timetable.db", ignoreCase = true) }
+                    .thenBy { it.lastModified() }
+            ) ?: candidateFiles.first()
+
+            if (standardFile != null && bestFile.absolutePath != standardFile.absolutePath) {
+                // bestFile の方が新しいか、standardFile が存在しない場合に同期
+                if (!standardFile.exists() || bestFile.lastModified() > standardFile.lastModified() || standardFile.length() <= 1024) {
+                    try {
+                        standardDir?.mkdirs()
+                        bestFile.copyTo(standardFile, overwrite = true)
+                        return standardFile
+                    } catch (e: Exception) {
+                        Log.w("TimetableDb", "Failed to sync ${bestFile.name} to standard path", e)
+                        return bestFile
+                    }
+                }
+            }
+
+            return if (standardFile != null && standardFile.exists() && standardFile.length() > 1024) standardFile else bestFile
+        }
+
         // このとき timetable フォルダは、アプリ自身が作る(adb で先に作らない)
         fun open(context: Context): TimetableDb? {
-            val dir = context.getExternalFilesDir("timetable") ?: return null
-            val file = File(dir, "timetable.db")
-            if (!file.exists()) return null
+            val file = resolveDatabaseFile(context) ?: return null
             val lm = file.lastModified()
             if (lm != cachedDbLastModified) {
                 cachedStationsGeoJson = null
@@ -33,6 +97,7 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
                     SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
                 )
             } catch (e: Exception) {
+                Log.e("TimetableDb", "Failed to open timetable database: ${file.absolutePath}", e)
                 null
             }
         }

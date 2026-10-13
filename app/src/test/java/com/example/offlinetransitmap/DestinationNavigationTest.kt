@@ -611,6 +611,63 @@ class DestinationNavigationTest {
         val bikeConsecutive = computeTurnPenalty(90.0, 100.0, true, 4, 4, TravelMode.BICYCLE)
         assertTrue(bikeConsecutive > bikeTurn)
     }
+
+    @Test
+    fun testTransitRankingPrioritizesTrainOverWalk() {
+        val now = LocalDateTime.of(2026, 10, 13, 14, 0)
+        // 徒歩ルート（到着が早い: 14:20到着）
+        val walkLeg = RouteLeg(
+            isWalk = true,
+            fromName = "現在地",
+            toName = "目的地",
+            walkMinutes = 20,
+            walkMeters = 1500,
+            lineName = "徒歩",
+            trainType = "徒歩",
+            path = listOf(Pair(35.68, 139.70), Pair(35.69, 139.71))
+        )
+        val directWalkItin = Itinerary(
+            legs = listOf(walkLeg),
+            departure = now,
+            arrival = now.plusMinutes(20),
+            transfers = 0,
+            fare = 0,
+            knownFare = 0,
+            routeKey = "walk_direct"
+        )
+
+        // 電車ルート（発車待ち時間があり到着が遅い: 14:28到着）
+        val trainWalk1 = RouteLeg(isWalk = true, fromName = "現在地", toName = "新宿駅", walkMinutes = 5, walkMeters = 400)
+        val trainRide = RouteLeg(
+            isWalk = false,
+            fromName = "新宿駅",
+            toName = "中野駅",
+            depTime = now.plusMinutes(12),
+            arrTime = now.plusMinutes(18),
+            lineName = "中央線",
+            trainType = "快速",
+            headsign = "高尾"
+        )
+        val trainWalk2 = RouteLeg(isWalk = true, fromName = "中野駅", toName = "目的地", walkMinutes = 10, walkMeters = 700)
+        val transitItin = Itinerary(
+            legs = listOf(trainWalk1, trainRide, trainWalk2),
+            departure = now,
+            arrival = now.plusMinutes(28),
+            transfers = 0,
+            fare = 170,
+            knownFare = 170,
+            routeKey = "transit_chuo"
+        )
+
+        // 両方が混在するリスト
+        val candidates = listOf(directWalkItin, transitItin)
+
+        // rank (FASTEST) でソートした場合、徒歩のほうが早くても電車ルートが優先されること
+        val ranked = RouteSearcher.rank(candidates, SortMode.FASTEST)
+        assertTrue("ランク結果は空でないこと", ranked.isNotEmpty())
+        assertEquals("第1候補は電車ルートであること", "transit_chuo", ranked[0].routeKey)
+        assertFalse("第1候補のレグに電車が含まれること", ranked[0].legs.all { it.isWalk })
+    }
 }
 
 
