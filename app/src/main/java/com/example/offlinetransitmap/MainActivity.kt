@@ -215,6 +215,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     var destinationStation by remember { mutableStateOf<StationEntry?>(null) }
     var destinationDistance by remember { mutableStateOf<Int?>(null) }
     var isSearchingForDestination by remember { mutableStateOf(false) }
+    var cachedTransitRoutes by remember { mutableStateOf<List<Itinerary>?>(null) }
+    var transitSearchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val scope = rememberCoroutineScope()
 
     // ナビ中の経路・案内・地図の向き
@@ -431,31 +433,39 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             }
                         } else {
                             // selectedTravelMode == TravelMode.TRANSIT (公共交通機関：電車・バス)
+                            // ユーザー要望: 公共交通機関は重さを回避し確実に確認できるよう、必ず最初にルート・経由地一覧を表示し、詳細パネルからナビを開始できるようにする
                             val candidates = withContext(Dispatchers.Default) {
-                                if (searcher != null) {
-                                    searcher.findRoutesBetweenCoordinates(
-                                        originLat = curLoc.first,
-                                        originLon = curLoc.second,
-                                        destLat = dest.first,
-                                        destLon = dest.second,
-                                        now = LocalDateTime.now(),
-                                        destName = resolvedName,
-                                        travelMode = TravelMode.TRANSIT,
-                                        roadRouter = roadRouter ?: RoadRouter.open(context)
-                                    )
+                                val cached = cachedTransitRoutes
+                                if (cached != null && cached.isNotEmpty()) {
+                                    cached
                                 } else {
-                                    emptyList()
+                                    transitSearchJob?.join()
+                                    val afterJoin = cachedTransitRoutes
+                                    if (afterJoin != null && afterJoin.isNotEmpty()) {
+                                        afterJoin
+                                    } else if (searcher != null) {
+                                        val computed = searcher.findRoutesBetweenCoordinates(
+                                            originLat = curLoc.first,
+                                            originLon = curLoc.second,
+                                            destLat = dest.first,
+                                            destLon = dest.second,
+                                            now = LocalDateTime.now(),
+                                            destName = resolvedName,
+                                            travelMode = TravelMode.TRANSIT,
+                                            roadRouter = roadRouter ?: RoadRouter.open(context)
+                                        )
+                                        cachedTransitRoutes = computed
+                                        computed
+                                    } else {
+                                        emptyList()
+                                    }
                                 }
                             }
                             isSearchingForDestination = false
                             val bestItin = searcher?.rank(candidates, SortMode.FASTEST)?.firstOrNull() ?: candidates.firstOrNull()
                             if (bestItin != null) {
-                                if (startNavImmediately) {
-                                    startNavigation(bestItin, TravelMode.TRANSIT)
-                                } else {
-                                    candidateItineraries = candidates
-                                    selectedItinerary = bestItin
-                                }
+                                candidateItineraries = candidates
+                                selectedItinerary = bestItin
                             } else {
                                 Toast.makeText(context, "公共交通機関による経路が見つかりませんでした", Toast.LENGTH_LONG).show()
                             }
@@ -624,6 +634,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 },
                 onStationClick = { id, name ->
                     if (!navMode) {
+                        transitSearchJob?.cancel()
+                        cachedTransitRoutes = null
                         selectedCrossing = null
                         destinationPoint = null
                         destinationStation = null
@@ -631,6 +643,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         destinationCurrentDistance = null
                         destinationCurrentDuration = null
                         destinationBicycleDuration = null
+                        destinationTransitDuration = null
                         selectedTravelMode = TravelMode.WALK
                         targetCameraPoint = null
                         selectedStation = SelectedStation(id, name)
@@ -640,12 +653,15 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     if (!navMode && selectedItinerary == null) {
                         selectedCrossing = null
                         if (destinationPoint != null) {
+                            transitSearchJob?.cancel()
+                            cachedTransitRoutes = null
                             destinationPoint = null
                             destinationStation = null
                             destinationDistance = null
                             destinationCurrentDistance = null
                             destinationCurrentDuration = null
                             destinationBicycleDuration = null
+                            destinationTransitDuration = null
                             selectedTravelMode = TravelMode.WALK
                             targetCameraPoint = null
                         }
@@ -688,7 +704,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     }
                                 }
                             }
-                            scope.launch(Dispatchers.Default) {
+                            cachedTransitRoutes = null
+                            transitSearchJob?.cancel()
+                            transitSearchJob = scope.launch(Dispatchers.Default) {
                                 if (searcher != null) {
                                     val routes = searcher.findRoutesBetweenCoordinates(
                                         originLat = curLoc.first,
@@ -700,11 +718,12 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         travelMode = TravelMode.TRANSIT,
                                         roadRouter = roadRouter ?: RoadRouter.open(context)
                                     )
-                                    val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
-                                    if (best != null) {
-                                        val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
-                                        withContext(Dispatchers.Main) {
-                                            if (destinationPoint == Pair(lat, lon)) {
+                                    withContext(Dispatchers.Main) {
+                                        if (destinationPoint == Pair(lat, lon)) {
+                                            cachedTransitRoutes = routes
+                                            val best = searcher.rank(routes, SortMode.FASTEST).firstOrNull() ?: routes.firstOrNull()
+                                            if (best != null) {
+                                                val dur = java.time.temporal.ChronoUnit.MINUTES.between(best.departure, best.arrival).toInt()
                                                 destinationTransitDuration = dur
                                             }
                                         }
@@ -818,6 +837,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         onStartNavigation = { handleDestinationSearch(true) },
                         onViewRoute = { handleDestinationSearch(false) },
                         onClose = {
+                            transitSearchJob?.cancel()
+                            cachedTransitRoutes = null
                             destinationPoint = null
                             destinationStation = null
                             destinationDistance = null
@@ -962,6 +983,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         onStartNavigation = { startNavigation(itin, selectedTravelMode) },
                         onStopNavigation = {
                             NavigationController.stop(context)
+                            transitSearchJob?.cancel()
+                            cachedTransitRoutes = null
                             destinationPoint = null
                             destinationStation = null
                             destinationDistance = null
@@ -985,6 +1008,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     nearbyCrossing = nearbyCrossingAlert,
                     onStop = {
                         NavigationController.stop(context)
+                        transitSearchJob?.cancel()
+                        cachedTransitRoutes = null
                         destinationPoint = null
                         destinationStation = null
                         destinationDistance = null

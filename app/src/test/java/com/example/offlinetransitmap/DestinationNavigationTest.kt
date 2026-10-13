@@ -1,6 +1,7 @@
 package com.example.offlinetransitmap
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
@@ -527,5 +528,68 @@ class DestinationNavigationTest {
         val r2 = evaluateRoadTurnByTurn(listOf(Pair(35.68, 139.70), Pair(35.69, 139.71)), 35.68, 139.70, "目標", false, now)
         assertTrue(r2.title.isNotEmpty())
     }
+
+    @Test
+    fun testTransitModePreviewWorkflow() {
+        val now = LocalDateTime.of(2026, 10, 13, 10, 0)
+        // 徒歩レグ（現在地 -> 新宿駅）
+        val walkLeg = RouteLeg(
+            isWalk = true,
+            fromName = "現在地",
+            toName = "新宿駅",
+            walkMinutes = 5,
+            walkMeters = 400,
+            path = listOf(Pair(35.6890, 139.7000), Pair(35.6900, 139.7005))
+        )
+        // 電車レグ（新宿駅 -> 八王子駅: 中央線）
+        val trainLeg = RouteLeg(
+            isWalk = false,
+            fromName = "新宿駅",
+            toName = "八王子駅",
+            depTime = now.plusMinutes(7),
+            arrTime = now.plusMinutes(45),
+            lineName = "中央線",
+            trainType = "中央特快",
+            headsign = "高尾",
+            platform = "12番線",
+            path = listOf(Pair(35.6900, 139.7005), Pair(35.6558, 139.3389))
+        )
+        // 降車後徒歩レグ（八王子駅 -> 八王子市役所）
+        val exitWalkLeg = RouteLeg(
+            isWalk = true,
+            fromName = "八王子駅",
+            toName = "八王子市役所",
+            walkMinutes = 12,
+            walkMeters = 950,
+            path = listOf(Pair(35.6558, 139.3389), Pair(35.6660, 139.3150))
+        )
+
+        val itin = Itinerary(
+            legs = listOf(walkLeg, trainLeg, exitWalkLeg),
+            departure = now,
+            arrival = now.plusMinutes(57),
+            transfers = 0,
+            fare = 490,
+            knownFare = 490,
+            routeKey = "transit_chuo_line"
+        )
+
+        // ルートおよび経由地が正しく保持されていること
+        assertEquals(3, itin.legs.size)
+        assertTrue(itin.legs[0].isWalk)
+        assertFalse(itin.legs[1].isWalk)
+        assertEquals("中央線", itin.legs[1].lineName)
+        assertEquals("新宿駅", itin.legs[1].fromName)
+        assertEquals("八王子駅", itin.legs[1].toName)
+        assertEquals("中央特快", itin.legs[1].trainType)
+        assertTrue(itin.legs[2].isWalk)
+        assertEquals("八王子市役所", itin.legs[2].toName)
+
+        // 電車レグが含まれる旅程の総所要時間・運賃確認
+        val totalMinutes = java.time.Duration.between(itin.departure, itin.arrival).toMinutes()
+        assertEquals(57L, totalMinutes)
+        assertEquals(490, itin.fare)
+    }
 }
+
 

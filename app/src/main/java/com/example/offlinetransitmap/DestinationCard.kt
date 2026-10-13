@@ -243,15 +243,12 @@ fun DestinationCard(
             Spacer(Modifier.height(14.dp))
 
             // アクションボタン
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            if (selectedTravelMode == TravelMode.TRANSIT) {
+                // 公共交通機関 (電車・バス): 最初にルート・経由地を確認して、詳細パネルからナビを開始する
                 Button(
-                    onClick = onStartNavigation,
+                    onClick = onViewRoute,
                     enabled = !isSearching,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     if (isSearching) {
                         CircularProgressIndicator(
@@ -260,18 +257,42 @@ fun DestinationCard(
                             color = MaterialTheme.colorScheme.onPrimary
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("検索中…")
+                        Text("ルート検索中…")
                     } else {
-                        Text("ナビ開始")
+                        Text("ルート・経由地を確認")
                     }
                 }
-
-                OutlinedButton(
-                    onClick = onViewRoute,
-                    enabled = !isSearching,
-                    modifier = Modifier.weight(1f)
+            } else {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("ルート確認")
+                    Button(
+                        onClick = onStartNavigation,
+                        enabled = !isSearching,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        if (isSearching) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("検索中…")
+                        } else {
+                            Text("ナビ開始")
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onViewRoute,
+                        enabled = !isSearching,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("ルート確認")
+                    }
                 }
             }
         }
