@@ -60,7 +60,7 @@ private const val BUF_AFTER_WALK = 60           // 歩いたあとの余裕(秒)
 private const val MAX_TRANSFER_WAIT = 90 * 60   // 乗換の待ちは90分まで
 private const val WALK_MAX_M = 300              // 歩いて乗り換えられる距離(m)
 private const val SAME_STATION_WALK_M = 150     // 同じ名前の駅で、これ未満の移動は「徒歩」として出さない
-private const val HORIZON_SEC = (4.5 * 3600).toInt() // 直近4.5時間以内の便を読む(途中切断・終電直前・長距離乗車にも対応)
+private const val HORIZON_SEC = (2.5 * 3600).toInt() // 直近2.5時間以内の便を読む(メモリ・検索負荷を大幅軽量化)
 private const val EXTRA_MAX_MIN = 120L          // 最速より2時間以上遅い経路は出さない
 private val RUN_OFFSETS_MIN = intArrayOf(0, 15, 35)
 private const val GRID_CELL_DEG = 0.01          // 空間インデックス用グリッドサイズ(約1.1km)
@@ -554,7 +554,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             val sql = "SELECT st.trip, st.seq, st.station_id, st.stop_id, st.arr_sec, st.dep_sec, " +
                     "st.can_board, st.can_alight FROM stop_times st " +
                     "JOIN trips t ON t.trip_no = st.trip " +
-                    "WHERE (st.dep_sec BETWEEN $a AND $b OR (st.can_alight = 1 AND st.arr_sec BETWEEN $a AND $b)) AND t.service_id IN ($placeholders) " +
+                    "WHERE st.dep_sec BETWEEN $a AND $b AND t.service_id IN ($placeholders) " +
                     "ORDER BY st.trip, st.seq"
             var last = -1L
             db.rawQuery(sql, services.toTypedArray()).use { c ->
@@ -1124,8 +1124,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
             var pairsSearched = 0
             for ((origSt, destSt) in searchPairs) {
-                if (pairsSearched >= 3 && results.size >= 3) break
-                if (pairsSearched >= 5) break
+                // 最寄り駅ペアで経路が見つかったら即座に完了し、無駄な多重探索を完全防止
+                if (results.isNotEmpty()) break
+                if (pairsSearched >= 2) break
                 pairsSearched++
 
                 val origAcc = getOriginAccess(origSt)

@@ -84,57 +84,73 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
             return if (standardFile != null && standardFile.exists() && standardFile.length() > 1024) standardFile else bestFile
         }
 
-        // このとき timetable フォルダは、アプリ自身が作る(adb で先に作らない)
+        private var instance: TimetableDb? = null
+        private var instanceFilePath: String? = null
+
+        // データベース接続をシングルトンキャッシュし、無駄な再オープンとメモリリークを完全防止
+        @Synchronized
         fun open(context: Context): TimetableDb? {
             val file = resolveDatabaseFile(context) ?: return null
+            val path = file.absolutePath
             val lm = file.lastModified()
-            if (lm != cachedDbLastModified) {
-                cachedStationsGeoJson = null
-                cachedDbLastModified = lm
+            val existing = instance
+            if (existing != null && instanceFilePath == path && lm == cachedDbLastModified && existing.db.isOpen) {
+                return existing
             }
+            runCatching { existing?.db?.close() }
+            instance = null
+            instanceFilePath = null
+            cachedStationsGeoJson = null
+            cachedDbLastModified = lm
+
             return try {
-                TimetableDb(
-                    SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-                )
+                val db = SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY)
+                val newInstance = TimetableDb(db)
+                instance = newInstance
+                instanceFilePath = path
+                newInstance
             } catch (e: Exception) {
-                Log.e("TimetableDb", "Failed to open timetable database: ${file.absolutePath}", e)
+                Log.e("TimetableDb", "Failed to open timetable database: $path", e)
                 null
             }
         }
     }
 
-    // 地図に出す駅の点(GeoJSON)。同じ名前の駅は1点にまとめ、kind は rail(電車)か bus(バス停)
+    // 地図に出す駅の点(GeoJSON)。鉄道駅(rail)に限定して軽量化し、数万件のバス停によるGPU/メモリパンクを防止
     fun stationsGeoJson(): String {
         cachedStationsGeoJson?.let { return it }
-        val kindExpr = if (hasStationKind) "MAX(CASE WHEN kind = 'rail' THEN 1 ELSE 0 END)" else "0"
+        val whereClause = if (hasStationKind) "WHERE kind = 'rail'" else ""
         val railOperators = railOperatorsByGroup()
-        val features = JSONArray()
+        val sb = StringBuilder(65536)
+        sb.append("""{"type":"FeatureCollection","features":[""")
+        var first = true
         db.rawQuery(
-            "SELECT MIN(station_id), MIN(name), AVG(lat), AVG(lon), $kindExpr, COALESCE(grp, station_id) FROM stations " +
-                    "GROUP BY COALESCE(grp, station_id)",
+            "SELECT MIN(station_id), MIN(name), AVG(lat), AVG(lon), COALESCE(grp, station_id) FROM stations " +
+                    "$whereClause GROUP BY COALESCE(grp, station_id)",
             null
         ).use { c ->
             while (c.moveToNext()) {
-                val props = JSONObject()
-                    .put("id", c.getString(0))
-                    .put("name", c.getString(1))
-                    .put("kind", if (c.getInt(4) == 1) "rail" else "bus")
-                    .put("rail_icon", railStationIcon(railOperators[c.getString(5)].orEmpty()))
-                val geometry = JSONObject()
-                    .put("type", "Point")
-                    .put("coordinates", JSONArray().put(c.getDouble(3)).put(c.getDouble(2)))
-                features.put(
-                    JSONObject()
-                        .put("type", "Feature")
-                        .put("properties", props)
-                        .put("geometry", geometry)
-                )
+                if (!first) sb.append(",")
+                first = false
+                val id = c.getString(0) ?: ""
+                val name = c.getString(1) ?: ""
+                val lat = c.getDouble(2)
+                val lon = c.getDouble(3)
+                val grp = c.getString(4) ?: id
+                val icon = railStationIcon(railOperators[grp].orEmpty())
+                sb.append("""{"type":"Feature","properties":{"id":""")
+                sb.append(JSONObject.quote(id))
+                sb.append(""","name":""")
+                sb.append(JSONObject.quote(name))
+                sb.append(""","kind":"rail","rail_icon":""")
+                sb.append(JSONObject.quote(icon))
+                sb.append("""},"geometry":{"type":"Point","coordinates":[""")
+                sb.append(lon).append(",").append(lat)
+                sb.append("""]}}""")
             }
         }
-        val result = JSONObject()
-            .put("type", "FeatureCollection")
-            .put("features", features)
-            .toString()
+        sb.append("]}")
+        val result = sb.toString()
         cachedStationsGeoJson = result
         return result
     }
@@ -146,27 +162,9 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
             db.rawQuery("SELECT DISTINCT COALESCE(s.grp,s.station_id),o.operator FROM stations s JOIN station_operators o ON o.station_id=s.station_id WHERE s.kind='rail'", null).use { c ->
                 while (c.moveToNext()) operators.getOrPut(c.getString(0)) { mutableSetOf() }.add(c.getString(1) ?: "")
             }
+            if (operators.isNotEmpty()) return operators
         }
-        try {
-            // 終点・降車専用駅も含める。便数で駅の代表座標が偏らないよう、座標集計とは分ける。
-            db.rawQuery(
-                """
-                SELECT DISTINCT COALESCE(s.grp, s.station_id), r.operator
-                FROM stations s
-                JOIN stop_times st ON st.station_id = s.station_id
-                JOIN trips t ON t.trip_no = st.trip
-                JOIN routes r ON r.route_id = t.route_id
-                WHERE s.kind = 'rail' AND r.route_type IN (0, 1, 2)
-                """.trimIndent(), null
-            ).use { c ->
-                while (c.moveToNext()) {
-                    operators.getOrPut(c.getString(0)) { mutableSetOf() }.add(c.getString(1) ?: "")
-                }
-            }
-        } catch (e: SQLiteException) {
-            // 会社情報が読めない旧DBでも、駅は共通の列車アイコンで表示する。
-            Log.w("TimetableDb", "Station operators unavailable; using generic rail icons", e)
-        }
+        // 数百万レコードの stop_times 全件スキャンはメモリ枯渇・クラッシュを招くため完全排除
         return operators
     }
 

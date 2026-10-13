@@ -154,8 +154,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val preferences = settings.value
     var showSettings by rememberSaveable { mutableStateOf(false) }
     // 時刻表DB。無ければ null(従来どおりサンプル表示)
-    var timetableState by remember { mutableStateOf(TimetableDb.open(context)) }
-    val timetable = timetableState
+    val timetable = remember { TimetableDb.open(context) }
     val stationsGeoJson by produceState(
         initialValue = if (timetable == null) demoStationsGeoJson() else """{"type":"FeatureCollection","features":[]}""",
         key1 = timetable
@@ -166,12 +165,15 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val searcher = remember(timetable) {
         timetable?.let { RouteSearcher(it.db) }?.takeIf { it.isSupported() }
     }
+    var dynamicSearcherCache by remember { mutableStateOf<RouteSearcher?>(null) }
     fun ensureSearcher(): RouteSearcher? {
         searcher?.let { return it }
+        dynamicSearcherCache?.let { return it }
         val t = TimetableDb.open(context)
         if (t != null) {
-            timetableState = t
-            return RouteSearcher(t.db).takeIf { it.isSupported() }
+            val s = RouteSearcher(t.db).takeIf { it.isSupported() }
+            dynamicSearcherCache = s
+            return s
         }
         return null
     }

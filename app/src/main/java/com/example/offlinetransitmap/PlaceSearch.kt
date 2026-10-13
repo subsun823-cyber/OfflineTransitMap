@@ -176,9 +176,11 @@ class PlaceSearcher(
                     }
 
                     val query = if (hasKind) {
-                        "SELECT station_id, name, COALESCE(kana, ''), lat, lon, kind FROM stations"
+                        "SELECT MIN(station_id), MIN(name), MIN(COALESCE(kana, '')), AVG(lat), AVG(lon), kind " +
+                                "FROM stations GROUP BY COALESCE(grp, station_id), kind"
                     } else {
-                        "SELECT station_id, name, COALESCE(kana, ''), lat, lon, 'rail' FROM stations"
+                        "SELECT MIN(station_id), MIN(name), MIN(COALESCE(kana, '')), AVG(lat), AVG(lon), 'rail' " +
+                                "FROM stations GROUP BY COALESCE(grp, station_id)"
                     }
 
                     db.rawQuery(query, null).use { c ->
