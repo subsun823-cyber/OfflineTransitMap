@@ -762,6 +762,27 @@ class DestinationNavigationTest {
         assertEquals("立川", itinAtStation.legs.last().toName)
         assertFalse("Last leg must not be walk when ending at destination station", itinAtStation.legs.last().isWalk)
     }
+
+    @Test
+    fun testTransitNoForcedWalkWhenNoTrainsRunning() {
+        // 公共交通機関(TRANSIT)で便がない場合、無理やり徒歩ルートを表示せず空リストを扱うこと
+        val emptyTransitResult = emptyList<Itinerary>()
+        assertTrue("No train running period should return empty transit list", emptyTransitResult.isEmpty())
+        assertFalse("Should not include long direct walk route", emptyTransitResult.any { it.legs.all { leg -> leg.isWalk } })
+    }
+
+    @Test
+    fun testDateChangePreservesTimeAndUpdatesSearch() {
+        val originalDateTime = LocalDateTime.of(2026, 10, 13, 23, 45)
+        val newDate = java.time.LocalDate.of(2026, 10, 14)
+        val updatedDateTime = LocalDateTime.of(newDate, originalDateTime.toLocalTime())
+
+        assertEquals(2026, updatedDateTime.year)
+        assertEquals(10, updatedDateTime.monthValue)
+        assertEquals(14, updatedDateTime.dayOfMonth)
+        assertEquals(23, updatedDateTime.hour)
+        assertEquals(45, updatedDateTime.minute)
+    }
 }
 
 

@@ -522,7 +522,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     candidateItineraries = candidates
                                     selectedItinerary = bestItin
                                 } else {
-                                    Toast.makeText(context, "公共交通機関による経路が見つかりませんでした", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "指定された日時に運行している便がありません（終電後など）。日時を変更してください", Toast.LENGTH_LONG).show()
                                 }
                             }
                         } catch (e: Throwable) {
@@ -1015,7 +1015,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         candidateItineraries = routes
                                         selectedItinerary = routes.first()
                                     } else {
-                                        Toast.makeText(context, "指定された区間の経路が見つかりませんでした", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "指定された日時に運行している便がありません（終電後など）。日時を変更してください", Toast.LENGTH_LONG).show()
                                     }
                                 }
                             }

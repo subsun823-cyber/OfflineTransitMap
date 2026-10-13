@@ -1111,7 +1111,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             }
 
             if (originSt == null || destSt == null) {
-                return listOf(directFallback(TravelMode.WALK))
+                return emptyList()
             }
 
             // 出発地/目的地が駅そのものかどうかの判定
@@ -1229,15 +1229,11 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 }
             }
 
-            // 公共交通機関ルートが1件も見つからなかった場合のみダイレクト徒歩をフォールバックとして返す
-            if (results.isEmpty()) {
-                results.add(directFallback(TravelMode.WALK))
-            }
-
+            // 公共交通機関ルートが1件も見つからなかった場合（終電後など）は空リストを返却し、無理やり徒歩ルートで上書きしない
             results
         } catch (e: Throwable) {
             android.util.Log.e("RouteSearch", "findRoutesBetweenCoordinates failed gracefully", e)
-            listOf(directFallback(TravelMode.WALK))
+            emptyList()
         }
     }
 

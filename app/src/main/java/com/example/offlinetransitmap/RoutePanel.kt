@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
@@ -42,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -56,8 +59,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import java.time.Duration
+import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneOffset
 
 private val WALK_GRAY = Color(0xFF9E9E9E)
 
@@ -175,6 +181,7 @@ fun RouteDetailPanel(
     val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.65f).dp
     val timeline = remember(itin) { buildTimeline(itin) }
     var showTimeDialog by remember { mutableStateOf(false) }
+    var showDateDialog by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -338,14 +345,47 @@ fun RouteDetailPanel(
                 }
             }
 
-            // 出発時刻 / 到着時刻 設定バー
+            // 出発日・時刻設定バー (日付と時刻をそれぞれ変更可能)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                    .padding(horizontal = 16.dp, vertical = 2.dp)
+                    .horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                // 1. 日付選択チップ
+                val curDate = targetTime.toLocalDate()
+                val dow = "月火水木金土日"[curDate.dayOfWeek.value - 1]
+                val dateLabel = "${curDate.monthValue}/${curDate.dayOfMonth}($dow)"
+                Surface(
+                    onClick = { showDateDialog = true },
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "📅", style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = dateLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "▼",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // 2. 時刻選択チップ
                 val typeLabel = if (timeType == TimeTargetType.DEPART) "出発" else "到着"
                 val timeLabel = "${hm(targetTime)} $typeLabel"
                 Surface(
@@ -368,14 +408,14 @@ fun RouteDetailPanel(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "変更 ▼",
+                            text = "▼",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
 
-                // 「現在時刻」リセットボタン
+                // 3. 「現在時刻」リセットボタン
                 OutlinedButton(
                     onClick = {
                         onTimeChanged?.invoke(LocalDateTime.now(), TimeTargetType.DEPART)
@@ -383,10 +423,42 @@ fun RouteDetailPanel(
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                     modifier = Modifier.height(32.dp)
                 ) {
-                    Text("現在時刻", style = MaterialTheme.typography.labelSmall)
+                    Text("現在", style = MaterialTheme.typography.labelSmall)
                 }
             }
 
+            // 日付選択ダイアログ
+            if (showDateDialog) {
+                val pickerState = rememberDatePickerState(
+                    initialSelectedDateMillis = targetTime.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+                )
+                DatePickerDialog(
+                    onDismissRequest = { showDateDialog = false },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                pickerState.selectedDateMillis?.let { ms ->
+                                    val d = Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC).toLocalDate()
+                                    val newDateTime = LocalDateTime.of(d, targetTime.toLocalTime())
+                                    onTimeChanged?.invoke(newDateTime, timeType)
+                                }
+                                showDateDialog = false
+                            }
+                        ) {
+                            Text("決定")
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDateDialog = false }) {
+                            Text("キャンセル")
+                        }
+                    }
+                ) {
+                    DatePicker(state = pickerState)
+                }
+            }
+
+            // 時刻選択ダイアログ
             if (showTimeDialog) {
                 RouteTimePickerDialog(
                     initialTime = targetTime,
