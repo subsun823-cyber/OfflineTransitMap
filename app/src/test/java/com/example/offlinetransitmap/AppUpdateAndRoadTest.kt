@@ -117,4 +117,49 @@ class AppUpdateAndRoadTest {
         assertEquals("#b9914e", shizuokaRoad)
         assertEquals("#263c30", yamanashiGreen)
     }
+
+    @Test
+    fun testRoadRouteResultProperties() {
+        val path = listOf(
+            Pair(35.6896, 139.7006),
+            Pair(35.6900, 139.7010),
+            Pair(35.6910, 139.7020)
+        )
+        val res = RoadRouteResult(
+            path = path,
+            distanceMeters = 350,
+            durationMinutes = 5,
+            isRoadBased = true
+        )
+        assertTrue("道路案内であること", res.isRoadBased)
+        assertEquals(3, res.path.size)
+        assertEquals(350, res.distanceMeters)
+        assertEquals(5, res.durationMinutes)
+
+        // フォールバック直線の場合
+        val directRes = RoadRouteResult(
+            path = listOf(Pair(35.6896, 139.7006), Pair(35.6910, 139.7020)),
+            distanceMeters = 200,
+            durationMinutes = 3,
+            isRoadBased = false
+        )
+        assertFalse("直接フォールバック時はisRoadBasedがfalseであること", directRes.isRoadBased)
+    }
+
+    @Test
+    fun testTravelDurationCalculations() {
+        // 徒歩 (約16分)
+        val walk1km = travelDurationMinutes(1000, TravelMode.WALK)
+        // 自転車 (250m/分: 約4分)
+        val bike1km = travelDurationMinutes(1000, TravelMode.BICYCLE)
+
+        assertEquals("1kmの徒歩は約16分", 16, walk1km)
+        assertEquals("1kmの自転車は約4分", 4, bike1km)
+        assertTrue("自転車の方が所要時間が短いこと", bike1km < walk1km)
+
+        // 公共交通機関モード（徒歩ベース）
+        val transit1km = travelDurationMinutes(1000, TravelMode.TRANSIT)
+        assertEquals("TRANSITの徒歩区間所要時間はWALKと同等", walk1km, transit1km)
+    }
 }
+
