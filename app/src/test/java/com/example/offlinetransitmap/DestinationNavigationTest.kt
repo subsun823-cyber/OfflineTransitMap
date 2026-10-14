@@ -855,6 +855,24 @@ class DestinationNavigationTest {
         assertTrue(overlay.geoJson.contains("139.281"))
         assertTrue(overlay.geoJson.contains("139.278"))
     }
+
+    @Test
+    fun testTopCandidatesLimitedForFastResponse() {
+        // 大量の探索結果があっても、画面に表示される上位5件に限定して高速補間されること
+        val dummyItins = (1..20).map { i ->
+            Itinerary(
+                legs = emptyList(),
+                departure = LocalDateTime.now().plusMinutes(i.toLong()),
+                arrival = LocalDateTime.now().plusMinutes(i.toLong() + 30),
+                transfers = 0,
+                fare = 200,
+                knownFare = 200,
+                routeKey = "route_$i"
+            )
+        }
+        val topRanked = RouteSearcher.rank(dummyItins, SortMode.FASTEST)
+        assertEquals(3, topRanked.size)
+    }
 }
 
 

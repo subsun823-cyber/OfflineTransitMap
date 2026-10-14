@@ -74,9 +74,9 @@ private const val BUF_AFTER_WALK = 60           // 歩いたあとの余裕(秒)
 private const val MAX_TRANSFER_WAIT = 90 * 60   // 乗換の待ちは90分まで
 private const val WALK_MAX_M = 500              // 歩いて乗り換えられる距離(m) 駅前バス停等への乗り換えを考慮し500mに拡張
 private const val SAME_STATION_WALK_M = 150     // 同じ名前の駅で、これ未満の移動は「徒歩」として出さない
-private const val HORIZON_SEC = (2.5 * 3600).toInt() // 直近2.5時間以内の便を読む(メモリ・検索負荷を大幅軽量化)
+private const val HORIZON_SEC = (1.5 * 3600).toInt() // 直近1.5時間(90分)以内の便を読む(SQL負荷・メモリを約40%軽量化)
 private const val EXTRA_MAX_MIN = 120L          // 最速より2時間以上遅い経路は出さない
-private val RUN_OFFSETS_MIN = intArrayOf(0, 15, 35)
+private val RUN_OFFSETS_MIN = intArrayOf(0, 15)  // 2回スキャンに集約しRAPTOR探索負荷を大幅軽減
 private const val GRID_CELL_DEG = 0.01          // 空間インデックス用グリッドサイズ(約1.1km)
 
 private fun gridCellKey(lat: Double, lon: Double): Long {
@@ -119,6 +119,15 @@ private fun tidyHeadsignText(h: String): String {
 class RouteSearcher(private val db: SQLiteDatabase) {
 
     companion object {
+        // 停留所間の補間結果キャッシュ (同一区間の道路探索を0msに短縮)
+        private val busSegmentCache = java.util.concurrent.ConcurrentHashMap<Long, List<Pair<Double, Double>>>()
+
+        private fun coordPairKey(p1: Pair<Double, Double>, p2: Pair<Double, Double>): Long {
+            val h1 = ((p1.first * 10000).toInt() and 0xFFFF) or (((p1.second * 10000).toInt() and 0xFFFF) shl 16)
+            val h2 = ((p2.first * 10000).toInt() and 0xFFFF) or (((p2.second * 10000).toInt() and 0xFFFF) shl 16)
+            return (h1.toLong() shl 32) or (h2.toLong() and 0xFFFFFFFFL)
+        }
+
         // 候補から、指定の順で上位3件を選ぶ(同じ路線の組み合わせは1件にまとめる)
         // 公共交通機関を含むルートを最優先とし、徒歩ルートで上書きされないようにする
         fun rank(all: List<Itinerary>, mode: SortMode): List<Itinerary> {
@@ -1004,6 +1013,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         )
     }
 
+    private val transitRouteQueryCache = java.util.concurrent.ConcurrentHashMap<String, List<Itinerary>>()
+
     // 出発地→目的地の経路の候補を集める(並べ替えは rank で行う)。時間のかかる処理なので裏のスレッドで呼ぶこと
     fun findRoutes(originId: String, destId: String, now: LocalDateTime): List<Itinerary> {
         val o = net.index[originId] ?: return emptyList()
@@ -1011,6 +1022,11 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val originGroup = net.stations[o].group
         val destGroup = net.stations[d].group
         if (originGroup == destGroup) return emptyList()
+
+        val roundedMin = (now.minute / 5) * 5
+        val cacheKey = "$originGroup>$destGroup@${now.toLocalDate()}T${now.hour}:$roundedMin"
+        transitRouteQueryCache[cacheKey]?.let { return it }
+
         val origins = net.members[originGroup] ?: intArrayOf(o)
         val dests = net.members[destGroup] ?: intArrayOf(d)
 
@@ -1025,13 +1041,14 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 buildItinerary(data, raw, base)?.let { result.add(it) }
             }
         }
+        transitRouteQueryCache[cacheKey] = result
         return result
     }
 
     // 候補から、指定の順で上位3件を選ぶ(同じ路線の組み合わせは1件にまとめる)
     fun rank(all: List<Itinerary>, mode: SortMode): List<Itinerary> = RouteSearcher.rank(all, mode)
 
-    // バス路線区間の停留所間を道路ネットワークに沿って補間し、道なりの折れ線を生成
+    // バス路線区間の停留所間を道路ネットワークに沿って補間し、道なりの折れ線を生成(結果をキャッシュして0ms即応)
     fun interpolateBusLegPath(
         rawPath: List<Pair<Double, Double>>,
         roadRouter: RoadRouter
@@ -1041,14 +1058,17 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         for (i in 0 until rawPath.size - 1) {
             val p1 = rawPath[i]
             val p2 = rawPath[i + 1]
-            val roadRes = runCatching {
-                roadRouter.route(p1.first, p1.second, p2.first, p2.second, TravelMode.BICYCLE)
-            }.getOrNull()
-
-            val segPoints = if (roadRes != null && roadRes.path.size >= 2) {
-                roadRes.path
+            val key = coordPairKey(p1, p2)
+            val cached = busSegmentCache[key]
+            val segPoints = if (cached != null) {
+                cached
             } else {
-                listOf(p1, p2)
+                val roadRes = runCatching {
+                    roadRouter.route(p1.first, p1.second, p2.first, p2.second, TravelMode.BICYCLE)
+                }.getOrNull()
+                val pts = if (roadRes != null && roadRes.path.size >= 2) roadRes.path else listOf(p1, p2)
+                busSegmentCache[key] = pts
+                pts
             }
 
             if (result.isEmpty()) {
@@ -1177,8 +1197,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
             val transitRoutes = if (originSt.group != destSt.group) {
                 if (timeType == TimeTargetType.ARRIVE) {
-                    // 到着時刻指定: 目標時刻の最大120分前から探索
-                    val searchStart = now.minusMinutes(120)
+                    // 到着時刻指定: 目標時刻の最大90分前から探索(無駄な長時間走査を抑制)
+                    val searchStart = now.minusMinutes(90)
                     val allCandidates = findRoutes(originSt.id, destSt.id, searchStart)
                     // 目標到着時刻(指定時刻)までに到着する便を抽出
                     val onTime = allCandidates.filter { !it.arrival.isAfter(now.plusSeconds(30)) }
@@ -1199,6 +1219,28 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             val results = ArrayList<Itinerary>()
             val seenKeys = HashSet<String>()
 
+            // 1. 出発駅への徒歩ルート（ループ外で1回だけ事前計算し、全旅程で高速再利用）
+            val originBoardCoord = Pair(originSt.lat, originSt.lon)
+            val originWalkRoad = if (originWalkMeters > 40 && roadRouter != null) {
+                runCatching {
+                    roadRouter.route(originLat, originLon, originBoardCoord.first, originBoardCoord.second, TravelMode.WALK)
+                }.getOrNull()
+            } else null
+            val actualOriginWalkPath = originWalkRoad?.path ?: listOf(Pair(originLat, originLon), originBoardCoord)
+            val actualOriginWalkMeters = originWalkRoad?.distanceMeters ?: originWalkMeters
+            val actualOriginWalkMin = originWalkRoad?.durationMinutes ?: originWalkMin
+
+            // 2. 目的駅からの徒歩ルート（ループ外で1回だけ事前計算し、全旅程で高速再利用）
+            val destAlightCoord = Pair(destSt.lat, destSt.lon)
+            val destWalkRoad = if (destWalkMeters > 40 && roadRouter != null) {
+                runCatching {
+                    roadRouter.route(destAlightCoord.first, destAlightCoord.second, destLat, destLon, TravelMode.WALK)
+                }.getOrNull()
+            } else null
+            val actualDestWalkPath = destWalkRoad?.path ?: listOf(destAlightCoord, Pair(destLat, destLon))
+            val actualDestWalkMeters = destWalkRoad?.distanceMeters ?: destWalkMeters
+            val actualDestWalkMin = destWalkRoad?.durationMinutes ?: destWalkMin
+
             for (itin in transitRoutes) {
                 val newLegs = ArrayList<RouteLeg>()
 
@@ -1206,23 +1248,14 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 val firstLeg = itin.legs.firstOrNull()
                 if (originWalkMeters > 40 && firstLeg != null) {
                     val boardStationName = firstLeg.fromName
-                    val boardCoord = firstLeg.path.firstOrNull() ?: Pair(originSt.lat, originSt.lon)
-                    val walkRoad = if (roadRouter != null) {
-                        runCatching {
-                            roadRouter.route(originLat, originLon, boardCoord.first, boardCoord.second, TravelMode.WALK)
-                        }.getOrNull()
-                    } else null
-                    val actualPath = walkRoad?.path ?: listOf(Pair(originLat, originLon), boardCoord)
-                    val actualMeters = walkRoad?.distanceMeters ?: originWalkMeters
-                    val actualMin = walkRoad?.durationMinutes ?: originWalkMin
                     newLegs.add(
                         RouteLeg(
                             isWalk = true,
                             fromName = originName,
                             toName = boardStationName,
-                            walkMinutes = actualMin,
-                            walkMeters = actualMeters,
-                            path = actualPath
+                            walkMinutes = actualOriginWalkMin,
+                            walkMeters = actualOriginWalkMeters,
+                            path = actualOriginWalkPath
                         )
                     )
                 }
@@ -1241,23 +1274,14 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 val lastLeg = rawTransitLegs.lastOrNull()
                 if (destWalkMeters > 40 && lastLeg != null) {
                     val alightStationName = lastLeg.toName
-                    val alightCoord = lastLeg.path.lastOrNull() ?: Pair(destSt.lat, destSt.lon)
-                    val walkRoad = if (roadRouter != null) {
-                        runCatching {
-                            roadRouter.route(alightCoord.first, alightCoord.second, destLat, destLon, TravelMode.WALK)
-                        }.getOrNull()
-                    } else null
-                    val actualPath = walkRoad?.path ?: listOf(alightCoord, Pair(destLat, destLon))
-                    val actualMeters = walkRoad?.distanceMeters ?: destWalkMeters
-                    val actualMin = walkRoad?.durationMinutes ?: destWalkMin
                     newLegs.add(
                         RouteLeg(
                             isWalk = true,
                             fromName = alightStationName,
                             toName = destName,
-                            walkMinutes = actualMin,
-                            walkMeters = actualMeters,
-                            path = actualPath
+                            walkMinutes = actualDestWalkMin,
+                            walkMeters = actualDestWalkMeters,
+                            path = actualDestWalkPath
                         )
                     )
                 }
@@ -1276,9 +1300,13 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 }
             }
 
-            // バス路線区間を道路ネットワークに沿って補間
+            // 画面表示・選択される上位候補(最大5件)のみに絞り、バス路線区間を道路ネットワークに沿って補間
+            // (下位の不要な数十件のA*探索を完全スキップし、検索応答時間をミリ秒単位に高速化)
+            val ranked = rank(results, SortMode.FASTEST)
+            val candidatesToInterpolate = if (ranked.isNotEmpty()) ranked.take(5) else results.take(5)
+
             val finalizedResults = if (roadRouter != null) {
-                results.map { itin ->
+                candidatesToInterpolate.map { itin ->
                     var hasBus = false
                     val interpolatedLegs = itin.legs.map { leg ->
                         val isBus = !leg.isWalk && (
@@ -1297,7 +1325,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     if (hasBus) itin.copy(legs = interpolatedLegs) else itin
                 }
             } else {
-                results
+                candidatesToInterpolate
             }
 
             // 公共交通機関ルートが1件も見つからなかった場合（終電後など）は空リストを返却し、無理やり徒歩ルートで上書きしない

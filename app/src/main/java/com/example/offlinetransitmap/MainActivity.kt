@@ -412,8 +412,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 if (curLoc == null) {
                     Toast.makeText(context, "現在地を取得できませんでした。GPSが有効か確認してください", Toast.LENGTH_LONG).show()
                 } else {
+                    transitSearchJob?.cancel()
                     isSearchingForDestination = true
-                    scope.launch {
+                    transitSearchJob = scope.launch {
                         try {
                             val resolvedName = if (destinationTitle != "目的地を設定しました" && destinationTitle != "目的地") {
                                 destinationTitle
@@ -1010,8 +1011,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                 val recalculateRoutes: (RouteWaypoint, List<RouteWaypoint>, RouteWaypoint, LocalDateTime, TimeTargetType) -> Unit = { o, v, d, tTime, tType ->
                     val activeSearcher = ensureSearcher()
                     if (activeSearcher != null) {
+                        transitSearchJob?.cancel()
                         isSearchingForDestination = true
-                        scope.launch(Dispatchers.Default) {
+                        transitSearchJob = scope.launch(Dispatchers.Default) {
                             val routes = activeSearcher.findRoutesWithWaypoints(
                                 waypoints = listOf(o) + v + listOf(d),
                                 now = tTime,
@@ -1136,8 +1138,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
 
                         val runRecalc: (RouteWaypoint, List<RouteWaypoint>, RouteWaypoint) -> Unit = { o, v, d ->
                             if (activeSearcher != null) {
+                                transitSearchJob?.cancel()
                                 isSearchingForDestination = true
-                                scope.launch(Dispatchers.Default) {
+                                transitSearchJob = scope.launch(Dispatchers.Default) {
                                     val routes = activeSearcher.findRoutesWithWaypoints(
                                         waypoints = listOf(o) + v + listOf(d),
                                         now = routeTargetTime,
@@ -1343,8 +1346,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                         if (orig != null && dest != null) {
                             val activeSearcher = ensureSearcher()
                             if (activeSearcher != null) {
+                                transitSearchJob?.cancel()
                                 isSearchingForDestination = true
-                                scope.launch(Dispatchers.Default) {
+                                transitSearchJob = scope.launch(Dispatchers.Default) {
                                     val routes = activeSearcher.findRoutesWithWaypoints(
                                         waypoints = listOf(orig) + routeViaWaypoints + listOf(dest),
                                         now = nextMorning,
