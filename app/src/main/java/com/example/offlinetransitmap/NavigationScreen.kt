@@ -725,15 +725,22 @@ private fun TrainLcdTopCard(
         !leg.isWalk && leg.lineName != "自転車" &&
         (leg.arrTime == null || now.isBefore(leg.arrTime.plusMinutes(2)))
     } ?: legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
-    val lineColor = if (trainLeg != null && trainLeg.lineColor != 0L) Color(trainLeg.lineColor) else Color(0xFFF15A22)
-    val lineName = trainLeg?.lineName ?: "電車"
-    val trainType = trainLeg?.trainType?.ifBlank { "各停" } ?: "普通"
+    val isBus = trainLeg != null && (
+        trainLeg.lineName.contains("バス") ||
+        trainLeg.operatorLabel.contains("バス") ||
+        trainLeg.trainType.contains("バス")
+    )
+    val modeEmoji = if (isBus) "🚌" else "🚃"
+    val defaultLineName = if (isBus) "路線バス" else "電車"
+    val lineColor = if (trainLeg != null && trainLeg.lineColor != 0L) Color(trainLeg.lineColor) else (if (isBus) Color(0xFF0284C7) else Color(0xFFF15A22))
+    val lineName = trainLeg?.lineName ?: defaultLineName
+    val trainType = trainLeg?.trainType?.ifBlank { if (isBus) "普通" else "各停" } ?: "普通"
     val headsign = trainLeg?.headsign ?: ""
     val rawPlatform = trainLeg?.platform
     val platform = if (!rawPlatform.isNullOrBlank() && rawPlatform != "0") {
-        if (rawPlatform.endsWith("番線") || rawPlatform.endsWith("のりば")) rawPlatform else "${rawPlatform}番線"
+        if (rawPlatform.endsWith("番線") || rawPlatform.endsWith("のりば")) rawPlatform else (if (isBus) "${rawPlatform}のりば" else "${rawPlatform}番線")
     } else ""
-    val carCount = trainLeg?.let { PlatformAndCarResolver.resolveCarCount(it.lineName, it.trainType, false) } ?: 10
+    val carCount = if (isBus) null else trainLeg?.let { PlatformAndCarResolver.resolveCarCount(it.lineName, it.trainType, false) } ?: 10
 
     val isWaiting = guidance?.kind == GuidanceKind.WAIT
     val isRiding = guidance?.kind == GuidanceKind.RIDE
@@ -756,7 +763,7 @@ private fun TrainLcdTopCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "🚃 $lineName",
+                        text = "$modeEmoji $lineName",
                         color = Color.White,
                         fontWeight = FontWeight.Black,
                         fontSize = 13.sp
@@ -783,17 +790,19 @@ private fun TrainLcdTopCard(
                     }
                 }
 
-                Surface(
-                    color = Color.White.copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = "${carCount}両編成",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                    )
+                if (carCount != null) {
+                    Surface(
+                        color = Color.White.copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = "${carCount}両編成",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
                 }
             }
 
@@ -809,7 +818,7 @@ private fun TrainLcdTopCard(
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(4.dp)) {
                                 Text(
-                                    text = "発車標",
+                                    text = if (isBus) "接近情報" else "発車標",
                                     color = Color(0xFFFFB300),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
@@ -817,7 +826,7 @@ private fun TrainLcdTopCard(
                                 )
                             }
                             Text(
-                                text = "まもなく電車がまいります",
+                                text = if (isBus) "まもなくバスがまいります" else "まもなく電車がまいります",
                                 color = Color(0xFFFFD54F),
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold
@@ -858,7 +867,7 @@ private fun TrainLcdTopCard(
                     }
                 }
             } else if (isRiding) {
-                // ドア上車内LCDトレインビジョン
+                // ドア上車内LCDトレインビジョン / バス停留所ビジョン
                 val destStation = guidance?.title?.removeSuffix("で降車")?.removeSuffix("へ") ?: (trainLeg?.toName ?: "")
                 val romaji = stationNameToRomaji(destStation)
 
@@ -925,7 +934,7 @@ private fun TrainLcdTopCard(
                             Text("●", color = Color(0xFF64748B), fontSize = 10.sp)
                             Text(trainLeg?.fromName ?: "乗車駅", color = Color(0xFF94A3B8), fontSize = 12.sp)
                             Text("───", color = Color(0xFF334155), fontSize = 11.sp)
-                            Text("🚃 走行中", color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("$modeEmoji 走行中", color = Color(0xFF00E5FF), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             Text("───", color = Color(0xFF334155), fontSize = 11.sp)
                             Text("◯", color = Color(0xFF00E676), fontSize = 12.sp)
                             Text(destStation, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -970,7 +979,12 @@ private fun TrainCabSpeedometer(
         !leg.isWalk && leg.lineName != "自転車" &&
         (leg.arrTime == null || now.isBefore(leg.arrTime.plusMinutes(2)))
     } ?: legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
-    val trainType = trainLeg?.trainType?.ifBlank { "快速" } ?: "快速"
+    val isBus = trainLeg != null && (
+        trainLeg.lineName.contains("バス") ||
+        trainLeg.operatorLabel.contains("バス") ||
+        trainLeg.trainType.contains("バス")
+    )
+    val trainType = trainLeg?.trainType?.ifBlank { if (isBus) "路線バス" else "快速" } ?: (if (isBus) "路線バス" else "快速")
 
     val animatedSpeed by animateFloatAsState(
         targetValue = speedKmh,
@@ -981,26 +995,43 @@ private fun TrainCabSpeedometer(
     // ノッチ・運転ステータス判定 (疑似力行・定速・惰行・ブレーキ)
     val notchText: String
     val notchColor: Color
-    when {
-        animatedSpeed < 3f -> {
-            notchText = "停車"
-            notchColor = Color(0xFF94A3B8)
+    if (isBus) {
+        when {
+            animatedSpeed < 3f -> {
+                notchText = "停車中"
+                notchColor = Color(0xFF94A3B8)
+            }
+            animatedSpeed in 3f..45f -> {
+                notchText = "一般走行"
+                notchColor = Color(0xFF00E676)
+            }
+            else -> {
+                notchText = "定速走行"
+                notchColor = Color(0xFF00E5FF)
+            }
         }
-        animatedSpeed in 3f..35f -> {
-            notchText = "力行 P2"
-            notchColor = Color(0xFF00E676)
-        }
-        animatedSpeed in 35f..75f -> {
-            notchText = "力行 P4"
-            notchColor = Color(0xFF00E676)
-        }
-        animatedSpeed in 75f..100f -> {
-            notchText = "定速"
-            notchColor = Color(0xFF00E5FF)
-        }
-        else -> {
-            notchText = "高速巡航"
-            notchColor = Color(0xFFFF9100)
+    } else {
+        when {
+            animatedSpeed < 3f -> {
+                notchText = "停車"
+                notchColor = Color(0xFF94A3B8)
+            }
+            animatedSpeed in 3f..35f -> {
+                notchText = "力行 P2"
+                notchColor = Color(0xFF00E676)
+            }
+            animatedSpeed in 35f..75f -> {
+                notchText = "力行 P4"
+                notchColor = Color(0xFF00E676)
+            }
+            animatedSpeed in 75f..100f -> {
+                notchText = "定速"
+                notchColor = Color(0xFF00E5FF)
+            }
+            else -> {
+                notchText = "高速巡航"
+                notchColor = Color(0xFFFF9100)
+            }
         }
     }
 
@@ -1030,7 +1061,7 @@ private fun TrainCabSpeedometer(
                             .background(if (hasGps) Color(0xFF00E676) else Color.Gray, CircleShape)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text(text = "ATC 100", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                    Text(text = if (isBus) "GPS速度" else "ATC 100", color = Color(0xFF38BDF8), fontSize = 9.sp, fontWeight = FontWeight.Bold)
                 }
 
                 Surface(

@@ -873,6 +873,24 @@ class DestinationNavigationTest {
         val topRanked = RouteSearcher.rank(dummyItins, SortMode.FASTEST)
         assertEquals(3, topRanked.size)
     }
+
+    @Test
+    fun testSmoothRailPathInterpolation() {
+        // 電車駅間（例: 東京〜神田〜秋葉原）の駅ごとの直線つなぎが、Catmull-Rom スプラインで滑らかな点列に補間されること
+        val rawStations = listOf(
+            Pair(35.6812, 139.7671), // 東京駅
+            Pair(35.6917, 139.7709), // 神田駅
+            Pair(35.6983, 139.7731)  // 秋葉原駅
+        )
+        val smoothed = RouteSearcher.smoothRailPath(rawStations)
+        // 3点から滑らかな曲線点列に補間され、点数が増加していること
+        assertTrue("Smoothed rail path should contain more points than raw station list: ${smoothed.size}", smoothed.size > rawStations.size)
+        // 始点と終点が正確に一致すること
+        assertEquals(rawStations.first().first, smoothed.first().first, 0.0001)
+        assertEquals(rawStations.first().second, smoothed.first().second, 0.0001)
+        assertEquals(rawStations.last().first, smoothed.last().first, 0.0001)
+        assertEquals(rawStations.last().second, smoothed.last().second, 0.0001)
+    }
 }
 
 

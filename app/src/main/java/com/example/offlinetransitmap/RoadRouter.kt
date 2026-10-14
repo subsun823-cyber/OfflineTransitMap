@@ -330,8 +330,13 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             val startNodeId = startSnap.first
             val goalNodeId = goalSnap.first
 
-            // 探索領域のノードとエッジを読み込み
-            val margin = if (directMeters > 20000) 0.035 else 0.05
+            // 探索領域のノードとエッジを読み込み(近距離ではマージンを絞りメモリ消費とロード負荷を90%以上削減)
+            val margin = when {
+                directMeters <= 1200 -> 0.006 // バス停間など近距離(約650m四方)
+                directMeters <= 5000 -> 0.015 // 約1.6km四方
+                directMeters <= 20000 -> 0.035
+                else -> 0.05
+            }
             val minLat = minOf(originLat, destLat) - margin
             val maxLat = maxOf(originLat, destLat) + margin
             val minLon = minOf(originLon, destLon) - margin
@@ -349,12 +354,13 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                 }
             }
 
-            // スタート地点・ゴール地点の近傍3x3グリッドを確実に包含（エッジ未展開の断絶を完全防止）
+            // スタート地点・ゴール地点の近傍グリッドを包含
             fun addNeighborhood(lat: Double, lon: Double) {
                 val cy = (lat / GRID_CELL_DEG).toInt()
                 val cx = (lon / GRID_CELL_DEG).toInt()
-                for (dy in -1..1) {
-                    for (dx in -1..1) {
+                val r = if (directMeters <= 1200) 0 else 1
+                for (dy in -r..r) {
+                    for (dx in -r..r) {
                         gridKeySet.add((((cy + dy) and 0xFFFF) shl 16) or (((cx + dx) and 0xFFFF)))
                     }
                 }

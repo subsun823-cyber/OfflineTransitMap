@@ -73,10 +73,10 @@ private const val BUF_AFTER_BUS = 180           // 降りてから次に乗る�
 private const val BUF_AFTER_WALK = 60           // 歩いたあとの余裕(秒)
 private const val MAX_TRANSFER_WAIT = 90 * 60   // 乗換の待ちは90分まで
 private const val WALK_MAX_M = 500              // 歩いて乗り換えられる距離(m) 駅前バス停等への乗り換えを考慮し500mに拡張
-private const val SAME_STATION_WALK_M = 150     // 同じ名前の駅で、これ未満の移動は「徒歩」として出さない
-private const val HORIZON_SEC = (1.5 * 3600).toInt() // 直近1.5時間(90分)以内の便を読む(SQL負荷・メモリを約40%軽量化)
-private const val EXTRA_MAX_MIN = 120L          // 最速より2時間以上遅い経路は出さない
-private val RUN_OFFSETS_MIN = intArrayOf(0, 15)  // 2回スキャンに集約しRAPTOR探索負荷を大幅軽減
+private const val SAME_STATION_WALK_M = 150     // 同一駅扱いとする徒歩距離の閾値(m)
+private const val HORIZON_SEC = (2.5 * 3600).toInt() // 直近2.5時間以内の便を読む(長距離・乗換待ち路線も確実に網羅)
+private const val EXTRA_MAX_MIN = 150L          // 最速より2.5時間以上遅い経路は出さない
+private val RUN_OFFSETS_MIN = intArrayOf(0, 15, 30) // 0分、15分、30分後スキャンで乗換接続漏れを防止
 private const val GRID_CELL_DEG = 0.01          // 空間インデックス用グリッドサイズ(約1.1km)
 
 private fun gridCellKey(lat: Double, lon: Double): Long {
@@ -119,13 +119,59 @@ private fun tidyHeadsignText(h: String): String {
 class RouteSearcher(private val db: SQLiteDatabase) {
 
     companion object {
-        // 停留所間の補間結果キャッシュ (同一区間の道路探索を0msに短縮)
-        private val busSegmentCache = java.util.concurrent.ConcurrentHashMap<Long, List<Pair<Double, Double>>>()
+        // 停留所間の補間結果キャッシュ (上限300件のLRUキャッシュでメモリ肥大化を完全防止)
+        private val busSegmentCache = java.util.Collections.synchronizedMap(
+            object : java.util.LinkedHashMap<Long, List<Pair<Double, Double>>>(64, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<Pair<Double, Double>>>?): Boolean {
+                    return size > 300
+                }
+            }
+        )
 
         private fun coordPairKey(p1: Pair<Double, Double>, p2: Pair<Double, Double>): Long {
             val h1 = ((p1.first * 10000).toInt() and 0xFFFF) or (((p1.second * 10000).toInt() and 0xFFFF) shl 16)
             val h2 = ((p2.first * 10000).toInt() and 0xFFFF) or (((p2.second * 10000).toInt() and 0xFFFF) shl 16)
             return (h1.toLong() shl 32) or (h2.toLong() and 0xFFFFFFFFL)
+        }
+
+        // 鉄道区間の駅間を Catmull-Rom スプライン曲線で補間し、滑らかな線路パスを生成(直線結びを解消)
+        fun smoothRailPath(rawStations: List<Pair<Double, Double>>): List<Pair<Double, Double>> {
+            if (rawStations.size < 2) return rawStations
+            if (rawStations.size == 2) {
+                val dist = calcDistanceMeters(rawStations[0].first, rawStations[0].second, rawStations[1].first, rawStations[1].second)
+                if (dist <= 300) return rawStations
+                val p0 = rawStations[0]
+                val p1 = rawStations[1]
+                val steps = (dist / 350).coerceIn(2, 6)
+                val result = ArrayList<Pair<Double, Double>>(steps + 1)
+                for (i in 0..steps) {
+                    val t = i.toDouble() / steps
+                    result.add(Pair(p0.first + t * (p1.first - p0.first), p0.second + t * (p1.second - p0.second)))
+                }
+                return result
+            }
+
+            val pts = ArrayList<Pair<Double, Double>>()
+            val n = rawStations.size
+            for (i in 0 until n - 1) {
+                val p0 = if (i > 0) rawStations[i - 1] else Pair(2 * rawStations[0].first - rawStations[1].first, 2 * rawStations[0].second - rawStations[1].second)
+                val p1 = rawStations[i]
+                val p2 = rawStations[i + 1]
+                val p3 = if (i + 2 < n) rawStations[i + 2] else Pair(2 * rawStations[n - 1].first - rawStations[n - 2].first, 2 * rawStations[n - 1].second - rawStations[n - 2].second)
+
+                val dist = calcDistanceMeters(p1.first, p1.second, p2.first, p2.second)
+                val steps = (dist / 250).coerceIn(2, 8)
+                for (step in 0 until steps) {
+                    val t = step.toDouble() / steps
+                    val t2 = t * t
+                    val t3 = t2 * t
+                    val lat = 0.5 * ((2 * p1.first) + (-p0.first + p2.first) * t + (2 * p0.first - 5 * p1.first + 4 * p2.first - p3.first) * t2 + (-p0.first + 3 * p1.first - 3 * p2.first + p3.first) * t3)
+                    val lon = 0.5 * ((2 * p1.second) + (-p0.second + p2.second) * t + (2 * p0.second - 5 * p1.second + 4 * p2.second - p3.second) * t2 + (-p0.second + 3 * p1.second - 3 * p2.second + p3.second) * t3)
+                    pts.add(Pair(lat, lon))
+                }
+            }
+            pts.add(rawStations.last())
+            return pts
         }
 
         // 候補から、指定の順で上位3件を選ぶ(同じ路線の組み合わせは1件にまとめる)
@@ -168,7 +214,6 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val tripNo: LongArray,
         val rowStation: IntArray,
         val rowSeq: IntArray,
-        val rowStop: Array<String>,
         val rowArr: IntArray,
         val rowDep: IntArray,
         val rowBoard: BooleanArray,
@@ -532,8 +577,22 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val data: SearchData
     )
     private var cachedSearchData: CachedSearchEntry? = null
-    private val legInfoCache = HashMap<Long, LegInfo?>()
-    private val fareCache = HashMap<String, Int?>()
+    private val legInfoCache = object : java.util.LinkedHashMap<Long, LegInfo?>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, LegInfo?>?): Boolean = size > 200
+    }
+    private val fareCache = object : java.util.LinkedHashMap<String, Int?>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int?>?): Boolean = size > 200
+    }
+
+    private fun stopIdOf(trip: Long, seq: Int): String? {
+        return try {
+            db.rawQuery("SELECT stop_id FROM stop_times WHERE trip = $trip AND seq = $seq", null).use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     // いまから HORIZON_SEC 先までの停車時刻を読み込む(通常時間帯は今日のみ高速スキャン)
     private fun loadData(now: LocalDateTime): SearchData {
@@ -554,7 +613,6 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         val tripNo = ArrayList<Long>()
         val rs = ArrayList<Int>()
         val rseq = ArrayList<Int>()
-        val rstop = ArrayList<String>()
         val rarr = ArrayList<Int>()
         val rdep = ArrayList<Int>()
         val rb = ArrayList<Boolean>()
@@ -574,7 +632,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             val services = activeServices(today.plusDays(off.toLong()))
             if (services.isEmpty()) continue
             val placeholders = services.joinToString(",") { "?" }
-            val sql = "SELECT st.trip, st.seq, st.station_id, st.stop_id, st.arr_sec, st.dep_sec, " +
+            val sql = "SELECT st.trip, st.seq, st.station_id, st.arr_sec, st.dep_sec, " +
                     "st.can_board, st.can_alight FROM stop_times st " +
                     "JOIN trips t ON t.trip_no = st.trip " +
                     "WHERE st.dep_sec BETWEEN $a AND $b AND t.service_id IN ($placeholders) " +
@@ -589,15 +647,14 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                         last = trip
                     }
                     val si = net.index[c.getString(2)] ?: continue
-                    val arrSec = c.getInt(4)
-                    val depSec = c.getInt(5)
+                    val arrSec = c.getInt(3)
+                    val depSec = c.getInt(4)
                     rs.add(si)
                     rseq.add(c.getInt(1))
-                    rstop.add(c.getString(3))
                     rarr.add(arrSec + off * 86400)
                     rdep.add(maxOf(depSec, arrSec) + off * 86400)
-                    rb.add(c.getInt(6) == 1)
-                    ra.add(c.getInt(7) == 1)
+                    rb.add(c.getInt(5) == 1)
+                    ra.add(c.getInt(6) == 1)
                 }
             }
         }
@@ -619,7 +676,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
         val data = SearchData(
             tripFirst.toIntArray(), tripNo.toLongArray(), rs.toIntArray(), rseq.toIntArray(),
-            rstop.toTypedArray(), rarr.toIntArray(), rdep.toIntArray(),
+            rarr.toIntArray(), rdep.toIntArray(),
             rb.toBooleanArray(), ra.toBooleanArray(), stationTrips
         )
         cachedSearchData = CachedSearchEntry(now, lo, hi, data)
@@ -906,8 +963,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 val fromSt = data.rowStation[leg.b]
                 val toSt = data.rowStation[leg.c]
                 val legStations = (leg.b..leg.c).map { r -> net.stations[data.rowStation[r]] }
-
-                var fare = fareOf(info.routeId, data.rowStop[leg.b], data.rowStop[leg.c])
+                val fromStop = stopIdOf(data.tripNo[leg.a], data.rowSeq[leg.b])
+                val toStop = stopIdOf(data.tripNo[leg.a], data.rowSeq[leg.c])
+                var fare = if (fromStop != null && toStop != null) fareOf(info.routeId, fromStop, toStop) else null
                 val isJr = JrFareCalculator.isJrRoute(info.routeId, info.operatorLabel)
                 var jrKm = 0
                 var isYm = false
@@ -1013,7 +1071,11 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         )
     }
 
-    private val transitRouteQueryCache = java.util.concurrent.ConcurrentHashMap<String, List<Itinerary>>()
+    private val transitRouteQueryCache = java.util.Collections.synchronizedMap(
+        object : java.util.LinkedHashMap<String, List<Itinerary>>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Itinerary>>?): Boolean = size > 20
+        }
+    )
 
     // 出発地→目的地の経路の候補を集める(並べ替えは rank で行う)。時間のかかる処理なので裏のスレッドで呼ぶこと
     fun findRoutes(originId: String, destId: String, now: LocalDateTime): List<Itinerary> {
@@ -1047,6 +1109,10 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
     // 候補から、指定の順で上位3件を選ぶ(同じ路線の組み合わせは1件にまとめる)
     fun rank(all: List<Itinerary>, mode: SortMode): List<Itinerary> = RouteSearcher.rank(all, mode)
+
+    // 鉄道区間の駅間を Catmull-Rom スプライン曲線で補間し、滑らかな線路パスを生成(直線結びを解消)
+    fun smoothRailPath(rawStations: List<Pair<Double, Double>>): List<Pair<Double, Double>> =
+        RouteSearcher.smoothRailPath(rawStations)
 
     // バス路線区間の停留所間を道路ネットワークに沿って補間し、道なりの折れ線を生成(結果をキャッシュして0ms即応)
     fun interpolateBusLegPath(
@@ -1197,8 +1263,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
 
             val transitRoutes = if (originSt.group != destSt.group) {
                 if (timeType == TimeTargetType.ARRIVE) {
-                    // 到着時刻指定: 目標時刻の最大90分前から探索(無駄な長時間走査を抑制)
-                    val searchStart = now.minusMinutes(90)
+                    // 到着時刻指定: 目標時刻の最大120分前から探索(長距離移動も確実に網羅)
+                    val searchStart = now.minusMinutes(120)
                     val allCandidates = findRoutes(originSt.id, destSt.id, searchStart)
                     // 目標到着時刻(指定時刻)までに到着する便を抽出
                     val onTime = allCandidates.filter { !it.arrival.isAfter(now.plusSeconds(30)) }
@@ -1300,32 +1366,33 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 }
             }
 
-            // 画面表示・選択される上位候補(最大5件)のみに絞り、バス路線区間を道路ネットワークに沿って補間
-            // (下位の不要な数十件のA*探索を完全スキップし、検索応答時間をミリ秒単位に高速化)
+            // 画面表示・選択される上位候補(最大5件)のみに絞り、
+            // バス区間は道路ネットワーク(RoadRouter)、電車区間はスプライン曲線(smoothRailPath)で補間
+            // (駅ごとの直線つなぎを完全解消し、下位の不要な探索をスキップして高速応答)
             val ranked = rank(results, SortMode.FASTEST)
             val candidatesToInterpolate = if (ranked.isNotEmpty()) ranked.take(5) else results.take(5)
 
-            val finalizedResults = if (roadRouter != null) {
-                candidatesToInterpolate.map { itin ->
-                    var hasBus = false
-                    val interpolatedLegs = itin.legs.map { leg ->
-                        val isBus = !leg.isWalk && (
-                            leg.lineName.contains("バス") ||
-                            leg.operatorLabel.contains("バス") ||
-                            leg.trainType.contains("バス")
-                        )
-                        if (isBus && leg.path.size >= 2) {
-                            hasBus = true
+            val finalizedResults = candidatesToInterpolate.map { itin ->
+                val interpolatedLegs = itin.legs.map { leg ->
+                    if (leg.isWalk || leg.path.size < 2) {
+                        leg
+                    } else {
+                        val isBus = leg.lineName.contains("バス") ||
+                                leg.operatorLabel.contains("バス") ||
+                                leg.trainType.contains("バス")
+                        if (isBus && roadRouter != null) {
                             val newPath = interpolateBusLegPath(leg.path, roadRouter)
                             leg.copy(path = newPath)
+                        } else if (!isBus) {
+                            // 電車区間: Catmull-Rom スプライン補間で駅間を滑らかな線路曲線に補間
+                            val smoothPath = smoothRailPath(leg.path)
+                            leg.copy(path = smoothPath)
                         } else {
                             leg
                         }
                     }
-                    if (hasBus) itin.copy(legs = interpolatedLegs) else itin
                 }
-            } else {
-                candidatesToInterpolate
+                itin.copy(legs = interpolatedLegs)
             }
 
             // 公共交通機関ルートが1件も見つからなかった場合（終電後など）は空リストを返却し、無理やり徒歩ルートで上書きしない
