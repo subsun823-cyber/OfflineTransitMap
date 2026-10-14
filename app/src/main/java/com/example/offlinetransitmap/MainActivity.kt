@@ -260,7 +260,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         }
     }
     val isDirectRoadNav = navItin?.legs?.all { it.isWalk } == true
-    val navLine = if (navMode && !isDirectRoadNav) navLineGeoJson(NavigationState.location, NavigationState.guidance) else null
+    val navLine: String? = null
     var mapBearing by remember { mutableDoubleStateOf(0.0) }
     var followLost by remember { mutableStateOf(false) }
 
@@ -508,7 +508,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                             val computed = activeSearcher.findRoutesWithWaypoints(
                                                 waypoints = listOf(originWp, destWp),
                                                 now = searchTime,
-                                                timeType = TimeTargetType.DEPART
+                                                timeType = TimeTargetType.DEPART,
+                                                roadRouter = roadRouter
                                             )
                                             cachedTransitRoutes = computed
                                             computed
@@ -1014,7 +1015,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                             val routes = activeSearcher.findRoutesWithWaypoints(
                                 waypoints = listOf(o) + v + listOf(d),
                                 now = tTime,
-                                timeType = tType
+                                timeType = tType,
+                                roadRouter = roadRouter
                             )
                             withContext(Dispatchers.Main) {
                                 isSearchingForDestination = false
@@ -1139,7 +1141,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     val routes = activeSearcher.findRoutesWithWaypoints(
                                         waypoints = listOf(o) + v + listOf(d),
                                         now = routeTargetTime,
-                                        timeType = routeTimeType
+                                        timeType = routeTimeType,
+                                        roadRouter = roadRouter
                                     )
                                     withContext(Dispatchers.Main) {
                                         isSearchingForDestination = false
@@ -1345,7 +1348,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                     val routes = activeSearcher.findRoutesWithWaypoints(
                                         waypoints = listOf(orig) + routeViaWaypoints + listOf(dest),
                                         now = nextMorning,
-                                        timeType = TimeTargetType.DEPART
+                                        timeType = TimeTargetType.DEPART,
+                                        roadRouter = roadRouter
                                     )
                                     withContext(Dispatchers.Main) {
                                         isSearchingForDestination = false

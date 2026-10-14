@@ -117,17 +117,17 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
         }
     }
 
-    // 地図に出す駅の点(GeoJSON)。鉄道駅(rail)に限定して軽量化し、数万件のバス停によるGPU/メモリパンクを防止
+    // 地図に出す駅・バス停の点(GeoJSON)。同じグループ(同一駅・同一停留所)を1点に集約
     fun stationsGeoJson(): String {
         cachedStationsGeoJson?.let { return it }
-        val whereClause = if (hasStationKind) "WHERE kind = 'rail'" else ""
+        val kindExpr = if (hasStationKind) "MAX(CASE WHEN kind = 'rail' THEN 1 ELSE 0 END)" else "1"
         val railOperators = railOperatorsByGroup()
-        val sb = StringBuilder(65536)
+        val sb = StringBuilder(262144)
         sb.append("""{"type":"FeatureCollection","features":[""")
         var first = true
         db.rawQuery(
-            "SELECT MIN(station_id), MIN(name), AVG(lat), AVG(lon), COALESCE(grp, station_id) FROM stations " +
-                    "$whereClause GROUP BY COALESCE(grp, station_id)",
+            "SELECT MIN(station_id), MIN(name), AVG(lat), AVG(lon), COALESCE(grp, station_id), $kindExpr FROM stations " +
+                    "GROUP BY COALESCE(grp, station_id)",
             null
         ).use { c ->
             while (c.moveToNext()) {
@@ -138,12 +138,16 @@ class TimetableDb private constructor(val db: SQLiteDatabase) {
                 val lat = c.getDouble(2)
                 val lon = c.getDouble(3)
                 val grp = c.getString(4) ?: id
-                val icon = railStationIcon(railOperators[grp].orEmpty())
+                val isRail = c.getInt(5) == 1
+                val kind = if (isRail) "rail" else "bus"
+                val icon = if (isRail) railStationIcon(railOperators[grp].orEmpty()) else ""
                 sb.append("""{"type":"Feature","properties":{"id":""")
                 sb.append(JSONObject.quote(id))
                 sb.append(""","name":""")
                 sb.append(JSONObject.quote(name))
-                sb.append(""","kind":"rail","rail_icon":""")
+                sb.append(""","kind":""")
+                sb.append(JSONObject.quote(kind))
+                sb.append(""","rail_icon":""")
                 sb.append(JSONObject.quote(icon))
                 sb.append("""},"geometry":{"type":"Point","coordinates":[""")
                 sb.append(lon).append(",").append(lat)

@@ -1185,7 +1185,8 @@ class NavigationService : Service() {
                         isBike = isBike,
                         scheduledArrival = dep
                     )
-                    NavigationState.remainingPath = roadInfo.remainingPath
+                    val forwardTransitPaths = legs.subList(busIdx[cur], legs.size).flatMap { it.path }
+                    NavigationState.remainingPath = roadInfo.remainingPath + forwardTransitPaths
 
                     // 駅へのアプローチ中に離脱した場合のリルート
                     if (roadInfo.isOffCourse) {
@@ -1233,6 +1234,7 @@ class NavigationService : Service() {
 
                 // 道路パス未取得時などのフォールバック
                 val modeVerb = if (isBike) "自転車で向かう" else "徒歩で向かう"
+                NavigationState.remainingPath = legs.subList(if (walkLegIndex >= 0) walkLegIndex else busIdx[cur], legs.size).flatMap { it.path }
                 NavigationState.guidance = Guidance(
                     kind = modeKind,
                     title = "${leg.fromName}へ",
@@ -1248,6 +1250,7 @@ class NavigationService : Service() {
                 )
             } else {
                 // 駅ホームまたは乗り場に到着（乗車待ち）
+                NavigationState.remainingPath = legs.subList(busIdx[cur], legs.size).flatMap { it.path }
                 NavigationState.guidance = Guidance(
                     kind = GuidanceKind.WAIT,
                     title = "${leg.fromName}で乗車待ち",
@@ -1272,6 +1275,22 @@ class NavigationService : Service() {
             if ((toDist != null && toDist <= NEAR_M) || sec <= 120) {
                 alert("near_$cur", "まもなく${leg.toName}", "降りる準備をしてください(${hm(arr)}着予定)")
             }
+
+            // 乗車中も前方ルートを道路ネットワークに沿ってリアルタイム追従更新
+            if (lastLocation != null && leg.path.size >= 2) {
+                val curLat = lastLocation!!.latitude
+                val curLon = lastLocation!!.longitude
+                val (closestSegIdx, _) = findClosestSegment(curLat, curLon, leg.path)
+                val nextIdx = (closestSegIdx + 1).coerceAtMost(leg.path.size - 1)
+                val rideRemaining = ArrayList<Pair<Double, Double>>()
+                rideRemaining.add(Pair(curLat, curLon))
+                rideRemaining.addAll(leg.path.subList(nextIdx, leg.path.size))
+                val afterRidePaths = legs.subList(busIdx[cur] + 1, legs.size).flatMap { it.path }
+                NavigationState.remainingPath = rideRemaining + afterRidePaths
+            } else {
+                NavigationState.remainingPath = legs.subList(busIdx[cur], legs.size).flatMap { it.path }
+            }
+
             NavigationState.guidance = Guidance(
                 GuidanceKind.RIDE, "${leg.toName}で降車",
                 "${hm(arr)}着予定 · あと${minutesCeil(sec)}分 · $head",

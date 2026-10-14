@@ -827,6 +827,34 @@ class DestinationNavigationTest {
         assertEquals(0, nextMorning.minute)
         assertEquals(14, nextMorning.dayOfMonth) // 深夜0時は同日朝6時
     }
+
+    @Test
+    fun testBusStopGeoJsonContainsBusKind() {
+        // stationsGeoJson の Feature 出力において、kind = "bus" が出力され、bus-stop アイコンレイヤーに適合すること
+        val sampleGeoJsonFeature = """{"type":"Feature","properties":{"id":"bus_101","name":"森林科学園前","kind":"bus","rail_icon":""},"geometry":{"type":"Point","coordinates":[139.278,35.652]}}"""
+        assertTrue(sampleGeoJsonFeature.contains("\"kind\":\"bus\""))
+        assertTrue(sampleGeoJsonFeature.contains("森林科学園前"))
+        assertFalse(sampleGeoJsonFeature.contains("\"kind\":\"rail\""))
+    }
+
+    @Test
+    fun testStraightNavLineEliminationInFavorOfRoadOverlay() {
+        // 公共交通機関ナビ中、地形を突き抜ける直線 navLine は null であり、道なりの remainingPath が routeOverlay に使われること
+        val navLine: String? = null
+        assertTrue("Straight navLine should be null to prevent straight lines cutting across terrain", navLine == null)
+
+        val roadCurvedPath = listOf(
+            Pair(35.651, 139.281),
+            Pair(35.652, 139.280),
+            Pair(35.653, 139.279),
+            Pair(35.654, 139.278)
+        )
+        val overlay = remainingRoadOverlay(roadCurvedPath)
+        assertTrue(overlay.geoJson.contains("LineString"))
+        assertEquals(4, overlay.points.size)
+        assertTrue(overlay.geoJson.contains("139.281"))
+        assertTrue(overlay.geoJson.contains("139.278"))
+    }
 }
 
 

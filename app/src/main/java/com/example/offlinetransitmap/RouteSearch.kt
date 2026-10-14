@@ -1031,6 +1031,37 @@ class RouteSearcher(private val db: SQLiteDatabase) {
     // 候補から、指定の順で上位3件を選ぶ(同じ路線の組み合わせは1件にまとめる)
     fun rank(all: List<Itinerary>, mode: SortMode): List<Itinerary> = RouteSearcher.rank(all, mode)
 
+    // バス路線区間の停留所間を道路ネットワークに沿って補間し、道なりの折れ線を生成
+    fun interpolateBusLegPath(
+        rawPath: List<Pair<Double, Double>>,
+        roadRouter: RoadRouter
+    ): List<Pair<Double, Double>> {
+        if (rawPath.size < 2) return rawPath
+        val result = ArrayList<Pair<Double, Double>>()
+        for (i in 0 until rawPath.size - 1) {
+            val p1 = rawPath[i]
+            val p2 = rawPath[i + 1]
+            val roadRes = runCatching {
+                roadRouter.route(p1.first, p1.second, p2.first, p2.second, TravelMode.BICYCLE)
+            }.getOrNull()
+
+            val segPoints = if (roadRes != null && roadRes.path.size >= 2) {
+                roadRes.path
+            } else {
+                listOf(p1, p2)
+            }
+
+            if (result.isEmpty()) {
+                result.addAll(segPoints)
+            } else {
+                for (k in 1 until segPoints.size) {
+                    result.add(segPoints[k])
+                }
+            }
+        }
+        return result
+    }
+
     // 任意の座標（現在地など）から任意の座標（長押し地点など）への経路を探す。
     // 出発地〜乗車駅、降車駅〜目的地への道なり区間を自動で付加する。
     fun findRoutesBetweenCoordinates(
@@ -1176,14 +1207,22 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 if (originWalkMeters > 40 && firstLeg != null) {
                     val boardStationName = firstLeg.fromName
                     val boardCoord = firstLeg.path.firstOrNull() ?: Pair(originSt.lat, originSt.lon)
+                    val walkRoad = if (roadRouter != null) {
+                        runCatching {
+                            roadRouter.route(originLat, originLon, boardCoord.first, boardCoord.second, TravelMode.WALK)
+                        }.getOrNull()
+                    } else null
+                    val actualPath = walkRoad?.path ?: listOf(Pair(originLat, originLon), boardCoord)
+                    val actualMeters = walkRoad?.distanceMeters ?: originWalkMeters
+                    val actualMin = walkRoad?.durationMinutes ?: originWalkMin
                     newLegs.add(
                         RouteLeg(
                             isWalk = true,
                             fromName = originName,
                             toName = boardStationName,
-                            walkMinutes = originWalkMin,
-                            walkMeters = originWalkMeters,
-                            path = listOf(Pair(originLat, originLon), boardCoord)
+                            walkMinutes = actualMin,
+                            walkMeters = actualMeters,
+                            path = actualPath
                         )
                     )
                 }
@@ -1203,14 +1242,22 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 if (destWalkMeters > 40 && lastLeg != null) {
                     val alightStationName = lastLeg.toName
                     val alightCoord = lastLeg.path.lastOrNull() ?: Pair(destSt.lat, destSt.lon)
+                    val walkRoad = if (roadRouter != null) {
+                        runCatching {
+                            roadRouter.route(alightCoord.first, alightCoord.second, destLat, destLon, TravelMode.WALK)
+                        }.getOrNull()
+                    } else null
+                    val actualPath = walkRoad?.path ?: listOf(alightCoord, Pair(destLat, destLon))
+                    val actualMeters = walkRoad?.distanceMeters ?: destWalkMeters
+                    val actualMin = walkRoad?.durationMinutes ?: destWalkMin
                     newLegs.add(
                         RouteLeg(
                             isWalk = true,
                             fromName = alightStationName,
                             toName = destName,
-                            walkMinutes = destWalkMin,
-                            walkMeters = destWalkMeters,
-                            path = listOf(alightCoord, Pair(destLat, destLon))
+                            walkMinutes = actualMin,
+                            walkMeters = actualMeters,
+                            path = actualPath
                         )
                     )
                 }
@@ -1229,8 +1276,32 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 }
             }
 
+            // バス路線区間を道路ネットワークに沿って補間
+            val finalizedResults = if (roadRouter != null) {
+                results.map { itin ->
+                    var hasBus = false
+                    val interpolatedLegs = itin.legs.map { leg ->
+                        val isBus = !leg.isWalk && (
+                            leg.lineName.contains("バス") ||
+                            leg.operatorLabel.contains("バス") ||
+                            leg.trainType.contains("バス")
+                        )
+                        if (isBus && leg.path.size >= 2) {
+                            hasBus = true
+                            val newPath = interpolateBusLegPath(leg.path, roadRouter)
+                            leg.copy(path = newPath)
+                        } else {
+                            leg
+                        }
+                    }
+                    if (hasBus) itin.copy(legs = interpolatedLegs) else itin
+                }
+            } else {
+                results
+            }
+
             // 公共交通機関ルートが1件も見つからなかった場合（終電後など）は空リストを返却し、無理やり徒歩ルートで上書きしない
-            results
+            finalizedResults
         } catch (e: Throwable) {
             android.util.Log.e("RouteSearch", "findRoutesBetweenCoordinates failed gracefully", e)
             emptyList()
@@ -1241,7 +1312,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
     fun findRoutesWithWaypoints(
         waypoints: List<RouteWaypoint>,
         now: LocalDateTime,
-        timeType: TimeTargetType = TimeTargetType.DEPART
+        timeType: TimeTargetType = TimeTargetType.DEPART,
+        roadRouter: RoadRouter? = null
     ): List<Itinerary> {
         if (waypoints.size < 2) return emptyList()
         if (waypoints.size == 2) {
@@ -1254,7 +1326,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 originName = waypoints[0].name,
                 destName = waypoints[1].name,
                 travelMode = TravelMode.TRANSIT,
-                timeType = timeType
+                timeType = timeType,
+                roadRouter = roadRouter
             )
         }
 
@@ -1273,7 +1346,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     originName = pFrom.name,
                     destName = pTo.name,
                     travelMode = TravelMode.TRANSIT,
-                    timeType = if (i == waypoints.size - 2) timeType else TimeTargetType.DEPART
+                    timeType = if (i == waypoints.size - 2) timeType else TimeTargetType.DEPART,
+                    roadRouter = roadRouter
                 )
                 val best = rank(segRoutes, SortMode.FASTEST).firstOrNull() ?: segRoutes.firstOrNull()
                 if (best == null) return emptyList()
