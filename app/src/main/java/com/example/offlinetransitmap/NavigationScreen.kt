@@ -28,6 +28,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -39,12 +41,16 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import java.time.Duration
 import java.time.LocalDateTime
 
 // 現在地から目標までの、地図に引く点線(GeoJSON)
@@ -712,6 +718,564 @@ private fun stationNameToRomaji(name: String): String {
     return dict[clean] ?: clean
 }
 
+// 西東京バスなどの車内LCDモニター風案内表示トップカード
+// （手前から奥へパースペクティブに広がる青い曲線ルートリボン、手前に現在地・次は・その後の停留所、一番奥に終着駅）
+@Composable
+private fun BusMonitorTopCard(
+    guidance: Guidance?,
+    itinerary: Itinerary?,
+    location: Location?,
+    modifier: Modifier = Modifier
+) {
+    val legs = itinerary?.legs ?: emptyList()
+    val now = LocalDateTime.now()
+    val busLeg = legs.firstOrNull { leg ->
+        !leg.isWalk && leg.lineName != "自転車" &&
+        (leg.arrTime == null || now.isBefore(leg.arrTime.plusMinutes(2)))
+    } ?: legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
+
+    // バス事業者名 (西東京バス等の表示)
+    val rawOp = busLeg?.operatorLabel ?: ""
+    val operatorName = when {
+        rawOp.contains("西東京") || rawOp.isBlank() -> "西東京バス"
+        rawOp.contains("京王") -> "京王バス"
+        rawOp.contains("都営") -> "都営バス"
+        rawOp.contains("小田急") -> "小田急バス"
+        rawOp.contains("東急") -> "東急バス"
+        rawOp.contains("関東") -> "関東バス"
+        rawOp.contains("神奈中") || rawOp.contains("神奈川中央") -> "神奈中バス"
+        else -> rawOp
+    }
+
+    val lineName = busLeg?.lineName?.ifBlank { "路線バス" } ?: "路線バス"
+    val headsign = busLeg?.headsign?.removeSuffix("行")?.removeSuffix("方面")?.trim()
+        ?.ifBlank { busLeg.toName } ?: (busLeg?.toName ?: "終点")
+    val alightStation = busLeg?.toName ?: ""
+
+    // 停留所リスト (intermediateStops を活用)
+    val rawStops = if (busLeg != null && busLeg.intermediateStops.isNotEmpty()) {
+        busLeg.intermediateStops
+    } else if (busLeg != null) {
+        listOf(busLeg.fromName, busLeg.toName)
+    } else {
+        listOf("乗車停留所", "降車停留所")
+    }
+    // 重複を隣接除去
+    val allStops = ArrayList<String>()
+    for (s in rawStops) {
+        if (allStops.isEmpty() || allStops.last() != s) allStops.add(s)
+    }
+
+    // 現在地と各停留所座標から、次の停留所のインデックス(nextStopIdx)を判定
+    val stopCoords = busLeg?.stopCoords ?: emptyList()
+    val isRiding = guidance?.kind == GuidanceKind.RIDE
+
+    val nextStopIdx = remember(location, busLeg, guidance) {
+        if (!isRiding) {
+            0
+        } else if (location != null && stopCoords.size == allStops.size && allStops.size > 1) {
+            var bestIdx = 1
+            var bestDist = Double.MAX_VALUE
+            for (i in 1 until stopCoords.size) {
+                val d = calcDistanceMeters(location.latitude, location.longitude, stopCoords[i].first, stopCoords[i].second)
+                if (d < bestDist) {
+                    bestDist = d.toDouble()
+                    bestIdx = i
+                }
+            }
+            bestIdx.coerceIn(0, allStops.lastIndex)
+        } else if (busLeg?.depTime != null && busLeg.arrTime != null && allStops.size > 1) {
+            val totalSec = Duration.between(busLeg.depTime, busLeg.arrTime).seconds.coerceAtLeast(1)
+            val elapsedSec = Duration.between(busLeg.depTime, now).seconds.coerceAtLeast(0)
+            val frac = (elapsedSec.toFloat() / totalSec).coerceIn(0f, 1f)
+            val estimated = (frac * (allStops.size - 1)).roundToInt()
+            (estimated + 1).coerceIn(1, allStops.lastIndex)
+        } else {
+            if (allStops.size > 1) 1 else 0
+        }
+    }
+
+    // 表示する停留所リストの生成:
+    // [Next Stop (次は), Next+1, Next+2, (Next+3), Terminus (終点)]
+    data class BusMonitorStop(
+        val name: String,
+        val isNext: Boolean,
+        val isTerminus: Boolean,
+        val isAlight: Boolean,
+        val indexInTrip: Int
+    )
+
+    val terminusName = if (headsign.isNotBlank()) headsign else allStops.last()
+    val displayedStops = remember(allStops, nextStopIdx, terminusName, alightStation) {
+        val list = ArrayList<BusMonitorStop>()
+        val nextName = allStops.getOrElse(nextStopIdx) { allStops.last() }
+        list.add(
+            BusMonitorStop(
+                name = nextName,
+                isNext = true,
+                isTerminus = nextName == terminusName,
+                isAlight = nextName == alightStation,
+                indexInTrip = nextStopIdx
+            )
+        )
+
+        // その後の停留所を最大3つ追加
+        var curr = nextStopIdx + 1
+        while (curr < allStops.size && list.size < 4) {
+            val sName = allStops[curr]
+            if (sName != terminusName) {
+                list.add(
+                    BusMonitorStop(
+                        name = sName,
+                        isNext = false,
+                        isTerminus = false,
+                        isAlight = sName == alightStation,
+                        indexInTrip = curr
+                    )
+                )
+            } else {
+                break
+            }
+            curr++
+        }
+
+        // 一番奥: 終着駅 (terminus)
+        if (list.none { it.name == terminusName }) {
+            list.add(
+                BusMonitorStop(
+                    name = terminusName,
+                    isNext = false,
+                    isTerminus = true,
+                    isAlight = terminusName == alightStation,
+                    indexInTrip = allStops.lastIndex
+                )
+            )
+        }
+        list
+    }
+
+    val isNearAlight = (guidance?.distanceMeters != null && guidance.distanceMeters <= 150) ||
+            (guidance?.remainingMinutes != null && guidance.remainingMinutes <= 1)
+
+    // 停留所行ごとの垂直中心Y座標を記録し、Canvasの引出線と完全連動
+    val stopYPositions = remember { mutableStateMapOf<Int, Float>() }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF8FAFC)),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(2.dp, Color(0xFF1E293B)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 1. 最上部: バス車内モニターヘッダー
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Color(0xFF0F172A), Color(0xFF1E293B))
+                        )
+                    )
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    Surface(
+                        color = Color(0xFFEA580C),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = operatorName,
+                            color = Color.White,
+                            fontWeight = FontWeight.Black,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Surface(
+                        color = Color(0xFF334155),
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            text = lineName,
+                            color = Color(0xFF38BDF8),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Text(
+                        text = "$headsign 行",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.5.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (isNearAlight) {
+                        Surface(
+                            color = Color(0xFFDC2626),
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = "まもなく到着",
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 10.5.sp,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    } else if (guidance != null) {
+                        Text(
+                            text = "${hm(guidance.arrival)} 着",
+                            color = Color(0xFF4ADE80),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "(あと${formatDurationHoursMinutes(guidance.remainingMinutes)})",
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 10.5.sp
+                        )
+                    }
+                }
+            }
+
+            // 2. メインモニター領域: 左側パースペクティブルート曲線 ＆ 右側停留所リスト
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(144.dp)
+                    .background(Color(0xFFF8FAFC))
+            ) {
+                // 背景Canvas: 青いパースペクティブルートリボン ＆ 現在地マーカー ＆ 停留所ディスク ＆ 引出線
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
+
+                    // 曲線ルートリボンのジオメトリ (手前左下 -> 奥右上)
+                    val p0 = Offset(x = 24.dp.toPx(), y = h - 10.dp.toPx())
+                    val c1 = Offset(x = 20.dp.toPx(), y = h * 0.50f)
+                    val c2 = Offset(x = 42.dp.toPx(), y = h * 0.22f)
+                    val p1 = Offset(x = 76.dp.toPx(), y = 16.dp.toPx())
+
+                    val startRibbonW = 28.dp.toPx()
+                    val endRibbonW = 15.dp.toPx()
+
+                    fun cubicBezier(t: Float): Offset {
+                        val u = 1f - t
+                        val tt = t * t
+                        val uu = u * u
+                        val uuu = uu * u
+                        val ttt = tt * t
+                        val x = uuu * p0.x + 3 * uu * t * c1.x + 3 * u * tt * c2.x + ttt * p1.x
+                        val y = uuu * p0.y + 3 * uu * t * c1.y + 3 * u * tt * c2.y + ttt * p1.y
+                        return Offset(x, y)
+                    }
+
+                    fun cubicTangent(t: Float): Offset {
+                        val u = 1f - t
+                        val dx = 3 * u * u * (c1.x - p0.x) + 6 * u * t * (c2.x - c1.x) + 3 * t * t * (p1.x - c2.x)
+                        val dy = 3 * u * u * (c1.y - p0.y) + 6 * u * t * (c2.y - c1.y) + 3 * t * t * (p1.y - c2.y)
+                        val len = kotlin.math.hypot(dx, dy).coerceAtLeast(0.001f)
+                        return Offset(dx / len, dy / len)
+                    }
+
+                    // リボンパスの構築
+                    val steps = 30
+                    val leftEdge = ArrayList<Offset>()
+                    val rightEdge = ArrayList<Offset>()
+                    for (i in 0..steps) {
+                        val t = i / steps.toFloat()
+                        val center = cubicBezier(t)
+                        val tan = cubicTangent(t)
+                        val norm = Offset(-tan.y, tan.x)
+                        val halfW = (startRibbonW + (endRibbonW - startRibbonW) * t) / 2f
+                        leftEdge.add(center + norm * halfW)
+                        rightEdge.add(center - norm * halfW)
+                    }
+
+                    val ribbonPath = Path().apply {
+                        if (leftEdge.isNotEmpty()) {
+                            moveTo(leftEdge.first().x, leftEdge.first().y)
+                            for (k in 1 until leftEdge.size) lineTo(leftEdge[k].x, leftEdge[k].y)
+                            for (k in rightEdge.indices.reversed()) lineTo(rightEdge[k].x, rightEdge[k].y)
+                            close()
+                        }
+                    }
+
+                    // 青いパースペクティブリボン塗りつぶし
+                    drawPath(
+                        path = ribbonPath,
+                        brush = Brush.linearGradient(
+                            colors = listOf(Color(0xFF1E40AF), Color(0xFF2563EB), Color(0xFF3B82F6)),
+                            start = p0,
+                            end = p1
+                        )
+                    )
+
+                    // 外周のハイライトエッジライン
+                    val highlightPath = Path().apply {
+                        if (leftEdge.isNotEmpty()) {
+                            moveTo(leftEdge.first().x, leftEdge.first().y)
+                            for (k in 1 until leftEdge.size) lineTo(leftEdge[k].x, leftEdge[k].y)
+                        }
+                    }
+                    drawPath(
+                        path = highlightPath,
+                        color = Color(0xFF93C5FD),
+                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                    )
+
+                    // 各停留所に対応するマーカー ＆ 引出線の描画
+                    displayedStops.forEachIndexed { index, stop ->
+                        val targetY = stopYPositions[index] ?: return@forEachIndexed
+                        // y(t) == targetY となる t を2分探索
+                        var lo = 0.0f
+                        var hi = 1.0f
+                        for (iter in 0..8) {
+                            val mid = (lo + hi) / 2f
+                            val yMid = cubicBezier(mid).y
+                            if (yMid > targetY) lo = mid else hi = mid
+                        }
+                        val tFound = (lo + hi) / 2f
+                        val center = cubicBezier(tFound)
+                        val tan = cubicTangent(tFound)
+                        val norm = Offset(-tan.y, tan.x)
+                        val halfW = (startRibbonW + (endRibbonW - startRibbonW) * tFound) / 2f
+                        val rightPoint = center - norm * halfW
+
+                        // 引出線: リボン右端 -> 45度折れ -> 水平にテキスト下端へ
+                        val leaderStartX = rightPoint.x
+                        val leaderEndX = 86.dp.toPx()
+                        val leaderPath = Path().apply {
+                            moveTo(leaderStartX, targetY)
+                            val midX = (leaderStartX + 12.dp.toPx()).coerceAtMost(leaderEndX - 8.dp.toPx())
+                            lineTo(midX, targetY)
+                            lineTo(leaderEndX, targetY)
+                        }
+                        drawPath(
+                            path = leaderPath,
+                            color = if (stop.isNext) Color(0xFFF59E0B) else Color(0xFF94A3B8),
+                            style = Stroke(width = if (stop.isNext) 1.8.dp.toPx() else 1.2.dp.toPx(), cap = StrokeCap.Round)
+                        )
+
+                        // 停留所ディスクマーカー (リボン上)
+                        if (stop.isNext) {
+                            // 次の停留所: 黄色の楕円ディスク (写真の黄色オーバルマーカー)
+                            val ovalW = 17.dp.toPx()
+                            val ovalH = 11.dp.toPx()
+                            drawOval(
+                                color = Color(0xFFFACC15),
+                                topLeft = Offset(center.x - ovalW / 2f, center.y - ovalH / 2f),
+                                size = Size(ovalW, ovalH)
+                            )
+                            drawOval(
+                                color = Color(0xFF0F172A),
+                                topLeft = Offset(center.x - ovalW / 2f, center.y - ovalH / 2f),
+                                size = Size(ovalW, ovalH),
+                                style = Stroke(width = 2.dp.toPx())
+                            )
+                        } else if (stop.isTerminus) {
+                            // 終着駅: 白い円 ＋ 二重リング
+                            val rad = 6.5.dp.toPx()
+                            drawCircle(color = Color.White, radius = rad, center = center)
+                            drawCircle(color = Color(0xFF1E3A8A), radius = rad, center = center, style = Stroke(width = 2.dp.toPx()))
+                            drawCircle(color = Color(0xFF1E3A8A), radius = rad * 0.45f, center = center)
+                        } else {
+                            // その後の停留所: 白い円 (写真の白い円マーカー)
+                            val rad = 5.5.dp.toPx()
+                            drawCircle(color = Color.White, radius = rad, center = center)
+                            drawCircle(color = Color(0xFF0F172A), radius = rad, center = center, style = Stroke(width = 1.5.dp.toPx()))
+                        }
+                    }
+
+                    // 手前最前面 (現在地): 写真にある赤いヘキサゴン / バス矢印ポインター
+                    val curCenter = cubicBezier(0.04f)
+                    val tan0 = cubicTangent(0.04f)
+                    val angleDeg = Math.toDegrees(kotlin.math.atan2(tan0.y.toDouble(), tan0.x.toDouble())).toFloat()
+                    rotate(degrees = angleDeg - 90f, pivot = curCenter) {
+                        val pointerW = 18.dp.toPx()
+                        val pointerH = 14.dp.toPx()
+                        val hexPath = Path().apply {
+                            moveTo(curCenter.x, curCenter.y - pointerH / 2f)
+                            lineTo(curCenter.x + pointerW / 2f, curCenter.y - pointerH * 0.1f)
+                            lineTo(curCenter.x + pointerW * 0.4f, curCenter.y + pointerH / 2f)
+                            lineTo(curCenter.x - pointerW * 0.4f, curCenter.y + pointerH / 2f)
+                            lineTo(curCenter.x - pointerW / 2f, curCenter.y - pointerH * 0.1f)
+                            close()
+                        }
+                        drawPath(hexPath, color = Color(0xFFDC2626))
+                        drawPath(hexPath, color = Color.White, style = Stroke(width = 1.8.dp.toPx()))
+                    }
+                }
+
+                // 右側: 停留所テキストリスト (奥/終点 -> 手前/次は の順で垂直配置)
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 90.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    displayedStops.indices.reversed().forEach { index ->
+                        val stop = displayedStops[index]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onGloballyPositioned { coordinates ->
+                                    val localY = coordinates.positionInParent().y + coordinates.size.height / 2f + 6.dp.value
+                                    stopYPositions[index] = localY
+                                },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f, fill = false)
+                            ) {
+                                when {
+                                    stop.isNext -> {
+                                        Surface(
+                                            color = Color(0xFFEA580C),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "次は",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Black,
+                                                fontSize = 11.5.sp,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = stop.name,
+                                            color = Color(0xFF0F172A),
+                                            fontSize = 18.sp,
+                                            fontWeight = FontWeight.Black,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    stop.isTerminus -> {
+                                        Surface(
+                                            color = Color(0xFF1E3A8A),
+                                            shape = RoundedCornerShape(3.dp)
+                                        ) {
+                                            Text(
+                                                text = "終点",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 10.sp,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                        Text(
+                                            text = stop.name,
+                                            color = Color(0xFF0F172A),
+                                            fontSize = 13.5.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    else -> {
+                                        Text(
+                                            text = "・",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = stop.name,
+                                            color = Color(0xFF334155),
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (stop.isAlight) {
+                                Surface(
+                                    color = Color(0xFFFFEDD5),
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = BorderStroke(1.dp, Color(0xFFEA580C))
+                                ) {
+                                    Text(
+                                        text = "🚏 降車",
+                                        color = Color(0xFFC2410C),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. 最下部: バス車内電光テロップ風バー
+            val nextStopName = displayedStops.firstOrNull { it.isNext }?.name ?: alightStation
+            val marqueeText = if (isNearAlight) {
+                "次は ${nextStopName} です。お降りの方はブザーでお知らせください。"
+            } else {
+                "走行中の席の移動は大変危険ですのでご遠慮願います。次は ${nextStopName} に停車します。"
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF0F172A))
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Surface(
+                    color = if (isNearAlight) Color(0xFFF59E0B) else Color(0xFF334155),
+                    shape = RoundedCornerShape(3.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("🛑", fontSize = 10.sp)
+                        Text(
+                            text = "つぎ・とまります",
+                            color = if (isNearAlight) Color.Black else Color(0xFF94A3B8),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 9.5.sp
+                        )
+                    }
+                }
+
+                Text(
+                    text = marqueeText,
+                    color = Color(0xFFE2E8F0),
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+    }
+}
+
 // 電車の車内LCD案内表示（トレインビジョン）または駅ホーム発車標風のトップカード
 @Composable
 private fun TrainLcdTopCard(
@@ -1318,11 +1882,25 @@ fun NavigationOverlay(
     }
     val hasGps = location != null
 
-    // 電車・バス乗車中または駅で待機中かどうか判定（トレインビジョンや鉄道計器の表示対象）
+    val itin = NavigationState.itinerary
+    val legs = itin?.legs ?: emptyList()
+    val now = LocalDateTime.now()
+    val activeTransitLeg = legs.firstOrNull { leg ->
+        !leg.isWalk && leg.lineName != "自転車" &&
+        (leg.arrTime == null || now.isBefore(leg.arrTime.plusMinutes(2)))
+    } ?: legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
+
+    val isBus = activeTransitLeg != null && (
+        activeTransitLeg.lineName.contains("バス") ||
+        activeTransitLeg.operatorLabel.contains("バス") ||
+        activeTransitLeg.trainType.contains("バス")
+    )
+
+    // 電車・バス乗車中または駅で待機中かどうか判定（トレインビジョンやバスモニター、鉄道計器の表示対象）
     val isTrainLcdMode = guidance?.kind == GuidanceKind.RIDE || guidance?.kind == GuidanceKind.WAIT
 
     Box(modifier = modifier.fillMaxSize()) {
-        // 上部: 案内カード (電車乗車・待機時はトレインビジョン/発車標、徒歩・自転車移動時はターンバイターン案内)
+        // 上部: 案内カード (バス乗車時は西東京バス風モニター表示、電車時はトレインビジョン/発車標、徒歩・自転車はターンバイターン案内)
         Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -1331,10 +1909,18 @@ fun NavigationOverlay(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             if (isTrainLcdMode) {
-                TrainLcdTopCard(
-                    guidance = guidance,
-                    itinerary = NavigationState.itinerary
-                )
+                if (isBus) {
+                    BusMonitorTopCard(
+                        guidance = guidance,
+                        itinerary = NavigationState.itinerary,
+                        location = location
+                    )
+                } else {
+                    TrainLcdTopCard(
+                        guidance = guidance,
+                        itinerary = NavigationState.itinerary
+                    )
+                }
             } else {
                 TopManeuverCard(guidance = guidance)
             }

@@ -42,7 +42,9 @@ data class RouteLeg(
     val fare: Int? = null,
     val path: List<Pair<Double, Double>> = emptyList(),
     val trainType: String = "",
-    val fareNote: String? = null
+    val fareNote: String? = null,
+    val intermediateStops: List<String> = emptyList(),
+    val stopCoords: List<Pair<Double, Double>> = emptyList()
 )
 
 enum class SortMode { FASTEST, FEWEST_TRANSFERS, CHEAPEST }
@@ -1002,7 +1004,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                         path = (leg.b..leg.c).map { r ->
                             val st = net.stations[data.rowStation[r]]
                             Pair(st.lat, st.lon)
-                        }
+                        },
+                        intermediateStops = legStations.map { it.name },
+                        stopCoords = legStations.map { Pair(it.lat, it.lon) }
                     )
                 )
                 keyParts.add("${info.routeId}>$fromSt>$toSt")

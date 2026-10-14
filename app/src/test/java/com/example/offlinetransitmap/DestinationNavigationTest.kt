@@ -926,6 +926,35 @@ class DestinationNavigationTest {
         val itinCopied = itinMorning.copy(transfers = 1)
         assertTrue("isNextDayFirstTrain should be preserved across copy()", itinCopied.isNextDayFirstTrain)
     }
+
+    @Test
+    fun testBusLegIntermediateStops() {
+        val stops = listOf("八王子駅北口", "横山町", "八日町一丁目", "恩方ターミナル")
+        val coords = listOf(
+            Pair(35.655, 139.338),
+            Pair(35.657, 139.335),
+            Pair(35.659, 139.331),
+            Pair(35.680, 139.259)
+        )
+        val leg = RouteLeg(
+            isWalk = false,
+            fromName = stops.first(),
+            toName = stops.last(),
+            lineName = "陣01",
+            operatorLabel = "西東京バス",
+            intermediateStops = stops,
+            stopCoords = coords
+        )
+
+        assertEquals(4, leg.intermediateStops.size)
+        assertEquals("八王子駅北口", leg.intermediateStops.first())
+        assertEquals("恩方ターミナル", leg.intermediateStops.last())
+        assertEquals(4, leg.stopCoords.size)
+
+        val copied = leg.copy(fare = 420)
+        assertEquals(4, copied.intermediateStops.size)
+        assertEquals(4, copied.stopCoords.size)
+    }
 }
 
 
