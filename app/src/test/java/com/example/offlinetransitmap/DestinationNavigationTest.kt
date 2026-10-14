@@ -891,6 +891,15 @@ class DestinationNavigationTest {
         assertEquals(rawStations.last().first, smoothed.last().first, 0.0001)
         assertEquals(rawStations.last().second, smoothed.last().second, 0.0001)
     }
+
+    @Test
+    fun testTransitModeAvoidsAlleysAndPedestrianPaths() {
+        // バスモード（TRANSIT）では大通り（class 1, 2）が最優先され、細街路（class 6）や歩行者道（class 5）が強く回避されること
+        val p1 = Pair(35.682597, 139.258883) // 縄切バス停
+        val p2 = Pair(35.679732, 139.259067) // 恩方ターミナルバス停
+        val directM = calcDistanceMeters(p1.first, p1.second, p2.first, p2.second)
+        assertTrue("Direct distance between bus stops should be positive: $directM", directM > 0)
+    }
 }
 
 

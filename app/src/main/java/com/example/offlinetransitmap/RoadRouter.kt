@@ -234,14 +234,17 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             if (candidates.isEmpty()) return null
             candidates.sortBy { it.dist }
 
-            // 候補ノードの到達性チェック（駅前デッキ等の孤立した微小コンポーネントを回避し、実幹線・一般道ネットワークを優先）
-            // 距離順に上位15候補を調べ、局所エッジで15ノード以上広がるノードを採用する
-            val topCandidates = candidates.take(15)
+            // 候補ノードの到達性・道路種別チェック
+            // TRANSIT(バス)モード時は大通り・幹線道路(class 1, 2)を最優先でスナップし、裏道や歩道への誤スナップを完全防止
+            val topCandidates = candidates.take(if (mode == TravelMode.TRANSIT) 25 else 15)
+            var bestTransitNode: Candidate? = null
+            var bestTransitScore = Double.MAX_VALUE
+
             for (cand in topCandidates) {
                 val db = databases.getOrNull(cand.dbIdx) ?: continue
                 if (!db.isOpen) continue
-                // 周囲エッジを取得して局所BFS（候補ノード cand の周囲 ±1 グリッドを正確に探索）
                 val localAdj = HashMap<Int, ArrayList<Int>>()
+                var minRc = 999
                 val candY = (cand.lat / GRID_CELL_DEG).toInt()
                 val candX = (cand.lon / GRID_CELL_DEG).toInt()
                 val candGridKeys = ArrayList<Int>(9)
@@ -253,7 +256,7 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                 val chunkKeys = candGridKeys.joinToString(",")
                 val edgeCursor = try {
                     db.rawQuery(
-                        "SELECT u, v FROM road_edges WHERE $modeColumn = 1 AND grid IN ($chunkKeys)",
+                        "SELECT u, v, road_class FROM road_edges WHERE $modeColumn = 1 AND grid IN ($chunkKeys)",
                         null
                     )
                 } catch (e: Exception) {
@@ -262,11 +265,16 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                 edgeCursor?.use {
                     val uCol = it.getColumnIndexOrThrow("u")
                     val vCol = it.getColumnIndexOrThrow("v")
+                    val rcCol = it.getColumnIndexOrThrow("road_class")
                     while (it.moveToNext()) {
                         val u = it.getInt(uCol)
                         val v = it.getInt(vCol)
+                        val rc = it.getInt(rcCol)
                         localAdj.getOrPut(u) { ArrayList() }.add(v)
                         localAdj.getOrPut(v) { ArrayList() }.add(u)
+                        if (u == cand.localId || v == cand.localId) {
+                            if (rc < minRc) minRc = rc
+                        }
                     }
                 }
 
@@ -284,8 +292,28 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                 }
 
                 if (visited.size >= 15) {
-                    return Pair(cand.globalId, cand.dist)
+                    if (mode == TravelMode.TRANSIT) {
+                        val rcWeight = when (minRc) {
+                            1 -> 0.5   // 主要幹線 (最優先)
+                            2 -> 0.65  // 主要道 (バス通り)
+                            4 -> 1.0   // 生活道路
+                            5 -> 4.0   // 歩行者道
+                            6 -> 6.0   // 細街路・裏道
+                            else -> 3.0
+                        }
+                        val score = cand.dist * rcWeight
+                        if (score < bestTransitScore) {
+                            bestTransitScore = score
+                            bestTransitNode = cand
+                        }
+                    } else {
+                        return Pair(cand.globalId, cand.dist)
+                    }
                 }
+            }
+
+            if (mode == TravelMode.TRANSIT && bestTransitNode != null) {
+                return Pair(bestTransitNode.globalId, bestTransitNode.dist)
             }
 
             // 十分な連結ノードが見つからない場合は最寄り候補にフォールバック
@@ -330,10 +358,10 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
             val startNodeId = startSnap.first
             val goalNodeId = goalSnap.first
 
-            // 探索領域のノードとエッジを読み込み(近距離ではマージンを絞りメモリ消費とロード負荷を90%以上削減)
+            // 探索領域のノードとエッジを読み込み(近距離ではマージンを適正化しグリッド境界分断を防止)
             val margin = when {
-                directMeters <= 1200 -> 0.006 // バス停間など近距離(約650m四方)
-                directMeters <= 5000 -> 0.015 // 約1.6km四方
+                directMeters <= 1200 -> 0.012 // バス停間など近距離(約1.3km四方で境界分断を完全防止)
+                directMeters <= 5000 -> 0.018 // 約2km四方
                 directMeters <= 20000 -> 0.035
                 else -> 0.05
             }
@@ -354,11 +382,11 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                 }
             }
 
-            // スタート地点・ゴール地点の近傍グリッドを包含
+            // スタート地点・ゴール地点の近傍グリッドを包含 (タイル境界での切断を完全に防ぐため常にr=1)
             fun addNeighborhood(lat: Double, lon: Double) {
                 val cy = (lat / GRID_CELL_DEG).toInt()
                 val cx = (lon / GRID_CELL_DEG).toInt()
-                val r = if (directMeters <= 1200) 0 else 1
+                val r = 1
                 for (dy in -r..r) {
                     for (dx in -r..r) {
                         gridKeySet.add((((cy + dy) and 0xFFFF) shl 16) or (((cx + dx) and 0xFFFF)))
@@ -600,7 +628,18 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                             8 -> 8.00   // 階段
                             else -> 1.00
                         }
-                        TravelMode.WALK, TravelMode.TRANSIT -> when (edge.roadClass) {
+                        TravelMode.TRANSIT -> when (edge.roadClass) {
+                            1 -> 0.50   // 大通り・主要幹線 (路線バス最優先)
+                            2 -> 0.65   // 主要道 (主要バス通り)
+                            3 -> 1.50   // 専用自転車道
+                            4 -> 1.00   // 一般生活道路
+                            5 -> 10.00  // 歩行者道 (バス通行不可・極大ペナルティ)
+                            6 -> 5.00   // 細街路・裏道 (大型バス通行困難・極大ペナルティ)
+                            7 -> 10.00  // 未舗装路
+                            8 -> 50.00  // 階段
+                            else -> 1.00
+                        }
+                        TravelMode.WALK -> when (edge.roadClass) {
                             1 -> 0.85   // 大通り (幅広歩道・街灯・わかりやすい: 15%優遇)
                             2 -> 0.88   // 主要道
                             3 -> 0.85   // 自転車・歩行者専用道
@@ -713,6 +752,11 @@ class RoadRouter private constructor(private val databases: List<SQLiteDatabase>
                     cleanedPath[i].first, cleanedPath[i].second,
                     cleanedPath[i + 1].first, cleanedPath[i + 1].second
                 )
+            }
+
+            // TRANSIT(バス)モード時に直線距離の2.2倍を超える異常迂回(袋小路ループや山林迷い込み)をガード
+            if (mode == TravelMode.TRANSIT && directMeters > 100 && totalRoadDist > directMeters * 2.2) {
+                return directFallback
             }
 
             val totalDuration = travelDurationMinutes(totalRoadDist, mode)

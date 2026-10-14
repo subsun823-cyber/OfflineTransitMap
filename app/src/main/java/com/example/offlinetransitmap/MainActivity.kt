@@ -193,6 +193,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
     val poiDb = remember { PoiDatabase.open(context) }
     val placeSearcher = remember(timetable, poiDb) { PlaceSearcher(timetable?.db, poiDb) }
     val roadRouter = remember { RoadRouter.open(context) }
+    val railRouter = remember { RailRouter.getInstance(context) }
     var showPlaceSearch by remember { mutableStateOf(false) }
 
     // 趣味モード（踏切撮影）の状態
@@ -510,7 +511,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                                 waypoints = listOf(originWp, destWp),
                                                 now = searchTime,
                                                 timeType = TimeTargetType.DEPART,
-                                                roadRouter = roadRouter
+                                                roadRouter = roadRouter,
+                                                railRouter = railRouter
                                             )
                                             cachedTransitRoutes = computed
                                             computed
@@ -1018,7 +1020,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 waypoints = listOf(o) + v + listOf(d),
                                 now = tTime,
                                 timeType = tType,
-                                roadRouter = roadRouter
+                                roadRouter = roadRouter,
+                                railRouter = railRouter
                             )
                             withContext(Dispatchers.Main) {
                                 isSearchingForDestination = false
@@ -1145,7 +1148,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         waypoints = listOf(o) + v + listOf(d),
                                         now = routeTargetTime,
                                         timeType = routeTimeType,
-                                        roadRouter = roadRouter
+                                        roadRouter = roadRouter,
+                                        railRouter = railRouter
                                     )
                                     withContext(Dispatchers.Main) {
                                         isSearchingForDestination = false
@@ -1353,7 +1357,8 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         waypoints = listOf(orig) + routeViaWaypoints + listOf(dest),
                                         now = nextMorning,
                                         timeType = TimeTargetType.DEPART,
-                                        roadRouter = roadRouter
+                                        roadRouter = roadRouter,
+                                        railRouter = railRouter
                                     )
                                     withContext(Dispatchers.Main) {
                                         isSearchingForDestination = false

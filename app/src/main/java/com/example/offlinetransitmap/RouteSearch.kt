@@ -1130,7 +1130,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 cached
             } else {
                 val roadRes = runCatching {
-                    roadRouter.route(p1.first, p1.second, p2.first, p2.second, TravelMode.BICYCLE)
+                    roadRouter.route(p1.first, p1.second, p2.first, p2.second, TravelMode.TRANSIT)
                 }.getOrNull()
                 val pts = if (roadRes != null && roadRes.path.size >= 2) roadRes.path else listOf(p1, p2)
                 busSegmentCache[key] = pts
@@ -1160,7 +1160,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         originName: String = "現在地",
         travelMode: TravelMode = TravelMode.WALK,
         timeType: TimeTargetType = TimeTargetType.DEPART,
-        roadRouter: RoadRouter? = null
+        roadRouter: RoadRouter? = null,
+        railRouter: RailRouter? = null
     ): List<Itinerary> {
         val crowDistM = calcDistanceMeters(originLat, originLon, destLat, destLon)
 
@@ -1384,9 +1385,9 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                             val newPath = interpolateBusLegPath(leg.path, roadRouter)
                             leg.copy(path = newPath)
                         } else if (!isBus) {
-                            // 電車区間: Catmull-Rom スプライン補間で駅間を滑らかな線路曲線に補間
-                            val smoothPath = smoothRailPath(leg.path)
-                            leg.copy(path = smoothPath)
+                            // 電車区間: 実際の線路ジオメトリ(RailRouter)で線路に沿って補間、未収録区間のみスプライン曲線にフォールバック
+                            val railPath = railRouter?.interpolateRailLegPath(leg.path) ?: smoothRailPath(leg.path)
+                            leg.copy(path = railPath)
                         } else {
                             leg
                         }
@@ -1408,7 +1409,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
         waypoints: List<RouteWaypoint>,
         now: LocalDateTime,
         timeType: TimeTargetType = TimeTargetType.DEPART,
-        roadRouter: RoadRouter? = null
+        roadRouter: RoadRouter? = null,
+        railRouter: RailRouter? = null
     ): List<Itinerary> {
         if (waypoints.size < 2) return emptyList()
         if (waypoints.size == 2) {
@@ -1422,7 +1424,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 destName = waypoints[1].name,
                 travelMode = TravelMode.TRANSIT,
                 timeType = timeType,
-                roadRouter = roadRouter
+                roadRouter = roadRouter,
+                railRouter = railRouter
             )
         }
 
@@ -1442,7 +1445,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     destName = pTo.name,
                     travelMode = TravelMode.TRANSIT,
                     timeType = if (i == waypoints.size - 2) timeType else TimeTargetType.DEPART,
-                    roadRouter = roadRouter
+                    roadRouter = roadRouter,
+                    railRouter = railRouter
                 )
                 val best = rank(segRoutes, SortMode.FASTEST).firstOrNull() ?: segRoutes.firstOrNull()
                 if (best == null) return emptyList()
