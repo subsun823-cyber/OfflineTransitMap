@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +38,7 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -51,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -184,6 +187,7 @@ fun RouteDetailPanel(
     onBackToResults: () -> Unit = {},
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    isSearching: Boolean = false,
     navigating: Boolean = false,
     onStartNavigation: (() -> Unit)? = null,
     onStopNavigation: (() -> Unit)? = null
@@ -224,6 +228,19 @@ fun RouteDetailPanel(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+            }
+
+            // 再検索中プログレスバー
+            if (isSearching) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                )
+            } else {
+                Spacer(Modifier.height(3.dp))
             }
 
             // 出発地・経由地・目的地 コネクタボックス
@@ -469,6 +486,38 @@ fun RouteDetailPanel(
                 }
             }
 
+            // 再検索中案内バナー
+            if (isSearching) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "経路を再検索しています…",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+
             // 日付ダイアログ
             if (showDateDialog) {
                 val pickerState = rememberDatePickerState(
@@ -514,11 +563,50 @@ fun RouteDetailPanel(
             }
 
             if (itin != null) {
+                // 終電後の翌朝始発案内カード
+                if (itin.isNextDayFirstTrain) {
+                    val depDate = itin.departure.toLocalDate()
+                    val dayOfWeekStr = arrayOf("月", "火", "水", "木", "金", "土", "日")[depDate.dayOfWeek.value - 1]
+                    val dateText = "${depDate.monthValue}/${depDate.dayOfMonth}($dayOfWeekStr)"
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFFFF3E0),
+                        border = BorderStroke(1.dp, Color(0xFFFFB74D))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("🌅", fontSize = 22.sp)
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "終電後のため、翌朝の始発ルートを表示しています",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFE65100)
+                                )
+                                Text(
+                                    text = "始発: $dateText ${hm(itin.departure)}発の最も早い便",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFBF360C)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // 候補ルートタブ (複数ある場合)
                 if (candidates != null && candidates.size > 1 && onSelectCandidate != null) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .alpha(if (isSearching) 0.55f else 1.0f)
                             .padding(horizontal = 16.dp, vertical = 4.dp)
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -684,7 +772,11 @@ fun RouteDetailPanel(
                 Spacer(Modifier.height(4.dp))
 
                 // タイムライン一覧
-                LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .alpha(if (isSearching) 0.55f else 1.0f)
+                ) {
                     items(timeline) { item ->
                         when (item) {
                             is TlItem.Stop -> TimelineRow(
@@ -847,33 +939,60 @@ fun RouteDetailPanel(
                     item { Spacer(Modifier.height(16.dp)) }
                 }
             } else {
-                // 運行便なし (終電後など) プレースホルダー表示
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 28.dp, horizontal = 24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text("🌙", fontSize = 42.sp)
-                    Text(
-                        text = "指定された日時に運行便がありません",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "終電後などの時間帯です。\n上記の日付・時刻チップから運行時間帯を指定するか、翌朝の便で再検索してください。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                    if (onSearchTomorrowMorning != null) {
-                        Button(
-                            onClick = onSearchTomorrowMorning,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.padding(top = 4.dp)
-                        ) {
-                            Text("翌朝 06:00 で再検索", fontWeight = FontWeight.Bold)
+                if (isSearching) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 36.dp, horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(36.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 3.dp
+                        )
+                        Text(
+                            text = "最適な経路を検索しています…",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "時刻表データと路線ネットワークを照合中",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    // 運行便なし (終電後など) プレースホルダー表示
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 28.dp, horizontal = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text("🌙", fontSize = 42.sp)
+                        Text(
+                            text = "指定された日時に運行便がありません",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "終電後などの時間帯です。\n上記の日付・時刻チップから運行時間帯を指定するか、翌朝の便で再検索してください。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                        if (onSearchTomorrowMorning != null) {
+                            Button(
+                                onClick = onSearchTomorrowMorning,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.padding(top = 4.dp)
+                            ) {
+                                Text("翌朝 06:00 で再検索", fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }

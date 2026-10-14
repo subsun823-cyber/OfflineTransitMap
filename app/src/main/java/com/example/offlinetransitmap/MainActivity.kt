@@ -529,6 +529,9 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 if (bestItin != null) {
                                     candidateItineraries = candidates
                                     selectedItinerary = bestItin
+                                    if (bestItin.isNextDayFirstTrain) {
+                                        routeTargetTime = bestItin.departure
+                                    }
                                     isTransitRoutePanelOpen = true
                                 } else {
                                     candidateItineraries = emptyList()
@@ -1027,7 +1030,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                 isSearchingForDestination = false
                                 if (routes.isNotEmpty()) {
                                     candidateItineraries = routes
-                                    selectedItinerary = routes.first()
+                                    val first = routes.first()
+                                    selectedItinerary = first
+                                    if (first.isNextDayFirstTrain) {
+                                        routeTargetTime = first.departure
+                                    }
                                 } else {
                                     candidateItineraries = emptyList()
                                     selectedItinerary = null
@@ -1047,6 +1054,7 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     viaNames = vias.map { it.name },
                     targetTime = routeTargetTime,
                     timeType = routeTimeType,
+                    isSearching = isSearchingForDestination,
                     onTimeChanged = { newTime, newType ->
                         routeTargetTime = newTime
                         routeTimeType = newType
@@ -1155,7 +1163,11 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                                         isSearchingForDestination = false
                                         if (routes.isNotEmpty()) {
                                             candidateItineraries = routes
-                                            selectedItinerary = routes.first()
+                                            val first = routes.first()
+                                            selectedItinerary = first
+                                            if (first.isNextDayFirstTrain) {
+                                                routeTargetTime = first.departure
+                                            }
                                         } else {
                                             Toast.makeText(context, "指定された区間の経路が見つかりませんでした", Toast.LENGTH_SHORT).show()
                                         }

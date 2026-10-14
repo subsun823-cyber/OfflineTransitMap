@@ -61,7 +61,8 @@ data class Itinerary(
     val fare: Int?,
     val knownFare: Int,
     val routeKey: String,
-    val isDestStation: Boolean = false
+    val isDestStation: Boolean = false,
+    val isNextDayFirstTrain: Boolean = false
 )
 
 private const val INF = 1_000_000_000
@@ -1263,7 +1264,7 @@ class RouteSearcher(private val db: SQLiteDatabase) {
             val transitSearchTime = now.plusMinutes(originWalkMin.toLong())
 
             val transitRoutes = if (originSt.group != destSt.group) {
-                if (timeType == TimeTargetType.ARRIVE) {
+                val found = if (timeType == TimeTargetType.ARRIVE) {
                     // 到着時刻指定: 目標時刻の最大120分前から探索(長距離移動も確実に網羅)
                     val searchStart = now.minusMinutes(120)
                     val allCandidates = findRoutes(originSt.id, destSt.id, searchStart)
@@ -1278,6 +1279,18 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     }
                 } else {
                     findRoutes(originSt.id, destSt.id, transitSearchTime)
+                }
+
+                // 終電後などの時間帯で便が見つからない場合: 翌朝の始発時間帯(04:30〜)から自動探索して翌朝の一番早いルートを提示
+                if (found.isEmpty() && timeType == TimeTargetType.DEPART) {
+                    val baseDate = if (transitSearchTime.hour < 4) transitSearchTime.toLocalDate() else transitSearchTime.toLocalDate().plusDays(1)
+                    var morningCandidates = findRoutes(originSt.id, destSt.id, baseDate.atTime(4, 30))
+                    if (morningCandidates.isEmpty()) {
+                        morningCandidates = findRoutes(originSt.id, destSt.id, baseDate.atTime(6, 30))
+                    }
+                    morningCandidates.map { it.copy(isNextDayFirstTrain = true) }
+                } else {
+                    found
                 }
             } else {
                 emptyList()
@@ -1486,7 +1499,8 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                     fare = totalFare,
                     knownFare = knownFare,
                     routeKey = keyParts.joinToString("||"),
-                    isDestStation = isDestStation
+                    isDestStation = isDestStation,
+                    isNextDayFirstTrain = segments.any { it.isNextDayFirstTrain }
                 )
             )
         } catch (e: Throwable) {

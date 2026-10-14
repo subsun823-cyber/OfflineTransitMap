@@ -900,6 +900,32 @@ class DestinationNavigationTest {
         val directM = calcDistanceMeters(p1.first, p1.second, p2.first, p2.second)
         assertTrue("Direct distance between bus stops should be positive: $directM", directM > 0)
     }
+
+    @Test
+    fun testItineraryNextDayFirstTrainFlag() {
+        val now = LocalDateTime.of(2026, 10, 14, 23, 45)
+        val morning = LocalDateTime.of(2026, 10, 15, 5, 12)
+        val itinNormal = Itinerary(
+            legs = emptyList(),
+            departure = now,
+            arrival = now.plusMinutes(30),
+            transfers = 0,
+            fare = 200,
+            knownFare = 200,
+            routeKey = "normal"
+        )
+        assertFalse("Default isNextDayFirstTrain should be false", itinNormal.isNextDayFirstTrain)
+
+        val itinMorning = itinNormal.copy(
+            departure = morning,
+            arrival = morning.plusMinutes(30),
+            isNextDayFirstTrain = true
+        )
+        assertTrue("isNextDayFirstTrain should be true", itinMorning.isNextDayFirstTrain)
+
+        val itinCopied = itinMorning.copy(transfers = 1)
+        assertTrue("isNextDayFirstTrain should be preserved across copy()", itinCopied.isNextDayFirstTrain)
+    }
 }
 
 
