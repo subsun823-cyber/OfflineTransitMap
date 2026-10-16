@@ -62,7 +62,8 @@ fun SettingsScreen(
     preferences: AppPreferences,
     onChange: (AppPreferences) -> Unit,
     dataNote: String = "",
-    onMapUpdated: () -> Unit = {}
+    onMapUpdated: () -> Unit = {},
+    onStartDemoNavigation: ((Itinerary) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -239,11 +240,44 @@ fun SettingsScreen(
                 }
             }
             item {
-                SettingsGroup("ナビゲーション") {
+                var showLcdPreviewDialog by remember { mutableStateOf(false) }
+                SettingsGroup("ナビゲーション・車内LCDモニター") {
                     SettingSwitch(
                         "ナビ中は画面を消さない", "アプリを表示している間に適用します。電池の消費が増えます。",
                         preferences.keepScreenOnDuringNavigation
                     ) { onChange(preferences.copy(keepScreenOnDuringNavigation = it)) }
+
+                    HorizontalDivider()
+                    SettingSwitch(
+                        "車内LCDテストモード（現地に行かずに確認）",
+                        "ナビ画面で駅から離れていても車内LCD（電車・バス）を強制表示し、手動・自動デモで『この電車は』『次は』『まもなく』『ただいま』や停車駅を自由に切り替えられるようにします。",
+                        preferences.lcdTestMode
+                    ) { enabled ->
+                        if (!enabled) LcdTestController.reset()
+                        onChange(preferences.copy(lcdTestMode = enabled))
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = { showLcdPreviewDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("🖥️ 車内LCDモニター（電車・バス）テスト画面を開く")
+                    }
+                    SettingNote("ボタンを押すと、この場で直ちにJR埼京線（参照動画再現）・中央特快・山手線・京王線・西東京バスの車内LCD表示と各フェーズを確認できます。")
+                }
+
+                if (showLcdPreviewDialog) {
+                    LcdTestPreviewDialog(
+                        onDismiss = { showLcdPreviewDialog = false },
+                        onStartDemoNavigation = onStartDemoNavigation?.let { startNav ->
+                            { demoItin ->
+                                showLcdPreviewDialog = false
+                                onChange(preferences.copy(lcdTestMode = true))
+                                startNav(demoItin)
+                            }
+                        }
+                    )
                 }
             }
             item {

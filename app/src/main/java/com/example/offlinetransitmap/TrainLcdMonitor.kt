@@ -21,9 +21,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -34,14 +37,21 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +79,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.delay
 import java.time.Duration
 import java.time.LocalDateTime
@@ -89,6 +101,21 @@ enum class TrainLcdLangMode {
     KANJI,
     ENGLISH,
     HIRAGANA
+}
+
+// 現地に行かずに車内LCDの動作・フェーズを確認するためのテストコントローラー
+object LcdTestController {
+    var autoDemo by mutableStateOf(false)
+    var phaseOverride by mutableStateOf<TrainLcdPhase?>(null)
+    var stopIndexOverride by mutableIntStateOf(1)
+    var twoRowOverride by mutableStateOf<Boolean?>(null)
+
+    fun reset() {
+        autoDemo = false
+        phaseOverride = null
+        stopIndexOverride = 1
+        twoRowOverride = null
+    }
 }
 
 // 路線テーマ・駅ナンバリング情報
@@ -136,7 +163,11 @@ fun TrainLcdMonitorCard(
     guidance: Guidance?,
     itinerary: Itinerary?,
     location: Location?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    testPhaseOverride: TrainLcdPhase? = LcdTestController.phaseOverride,
+    testStopIndexOverride: Int? = if (LcdTestController.phaseOverride != null || LcdTestController.autoDemo) LcdTestController.stopIndexOverride else null,
+    testProgressOverride: Float? = null,
+    testTwoRowOverride: Boolean? = LcdTestController.twoRowOverride
 ) {
     val legs = itinerary?.legs ?: emptyList()
 
@@ -201,13 +232,16 @@ fun TrainLcdMonitorCard(
     }
     val displayCarNo = carCount
 
-    // 3. GPS位置と時刻表から現在の走行フェーズ（この電車は / 次は / まもなく / ただいま）と各駅の所要分数を特定
+    // 3. GPS位置と時刻表（およびテストモードオーバーライド）から現在の走行フェーズと各駅の所要分数を特定
     val lcdState = resolveTrainLcdState(
         trainLeg = trainLeg,
         guidance = guidance,
         location = location,
         now = now,
-        linePrefix = lineTheme.linePrefix
+        linePrefix = lineTheme.linePrefix,
+        testPhaseOverride = testPhaseOverride,
+        testStopIndexOverride = testStopIndexOverride,
+        testProgressOverride = testProgressOverride
     )
 
     val phase = lcdState.phase
@@ -232,10 +266,12 @@ fun TrainLcdMonitorCard(
         targetStop.stationNumberDigits
     }
 
-    // 下部エリアの2段全駅一覧切替（BEFORE_DEPARTURE かつ 駅数が8駅超のとき、9.6秒周期で1段バー ⇔ 2段バー切替）
-    val showTwoRowAllStations = phase == TrainLcdPhase.BEFORE_DEPARTURE &&
-        lcdState.allStops.size > 8 &&
-        ((tickMillis / 9600L) % 2L == 1L)
+    // 下部エリアの2段全駅一覧切替（BEFORE_DEPARTURE かつ 駅数が8駅超のとき、またはテスト2段指定時）
+    val showTwoRowAllStations = testTwoRowOverride ?: (
+        phase == TrainLcdPhase.BEFORE_DEPARTURE &&
+            lcdState.allStops.size > 8 &&
+            ((tickMillis / 9600L) % 2L == 1L)
+        )
 
     // 外枠ベゼル（車内LCDディスプレイ筐体フレーム）
     Card(
@@ -1824,7 +1860,10 @@ fun resolveTrainLcdState(
     guidance: Guidance?,
     location: Location?,
     now: LocalDateTime,
-    linePrefix: String
+    linePrefix: String,
+    testPhaseOverride: TrainLcdPhase? = null,
+    testStopIndexOverride: Int? = null,
+    testProgressOverride: Float? = null
 ): TrainLcdResolvedState {
     val legStops = if (trainLeg.intermediateStops.size >= 2) {
         trainLeg.intermediateStops
@@ -2011,6 +2050,36 @@ fun resolveTrainLcdState(
                     }
                     break
                 }
+            }
+        }
+    }
+
+    // テスト用モードのオーバーライドが指定されている場合は優先適用
+    if (testPhaseOverride != null || testStopIndexOverride != null) {
+        val ovPhase = testPhaseOverride ?: resolvedPhase
+        resolvedPhase = ovPhase
+        val maxIdx = fullStops.lastIndex.coerceAtLeast(1)
+        val reqIdx = (testStopIndexOverride ?: targetIdx).coerceIn(1, maxIdx)
+        when (ovPhase) {
+            TrainLcdPhase.BEFORE_DEPARTURE -> {
+                prevIdx = 0
+                targetIdx = 1.coerceAtMost(maxIdx)
+                segProgress = 0f
+            }
+            TrainLcdPhase.STOPPING_AT -> {
+                prevIdx = reqIdx
+                targetIdx = reqIdx
+                segProgress = 0f
+            }
+            TrainLcdPhase.ARRIVING_AT -> {
+                prevIdx = (reqIdx - 1).coerceAtLeast(0)
+                targetIdx = reqIdx
+                segProgress = testProgressOverride ?: 0.82f
+            }
+            TrainLcdPhase.NEXT_STATION -> {
+                prevIdx = (reqIdx - 1).coerceAtLeast(0)
+                targetIdx = reqIdx
+                segProgress = testProgressOverride ?: 0.42f
             }
         }
     }
@@ -2584,3 +2653,586 @@ private fun darkenColor(color: Color, fraction: Float): Color {
     val b = (color.blue * (1f - fraction)).coerceIn(0f, 1f)
     return Color(r, g, b, color.alpha)
 }
+
+// ============================================================================
+// 現地に行かずに確認できる「車内LCDモニター テスト・プレビュー機能」
+// ============================================================================
+
+data class LcdTestPreset(
+    val id: String,
+    val title: String,
+    val isBus: Boolean,
+    val itinerary: Itinerary
+)
+
+/**
+ * ナビ画面（NavigationOverlay）上で LCDテストモードがONのときに表示されるコンパクト操作バー
+ */
+@Composable
+fun LcdTestNavOverlayBar(
+    activeLeg: RouteLeg,
+    modifier: Modifier = Modifier
+) {
+    val totalStops = maxOf(activeLeg.tripRemainingStops.size, activeLeg.intermediateStops.size, 2)
+    val maxIdx = (totalStops - 1).coerceAtLeast(1)
+    val stopList = when {
+        activeLeg.tripRemainingStops.size >= 2 -> activeLeg.tripRemainingStops
+        activeLeg.intermediateStops.size >= 2 -> activeLeg.intermediateStops
+        else -> listOf(activeLeg.fromName, activeLeg.toName)
+    }
+
+    // 自動デモ進行ループ
+    LaunchedEffect(LcdTestController.autoDemo, maxIdx) {
+        if (LcdTestController.autoDemo) {
+            if (LcdTestController.phaseOverride == null) {
+                LcdTestController.phaseOverride = TrainLcdPhase.BEFORE_DEPARTURE
+                LcdTestController.stopIndexOverride = 1
+                LcdTestController.twoRowOverride = false
+            }
+            while (LcdTestController.autoDemo) {
+                delay(5500L)
+                if (!LcdTestController.autoDemo) break
+                when (LcdTestController.phaseOverride) {
+                    TrainLcdPhase.BEFORE_DEPARTURE -> {
+                        if (totalStops > 8 && LcdTestController.twoRowOverride != true) {
+                            LcdTestController.twoRowOverride = true
+                        } else {
+                            LcdTestController.twoRowOverride = null
+                            LcdTestController.phaseOverride = TrainLcdPhase.NEXT_STATION
+                        }
+                    }
+                    TrainLcdPhase.NEXT_STATION -> {
+                        LcdTestController.twoRowOverride = null
+                        LcdTestController.phaseOverride = TrainLcdPhase.ARRIVING_AT
+                    }
+                    TrainLcdPhase.ARRIVING_AT -> {
+                        LcdTestController.twoRowOverride = null
+                        LcdTestController.phaseOverride = TrainLcdPhase.STOPPING_AT
+                    }
+                    TrainLcdPhase.STOPPING_AT -> {
+                        LcdTestController.twoRowOverride = null
+                        if (LcdTestController.stopIndexOverride < maxIdx) {
+                            LcdTestController.stopIndexOverride += 1
+                            LcdTestController.phaseOverride = TrainLcdPhase.NEXT_STATION
+                        } else {
+                            LcdTestController.stopIndexOverride = 1
+                            LcdTestController.phaseOverride = TrainLcdPhase.BEFORE_DEPARTURE
+                            LcdTestController.twoRowOverride = false
+                        }
+                    }
+                    null -> {
+                        LcdTestController.phaseOverride = TrainLcdPhase.NEXT_STATION
+                    }
+                }
+            }
+        }
+    }
+
+    val curStopIdx = LcdTestController.stopIndexOverride.coerceIn(1, maxIdx)
+    val curStopName = stopList.getOrElse(curStopIdx) { activeLeg.toName }
+
+    Surface(
+        color = Color(0xEB0F172A),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, Color(0xFF38BDF8)),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "🧪 LCDテストモード（対象駅: $curStopName）",
+                    color = Color(0xFF38BDF8),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    LcdMiniChip(
+                        text = "◀ 前の駅",
+                        selected = false,
+                        onClick = {
+                            LcdTestController.stopIndexOverride = (curStopIdx - 1).coerceAtLeast(1)
+                            if (LcdTestController.phaseOverride == null) {
+                                LcdTestController.phaseOverride = TrainLcdPhase.NEXT_STATION
+                            }
+                        }
+                    )
+                    LcdMiniChip(
+                        text = "次の駅 ▶",
+                        selected = false,
+                        onClick = {
+                            LcdTestController.stopIndexOverride = (curStopIdx + 1).coerceAtMost(maxIdx)
+                            if (LcdTestController.phaseOverride == null) {
+                                LcdTestController.phaseOverride = TrainLcdPhase.NEXT_STATION
+                            }
+                        }
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                LcdMiniChip(
+                    text = if (LcdTestController.autoDemo) "⏸ 自動デモ中" else "▶ 自動デモ",
+                    selected = LcdTestController.autoDemo,
+                    accentColor = Color(0xFF10B981),
+                    onClick = {
+                        LcdTestController.autoDemo = !LcdTestController.autoDemo
+                        if (LcdTestController.autoDemo && LcdTestController.phaseOverride == null) {
+                            LcdTestController.phaseOverride = TrainLcdPhase.BEFORE_DEPARTURE
+                            LcdTestController.twoRowOverride = false
+                        }
+                    }
+                )
+                LcdMiniChip(
+                    text = "この電車は",
+                    selected = LcdTestController.phaseOverride == TrainLcdPhase.BEFORE_DEPARTURE && LcdTestController.twoRowOverride != true,
+                    onClick = {
+                        LcdTestController.autoDemo = false
+                        LcdTestController.phaseOverride = TrainLcdPhase.BEFORE_DEPARTURE
+                        LcdTestController.twoRowOverride = false
+                    }
+                )
+                if (totalStops > 8) {
+                    LcdMiniChip(
+                        text = "2段全駅",
+                        selected = LcdTestController.phaseOverride == TrainLcdPhase.BEFORE_DEPARTURE && LcdTestController.twoRowOverride == true,
+                        onClick = {
+                            LcdTestController.autoDemo = false
+                            LcdTestController.phaseOverride = TrainLcdPhase.BEFORE_DEPARTURE
+                            LcdTestController.twoRowOverride = true
+                        }
+                    )
+                }
+                LcdMiniChip(
+                    text = "次は",
+                    selected = LcdTestController.phaseOverride == TrainLcdPhase.NEXT_STATION,
+                    onClick = {
+                        LcdTestController.autoDemo = false
+                        LcdTestController.twoRowOverride = null
+                        LcdTestController.phaseOverride = TrainLcdPhase.NEXT_STATION
+                    }
+                )
+                LcdMiniChip(
+                    text = "まもなく",
+                    selected = LcdTestController.phaseOverride == TrainLcdPhase.ARRIVING_AT,
+                    onClick = {
+                        LcdTestController.autoDemo = false
+                        LcdTestController.twoRowOverride = null
+                        LcdTestController.phaseOverride = TrainLcdPhase.ARRIVING_AT
+                    }
+                )
+                LcdMiniChip(
+                    text = "ただいま(車両図)",
+                    selected = LcdTestController.phaseOverride == TrainLcdPhase.STOPPING_AT,
+                    onClick = {
+                        LcdTestController.autoDemo = false
+                        LcdTestController.twoRowOverride = null
+                        LcdTestController.phaseOverride = TrainLcdPhase.STOPPING_AT
+                    }
+                )
+                LcdMiniChip(
+                    text = "GPS自動",
+                    selected = LcdTestController.phaseOverride == null && !LcdTestController.autoDemo,
+                    onClick = {
+                        LcdTestController.reset()
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LcdMiniChip(
+    text: String,
+    selected: Boolean,
+    accentColor: Color = Color(0xFF0284C7),
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (selected) accentColor else Color(0xFF1E293B))
+            .border(
+                width = 1.dp,
+                color = if (selected) Color.White else Color(0xFF475569),
+                shape = RoundedCornerShape(6.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 10.5.sp,
+            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
+            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+        )
+    }
+}
+
+/**
+ * 設定画面から直接開いて現地に行かずに車内LCDモニター（電車＆バス）を確認・操作できるフルプレビューダイアログ
+ */
+@Composable
+fun LcdTestPreviewDialog(
+    onDismiss: () -> Unit,
+    onStartDemoNavigation: ((Itinerary) -> Unit)? = null
+) {
+    val presets = remember { buildSampleTestItineraries() }
+    var selectedPresetIdx by remember { mutableIntStateOf(0) }
+    val currentPreset = presets[selectedPresetIdx.coerceIn(presets.indices)]
+    val activeLeg = currentPreset.itinerary.legs.first()
+
+    // ダイアログを開いた時は初期状態で「自動デモ」または「この電車は」を分かりやすくセット
+    LaunchedEffect(selectedPresetIdx) {
+        LcdTestController.stopIndexOverride = 1
+        if (LcdTestController.phaseOverride == null) {
+            LcdTestController.phaseOverride = TrainLcdPhase.NEXT_STATION
+        }
+    }
+
+    // バスモード用に選択した停留所の模擬GPS座標を生成
+    val simulatedLocation = remember(
+        selectedPresetIdx,
+        LcdTestController.stopIndexOverride,
+        LcdTestController.phaseOverride
+    ) {
+        val coords = activeLeg.stopCoords
+        val idx = LcdTestController.stopIndexOverride.coerceIn(0, (coords.size - 1).coerceAtLeast(0))
+        val prevCoord = coords.getOrElse((idx - 1).coerceAtLeast(0)) { Pair(35.655, 139.338) }
+        val nextCoord = coords.getOrElse(idx) { prevCoord }
+        val ratio = when (LcdTestController.phaseOverride) {
+            TrainLcdPhase.BEFORE_DEPARTURE -> 0.0
+            TrainLcdPhase.STOPPING_AT -> 1.0
+            TrainLcdPhase.ARRIVING_AT -> 0.85
+            else -> 0.35
+        }
+        Location("lcd_test").apply {
+            latitude = prevCoord.first + (nextCoord.first - prevCoord.first) * ratio
+            longitude = prevCoord.second + (nextCoord.second - prevCoord.second) * ratio
+            speed = if (LcdTestController.phaseOverride == TrainLcdPhase.STOPPING_AT ||
+                LcdTestController.phaseOverride == TrainLcdPhase.BEFORE_DEPARTURE
+            ) 0f else 18f
+        }
+    }
+
+    val sampleGuidance = remember(currentPreset, LcdTestController.phaseOverride) {
+        Guidance(
+            kind = if (LcdTestController.phaseOverride == TrainLcdPhase.BEFORE_DEPARTURE) GuidanceKind.WAIT else GuidanceKind.RIDE,
+            title = "${activeLeg.toName}で降車",
+            subtitle = "${activeLeg.lineName} ${activeLeg.headsign}行",
+            distanceMeters = 1200,
+            targetLat = activeLeg.stopCoords.lastOrNull()?.first,
+            targetLon = activeLeg.stopCoords.lastOrNull()?.second,
+            next = "到着後、出口へ",
+            remainingMinutes = 18L,
+            arrival = LocalDateTime.now().plusMinutes(18)
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            color = Color(0xFF0B111E),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.5.dp, Color(0xFF334155)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // ダイアログヘッダー
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "🖥️ 車内LCDモニター テスト・プレビュー",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                        Text(
+                            text = "現地に行かずに各路線・各走行フェーズ・3言語切替を確認できます",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp
+                        )
+                    }
+                    TextButton(onClick = onDismiss) {
+                        Text("閉じる", color = Color(0xFF38BDF8), fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // 1. 路線プリセット選択タブ
+                Text(
+                    text = "① 路線プリセットを選択:",
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    presets.forEachIndexed { idx, preset ->
+                        val selected = idx == selectedPresetIdx
+                        LcdMiniChip(
+                            text = preset.title,
+                            selected = selected,
+                            accentColor = Color(0xFF2563EB),
+                            onClick = { selectedPresetIdx = idx }
+                        )
+                    }
+                }
+
+                // 2. 実物大 車内LCDモニター本体プレビュー
+                if (currentPreset.isBus) {
+                    BusMonitorTopCard(
+                        guidance = sampleGuidance,
+                        itinerary = currentPreset.itinerary,
+                        location = simulatedLocation
+                    )
+                } else {
+                    TrainLcdMonitorCard(
+                        guidance = sampleGuidance,
+                        itinerary = currentPreset.itinerary,
+                        location = simulatedLocation
+                    )
+                }
+
+                // 3. フェーズ・停車駅操作コントローラー
+                LcdTestNavOverlayBar(activeLeg = activeLeg)
+
+                // 4. 実際のナビ画面（地図＋運転台速度計＋LCD）でデモ開始するボタン
+                if (onStartDemoNavigation != null) {
+                    Button(
+                        onClick = {
+                            onStartDemoNavigation(currentPreset.itinerary)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "🗺️ この路線で実際のナビ画面（地図＋LCD＋速度計）を起動",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * テスト用のサンプル路線データ（動画再現のJR埼京線・JR中央線・JR山手線・京王線・西東京バス）
+ */
+fun buildSampleTestItineraries(): List<LcdTestPreset> {
+    val now = LocalDateTime.now()
+
+    // 1. JR埼京線 各駅停車 新木場行 (大宮 -> 新木場) [参照動画4本と完全同一の路線・駅構成]
+    val saikyoStops = listOf(
+        "大宮", "北与野", "与野本町", "南与野", "中浦和", "武蔵浦和", "北戸田", "戸田",
+        "戸田公園", "浮間舟渡", "北赤羽", "赤羽", "十条", "板橋", "池袋", "新宿",
+        "渋谷", "恵比寿", "大崎", "新木場"
+    )
+    val saikyoKanas = listOf(
+        "おおみや", "きたよの", "よのほんまち", "みなみよの", "なかうらわ", "むさしうらわ", "きたとだ", "とだ",
+        "とだこうえん", "うきまふなど", "きたあかばね", "あかばね", "じゅうじょう", "いたばし", "いけぶくろ", "しんじゅく",
+        "しぶや", "えびす", "おおさき", "しんきば"
+    )
+    val saikyoMins = listOf(0, 3, 5, 7, 9, 11, 13, 15, 18, 21, 23, 26, 29, 32, 35, 41, 46, 48, 52, 64)
+    val saikyoCoords = listOf(
+        Pair(35.9063, 139.6240), Pair(35.8953, 139.6285), Pair(35.8810, 139.6260), Pair(35.8675, 139.6311),
+        Pair(35.8539, 139.6374), Pair(35.8459, 139.6468), Pair(35.8271, 139.6606), Pair(35.8176, 139.6697),
+        Pair(35.8080, 139.6780), Pair(35.7912, 139.6913), Pair(35.7869, 139.7058), Pair(35.7777, 139.7209),
+        Pair(35.7606, 139.7223), Pair(35.7453, 139.7194), Pair(35.7295, 139.7109), Pair(35.6896, 139.7006),
+        Pair(35.6580, 139.7016), Pair(35.6467, 139.7101), Pair(35.6197, 139.7286), Pair(35.6459, 139.8265)
+    )
+    val saikyoLeg = RouteLeg(
+        isWalk = false,
+        fromName = "大宮",
+        toName = "新木場",
+        depTime = now.minusMinutes(1),
+        arrTime = now.plusMinutes(63),
+        operatorLabel = "JR東日本",
+        lineName = "埼京線",
+        lineColor = 0xFF00AC9AL,
+        headsign = "新木場",
+        platform = "19番線",
+        trainType = "各駅停車",
+        fare = 760,
+        path = saikyoCoords,
+        intermediateStops = saikyoStops,
+        stopCoords = saikyoCoords,
+        stopKanas = saikyoKanas,
+        stopArrMinutes = saikyoMins,
+        headsignKana = "しんきば",
+        tripRemainingStops = saikyoStops,
+        tripRemainingKanas = saikyoKanas,
+        tripRemainingMinutes = saikyoMins
+    )
+
+    // 2. JR中央線 中央特快 東京行 (高尾 -> 東京)
+    val chuoStops = listOf(
+        "高尾", "西八王子", "八王子", "豊田", "日野", "立川", "国分寺", "三鷹", "中野", "新宿", "四ツ谷", "御茶ノ水", "神田", "東京"
+    )
+    val chuoMins = listOf(0, 3, 6, 10, 13, 17, 24, 31, 40, 45, 50, 55, 58, 60)
+    val chuoCoords = listOf(
+        Pair(35.6421, 139.2818), Pair(35.6566, 139.3125), Pair(35.6556, 139.3389), Pair(35.6595, 139.3814),
+        Pair(35.6791, 139.3937), Pair(35.6980, 139.4137), Pair(35.7001, 139.4803), Pair(35.7027, 139.5608),
+        Pair(35.7058, 139.6658), Pair(35.6896, 139.7006), Pair(35.6860, 139.7306), Pair(35.6998, 139.7638),
+        Pair(35.6917, 139.7709), Pair(35.6812, 139.7671)
+    )
+    val chuoLeg = RouteLeg(
+        isWalk = false,
+        fromName = "高尾",
+        toName = "東京",
+        depTime = now.minusMinutes(1),
+        arrTime = now.plusMinutes(59),
+        operatorLabel = "JR東日本",
+        lineName = "中央線",
+        lineColor = 0xFFF15A22L,
+        headsign = "東京",
+        platform = "2番線",
+        trainType = "中央特快",
+        fare = 900,
+        path = chuoCoords,
+        intermediateStops = chuoStops,
+        stopCoords = chuoCoords,
+        stopArrMinutes = chuoMins,
+        headsignKana = "とうきょう",
+        tripRemainingStops = chuoStops,
+        tripRemainingMinutes = chuoMins
+    )
+
+    // 3. JR山手線 各駅停車 東京行 (新宿 -> 東京)
+    val yamanoteStops = listOf(
+        "新宿", "代々木", "原宿", "渋谷", "恵比寿", "目黒", "五反田", "大崎", "品川", "高輪ゲートウェイ", "田町", "浜松町", "新橋", "有楽町", "東京"
+    )
+    val yamanoteMins = listOf(0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 23, 26, 28, 30, 32)
+    val yamanoteCoords = yamanoteStops.indices.map { i -> Pair(35.6896 - i * 0.002, 139.7006 + i * 0.004) }
+    val yamanoteLeg = RouteLeg(
+        isWalk = false,
+        fromName = "新宿",
+        toName = "東京",
+        depTime = now.minusMinutes(1),
+        arrTime = now.plusMinutes(31),
+        operatorLabel = "JR東日本",
+        lineName = "山手線",
+        lineColor = 0xFF9ACD32L,
+        headsign = "東京",
+        platform = "14番線",
+        trainType = "各駅停車",
+        fare = 210,
+        path = yamanoteCoords,
+        intermediateStops = yamanoteStops,
+        stopCoords = yamanoteCoords,
+        stopArrMinutes = yamanoteMins,
+        headsignKana = "とうきょう",
+        tripRemainingStops = yamanoteStops,
+        tripRemainingMinutes = yamanoteMins
+    )
+
+    // 4. 京王線 特急 新宿行 (京王八王子 -> 新宿)
+    val keioStops = listOf(
+        "京王八王子", "北野", "高幡不動", "聖蹟桜ヶ丘", "分倍河原", "府中", "調布", "千歳烏山", "明大前", "笹塚", "新宿"
+    )
+    val keioMins = listOf(0, 3, 9, 13, 17, 19, 25, 31, 35, 38, 42)
+    val keioCoords = keioStops.indices.map { i -> Pair(35.6580 + i * 0.003, 139.3430 + i * 0.035) }
+    val keioLeg = RouteLeg(
+        isWalk = false,
+        fromName = "京王八王子",
+        toName = "新宿",
+        depTime = now.minusMinutes(1),
+        arrTime = now.plusMinutes(41),
+        operatorLabel = "京王電鉄",
+        lineName = "京王線",
+        lineColor = 0xFFDD0077L,
+        headsign = "新宿",
+        platform = "2番線",
+        trainType = "特急",
+        fare = 410,
+        path = keioCoords,
+        intermediateStops = keioStops,
+        stopCoords = keioCoords,
+        stopArrMinutes = keioMins,
+        headsignKana = "しんじゅく",
+        tripRemainingStops = keioStops,
+        tripRemainingMinutes = keioMins
+    )
+
+    // 5. 西東京バス 恩方ターミナル行 (八王子駅北口 -> 恩方ターミナル)
+    val busStops = listOf(
+        "八王子駅北口", "追分", "楢原町", "川原宿", "川原宿大橋", "恩方上宿", "恩方営業所", "恩方ターミナル"
+    )
+    val busMins = listOf(0, 6, 14, 21, 23, 26, 29, 32)
+    val busCoords = busStops.indices.map { i -> Pair(35.6565 + i * 0.004, 139.3385 - i * 0.012) }
+    val busLeg = RouteLeg(
+        isWalk = false,
+        fromName = "八王子駅北口",
+        toName = "恩方ターミナル",
+        depTime = now.minusMinutes(1),
+        arrTime = now.plusMinutes(31),
+        operatorLabel = "西東京バス",
+        lineName = "西東京バス 陣04",
+        lineColor = 0xFFC0262DL,
+        headsign = "恩方ターミナル",
+        platform = "9番のりば",
+        trainType = "路線バス",
+        fare = 450,
+        path = busCoords,
+        intermediateStops = busStops,
+        stopCoords = busCoords,
+        stopArrMinutes = busMins,
+        tripRemainingStops = busStops,
+        tripRemainingMinutes = busMins
+    )
+
+    fun wrapItin(leg: RouteLeg, key: String) = Itinerary(
+        legs = listOf(leg),
+        departure = leg.depTime ?: now,
+        arrival = leg.arrTime ?: now.plusMinutes(30),
+        transfers = 0,
+        fare = leg.fare,
+        knownFare = leg.fare ?: 0,
+        routeKey = key,
+        isDestStation = true
+    )
+
+    return listOf(
+        LcdTestPreset("saikyo", "🚃 JR埼京線 (動画再現)", false, wrapItin(saikyoLeg, "test_saikyo")),
+        LcdTestPreset("chuo", "🚃 JR中央特快 (高尾→東京)", false, wrapItin(chuoLeg, "test_chuo")),
+        LcdTestPreset("yamanote", "🚃 JR山手線 (新宿→東京)", false, wrapItin(yamanoteLeg, "test_yamanote")),
+        LcdTestPreset("keio", "🚃 京王線特急 (八王子→新宿)", false, wrapItin(keioLeg, "test_keio")),
+        LcdTestPreset("bus", "🚌 西東京バス (恩方行)", true, wrapItin(busLeg, "test_bus"))
+    )
+}
+

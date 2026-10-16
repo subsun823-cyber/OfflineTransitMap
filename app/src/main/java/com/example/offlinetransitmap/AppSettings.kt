@@ -32,7 +32,9 @@ data class AppPreferences(
     val hobbyHighlightCrossings: Boolean = true,
     val hobbySunGuide: Boolean = true,
     val hobbyCrossingAlert: Boolean = true,
-    val hobbyCompositionGrid: Boolean = false
+    val hobbyCompositionGrid: Boolean = false,
+    // 車内LCDモニター テスト用モード（現地に行かずに確認可能）
+    val lcdTestMode: Boolean = false
 )
 
 // 小さな設定だけを保存する。地図・時刻表データには触れない。
@@ -50,7 +52,8 @@ class AppSettings(private val storage: SharedPreferences) {
             hobbyHighlightCrossings = storage.getBoolean("hobby_highlight_crossings", true),
             hobbySunGuide = storage.getBoolean("hobby_sun_guide", true),
             hobbyCrossingAlert = storage.getBoolean("hobby_crossing_alert", true),
-            hobbyCompositionGrid = storage.getBoolean("hobby_composition_grid", false)
+            hobbyCompositionGrid = storage.getBoolean("hobby_composition_grid", false),
+            lcdTestMode = storage.getBoolean("lcd_test_mode", false)
         )
     )
         private set
@@ -69,6 +72,7 @@ class AppSettings(private val storage: SharedPreferences) {
             .putBoolean("hobby_sun_guide", preferences.hobbySunGuide)
             .putBoolean("hobby_crossing_alert", preferences.hobbyCrossingAlert)
             .putBoolean("hobby_composition_grid", preferences.hobbyCompositionGrid)
+            .putBoolean("lcd_test_mode", preferences.lcdTestMode)
             .apply()
         value = preferences
     }

@@ -839,7 +839,7 @@ private data class BusMonitorStop(
 // 西東京バスなどの車内LCDモニター風案内表示トップカード
 // （画面A: 手前から奥へパースペクティブに広がるルートリボン ＆ 画面B: 系統・経由・行先モニターを一定時間ごとにクロスフェード切替）
 @Composable
-private fun BusMonitorTopCard(
+internal fun BusMonitorTopCard(
     guidance: Guidance?,
     itinerary: Itinerary?,
     location: Location?,
@@ -2026,15 +2026,9 @@ fun NavigationOverlay(
     onRecenter: () -> Unit,
     onStop: () -> Unit,
     nearbyCrossing: LevelCrossingItem? = null,
+    lcdTestMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val speedKmh = if (location != null && location.hasSpeed()) {
-        (location.speed * 3.6f).coerceAtLeast(0f)
-    } else {
-        0f
-    }
-    val hasGps = location != null
-
     val itin = NavigationState.itinerary
     val legs = itin?.legs ?: emptyList()
     val now = LocalDateTime.now()
@@ -2043,6 +2037,39 @@ fun NavigationOverlay(
         (leg.arrTime == null || now.isBefore(leg.arrTime.plusMinutes(2)))
     } ?: legs.firstOrNull { !it.isWalk && it.lineName != "自転車" }
 
+    val effectiveLocation = if (lcdTestMode && activeTransitLeg != null &&
+        (LcdTestController.phaseOverride != null || LcdTestController.autoDemo || location == null)
+    ) {
+        val coords = activeTransitLeg.stopCoords
+        val idx = LcdTestController.stopIndexOverride.coerceIn(0, (coords.size - 1).coerceAtLeast(0))
+        val prevCoord = coords.getOrElse((idx - 1).coerceAtLeast(0)) { Pair(35.6896, 139.7006) }
+        val nextCoord = coords.getOrElse(idx) { prevCoord }
+        val ratio = when (LcdTestController.phaseOverride) {
+            TrainLcdPhase.BEFORE_DEPARTURE -> 0.0
+            TrainLcdPhase.STOPPING_AT -> 1.0
+            TrainLcdPhase.ARRIVING_AT -> 0.85
+            else -> 0.45
+        }
+        Location("lcd_test").apply {
+            latitude = prevCoord.first + (nextCoord.first - prevCoord.first) * ratio
+            longitude = prevCoord.second + (nextCoord.second - prevCoord.second) * ratio
+            speed = when (LcdTestController.phaseOverride) {
+                TrainLcdPhase.BEFORE_DEPARTURE, TrainLcdPhase.STOPPING_AT -> 0f
+                TrainLcdPhase.ARRIVING_AT -> 10.5f
+                else -> 21.0f
+            }
+        }
+    } else {
+        location
+    }
+
+    val speedKmh = if (effectiveLocation != null && effectiveLocation.hasSpeed()) {
+        (effectiveLocation.speed * 3.6f).coerceAtLeast(0f)
+    } else {
+        0f
+    }
+    val hasGps = effectiveLocation != null
+
     val isBus = activeTransitLeg != null && (
         activeTransitLeg.lineName.contains("バス") ||
         activeTransitLeg.operatorLabel.contains("バス") ||
@@ -2050,8 +2077,10 @@ fun NavigationOverlay(
         activeTransitLeg.trainType.contains("バス")
     )
 
-    // 電車・バス乗車中または駅で待機中かどうか判定（トレインビジョンやバスモニター、鉄道計器の表示対象）
-    val isTrainLcdMode = guidance?.kind == GuidanceKind.RIDE || guidance?.kind == GuidanceKind.WAIT
+    // 電車・バス乗車中または駅で待機中かどうか判定（テストモードON時は現地に行かなくても強制的にLCDを表示）
+    val isTrainLcdMode = guidance?.kind == GuidanceKind.RIDE ||
+        guidance?.kind == GuidanceKind.WAIT ||
+        (lcdTestMode && activeTransitLeg != null)
 
     Box(modifier = modifier.fillMaxSize()) {
         // 上部: 案内カード (バス乗車時は西東京バス風モニター表示、電車時はトレインビジョン/発車標、徒歩・自転車はターンバイターン案内)
@@ -2067,14 +2096,17 @@ fun NavigationOverlay(
                     BusMonitorTopCard(
                         guidance = guidance,
                         itinerary = NavigationState.itinerary,
-                        location = location
+                        location = effectiveLocation
                     )
                 } else {
                     TrainLcdTopCard(
                         guidance = guidance,
                         itinerary = NavigationState.itinerary,
-                        location = location
+                        location = effectiveLocation
                     )
+                }
+                if (lcdTestMode && activeTransitLeg != null) {
+                    LcdTestNavOverlayBar(activeLeg = activeTransitLeg)
                 }
             } else {
                 TopManeuverCard(guidance = guidance)

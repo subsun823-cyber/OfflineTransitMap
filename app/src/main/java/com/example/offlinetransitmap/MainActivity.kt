@@ -379,10 +379,10 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
         } else {
             mode
         }
-        if (!hasLocationPermission) {
+        if (!hasLocationPermission && !preferences.lcdTestMode) {
             permissionLauncher.launch(locationPermissions)
             Toast.makeText(context, "位置情報を許可してから、もう一度「ナビ開始」を押してください", Toast.LENGTH_LONG).show()
-        } else if (Build.VERSION.SDK_INT >= 33 &&
+        } else if (!preferences.lcdTestMode && Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 context, Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
@@ -1210,8 +1210,10 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     followLost = followLost,
                     onRecenter = { recenterRequest++ },
                     nearbyCrossing = nearbyCrossingAlert,
+                    lcdTestMode = preferences.lcdTestMode,
                     onStop = {
                         NavigationController.stop(context)
+                        LcdTestController.reset()
                         transitSearchJob?.cancel()
                         cachedTransitRoutes = null
                         destinationPoint = null
@@ -1231,7 +1233,17 @@ fun MapScreen(settings: AppSettings, darkTheme: Boolean, dataNote: String) {
                     preferences = preferences,
                     onChange = settings::update,
                     dataNote = dataNote,
-                    onMapUpdated = { mapReloadKey++ }
+                    onMapUpdated = { mapReloadKey++ },
+                    onStartDemoNavigation = { demoItin ->
+                        settings.update(preferences.copy(lcdTestMode = true))
+                        showSettings = false
+                        selectedItinerary = demoItin
+                        selectedTravelMode = TravelMode.TRANSIT
+                        NavigationController.start(context, demoItin, TravelMode.TRANSIT)
+                        demoItin.legs.firstOrNull()?.stopCoords?.firstOrNull()?.let { pt ->
+                            targetCameraPoint = pt
+                        }
+                    }
                 )
             }
 
