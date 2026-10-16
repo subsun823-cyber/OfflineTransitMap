@@ -44,7 +44,13 @@ data class RouteLeg(
     val trainType: String = "",
     val fareNote: String? = null,
     val intermediateStops: List<String> = emptyList(),
-    val stopCoords: List<Pair<Double, Double>> = emptyList()
+    val stopCoords: List<Pair<Double, Double>> = emptyList(),
+    val stopKanas: List<String> = emptyList(),
+    val stopArrMinutes: List<Int> = emptyList(),
+    val headsignKana: String = "",
+    val tripRemainingStops: List<String> = emptyList(),
+    val tripRemainingKanas: List<String> = emptyList(),
+    val tripRemainingMinutes: List<Int> = emptyList()
 )
 
 enum class SortMode { FASTEST, FEWEST_TRANSFERS, CHEAPEST }
@@ -987,6 +993,24 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                 val legIdx = legs.size
                 rideFareMetas.add(LegFareMeta(legIdx, isJr, jrKm, isYm, fare))
 
+                val baseDepSec = data.rowDep[leg.b]
+                val stopArrMins = (leg.b..leg.c).mapIndexed { idx, r ->
+                    if (idx == 0) 0 else ((data.rowArr[r] - baseDepSec) / 60.0).roundToInt().coerceAtLeast(idx)
+                }
+                val tripEndRow = (data.tripFirst[leg.a + 1] - 1).coerceAtLeast(leg.c)
+                val fullTripRows = (leg.b..tripEndRow).toList()
+                val fullTripStations = fullTripRows.map { r -> net.stations[data.rowStation[r]] }
+                val fullTripMins = fullTripRows.mapIndexed { idx, r ->
+                    if (idx == 0) 0 else ((data.rowArr[r] - baseDepSec) / 60.0).roundToInt().coerceAtLeast(idx)
+                }
+                val cleanHs = info.headsign.removeSuffix("行").removeSuffix("ゆき").removeSuffix("方面").trim()
+                val hsKana = if (cleanHs.isNotEmpty()) {
+                    net.stations.firstOrNull { it.name == cleanHs }?.kana
+                        ?: fullTripStations.lastOrNull()?.takeIf { it.name == cleanHs || cleanHs.contains(it.name) }?.kana
+                        ?: net.stations.firstOrNull { it.name.isNotEmpty() && cleanHs.startsWith(it.name) }?.kana
+                        ?: ""
+                } else ""
+
                 legs.add(
                     RouteLeg(
                         isWalk = false,
@@ -1006,7 +1030,13 @@ class RouteSearcher(private val db: SQLiteDatabase) {
                             Pair(st.lat, st.lon)
                         },
                         intermediateStops = legStations.map { it.name },
-                        stopCoords = legStations.map { Pair(it.lat, it.lon) }
+                        stopCoords = legStations.map { Pair(it.lat, it.lon) },
+                        stopKanas = legStations.map { it.kana },
+                        stopArrMinutes = stopArrMins,
+                        headsignKana = hsKana,
+                        tripRemainingStops = fullTripStations.map { it.name },
+                        tripRemainingKanas = fullTripStations.map { it.kana },
+                        tripRemainingMinutes = fullTripMins
                     )
                 )
                 keyParts.add("${info.routeId}>$fromSt>$toSt")
