@@ -14,6 +14,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -69,6 +71,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.PlatformTextStyle
@@ -135,6 +138,7 @@ data class TrainLcdStopItem(
     val stationNumberDigits: String, // 例: "25"
     val minutesFromNow: Int,
     val isAlightStation: Boolean,
+    val isPassStation: Boolean = false, // 通過駅（快速・特快・特急等で停車しない駅）は true
     val transferLines: List<TrainTransferBadgeInfo>
 )
 
@@ -259,11 +263,20 @@ fun TrainLcdMonitorCard(
         )
     }
 
-    // 始発停車中（BEFORE_DEPARTURE）のヘッダーバッジは行先駅の駅番号（例: 新木場 JA-01）を表示
-    val headerStationDigits = if (phase == TrainLcdPhase.BEFORE_DEPARTURE) {
-        resolveStationNumberDigits(lineTheme.linePrefix, headsignKanji, fallbackNum = 1)
+    // 始発停車中（BEFORE_DEPARTURE）のヘッダーバッジは行先駅の駅番号（例: 新木場 R-01）を表示
+    val rinkaiStations = remember {
+        setOf("新木場", "東雲", "国際展示場", "東京テレポート", "天王洲アイル", "品川シーサイド", "大井町")
+    }
+    val (headerBadgePrefix, headerBadgeColor, headerStationDigits) = if (phase == TrainLcdPhase.BEFORE_DEPARTURE) {
+        if (headsignKanji in rinkaiStations) {
+            Triple("R", Color(0xFF003894), resolveStationNumberDigits("R", headsignKanji, fallbackNum = 1))
+        } else {
+            Triple(lineTheme.linePrefix, lineColor, resolveStationNumberDigits(lineTheme.linePrefix, headsignKanji, fallbackNum = 1))
+        }
     } else {
-        targetStop.stationNumberDigits
+        val stopPrefix = targetStop.stationNumberCode.substringBefore("-", lineTheme.linePrefix)
+        val stopColor = if (stopPrefix == "R") Color(0xFF003894) else lineColor
+        Triple(stopPrefix, stopColor, targetStop.stationNumberDigits)
     }
 
     // 下部エリアの2段全駅一覧切替（BEFORE_DEPARTURE かつ 駅数が8駅超のとき、またはテスト2段指定時）
@@ -287,35 +300,21 @@ fun TrainLcdMonitorCard(
                 .fillMaxWidth()
                 .padding(3.dp)
                 .clip(RoundedCornerShape(7.dp))
-                .background(Color(0xFFF9FBFD))
+                .background(Color.White)
         ) {
             // =========================================================================
-            // 1. 最上段: 路線カラーアクセントライン ＋ 種別・行先・号車バー
+            // 1. 最上段: 種別バッジ ＋ 行先 ＋ 号車バッジ（動画準拠のシルバーグラデーション＆3D縦フリップ）
             // =========================================================================
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.5.dp)
-                    .background(
-                        Brush.horizontalGradient(
-                            colors = listOf(
-                                lineColor,
-                                lineColor,
-                                Color(0xFF1E242B)
-                            )
-                        )
-                    )
-            )
-
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(28.dp)
+                    .height(33.dp)
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color(0xFFF1F4F8),
-                                Color(0xFFDCE2EA)
+                                Color(0xFFBFC7D1),
+                                Color(0xFFE5EAF0),
+                                Color(0xFFFFFFFF)
                             )
                         )
                     )
@@ -323,144 +322,200 @@ fun TrainLcdMonitorCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 左: [種別バッジ] + 行先テキスト
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    // 種別バッジ (例: 各駅停車 / Local)
-                    Box(
-                        modifier = Modifier
-                            .height(21.dp)
-                            .width(74.dp)
-                            .background(
-                                brush = Brush.verticalGradient(
-                                    listOf(
-                                        lightenColor(typeBadgeColor, 0.12f),
-                                        typeBadgeColor,
-                                        darkenColor(typeBadgeColor, 0.15f)
-                                    )
-                                ),
-                                shape = RoundedCornerShape(3.5.dp)
-                            )
-                            .border(0.8.dp, darkenColor(typeBadgeColor, 0.25f), RoundedCornerShape(3.5.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val badgeText = if (langMode == TrainLcdLangMode.ENGLISH) typeEn else typeJp
-                        Text(
-                            text = badgeText,
-                            color = Color.White,
-                            fontSize = if (badgeText.length >= 6) 10.sp else 11.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            maxLines = 1,
-                            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                        )
-                    }
+                val isTopEnglish = (langMode == TrainLcdLangMode.ENGLISH)
 
-                    // 行先 (例: 新木場 行 / for Shin-Kiba)
-                    if (langMode == TrainLcdLangMode.ENGLISH) {
-                        Row(verticalAlignment = Alignment.Bottom) {
+                // 左: [種別バッジ] + 行先テキスト（日英切替時に3D縦フリップ）
+                AnimatedContent(
+                    targetState = isTopEnglish,
+                    transitionSpec = {
+                        (scaleIn(
+                            initialScale = 0.2f,
+                            transformOrigin = TransformOrigin(0.5f, 0f),
+                            animationSpec = tween(280, easing = FastOutSlowInEasing)
+                        ) + slideInVertically(animationSpec = tween(280)) { -it / 2 } +
+                            fadeIn(animationSpec = tween(220))) togetherWith
+                            (scaleOut(
+                                targetScale = 0.2f,
+                                transformOrigin = TransformOrigin(0.5f, 1f),
+                                animationSpec = tween(240, easing = FastOutSlowInEasing)
+                            ) + slideOutVertically(animationSpec = tween(240)) { it / 2 } +
+                                fadeOut(animationSpec = tween(180))) using
+                            SizeTransform(clip = false)
+                    },
+                    modifier = Modifier.weight(1f),
+                    label = "topHeaderTypeDestFlip"
+                ) { isEn ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // 種別バッジ (例: 各駅停車 / Local)
+                        Box(
+                            modifier = Modifier
+                                .height(26.dp)
+                                .width(88.dp)
+                                .background(
+                                    brush = Brush.verticalGradient(
+                                        listOf(
+                                            lightenColor(typeBadgeColor, 0.14f),
+                                            typeBadgeColor,
+                                            darkenColor(typeBadgeColor, 0.18f)
+                                        )
+                                    ),
+                                    shape = RoundedCornerShape(3.5.dp)
+                                )
+                                .border(1.2.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(3.5.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val badgeText = if (isEn) typeEn else typeJp
                             Text(
-                                text = "for ",
-                                color = Color(0xFF22262C),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
-                            Text(
-                                text = headsignRomaji,
-                                color = Color(0xFF111418),
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
+                                text = badgeText,
+                                color = Color.White,
+                                fontSize = when {
+                                    badgeText.length >= 12 -> 10.sp
+                                    badgeText.length >= 6 -> 12.sp
+                                    else -> 15.sp
+                                },
+                                fontWeight = FontWeight.Black,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                             )
                         }
-                    } else {
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = headsignKanji,
-                                color = Color(0xFF111418),
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
-                            Spacer(Modifier.width(3.dp))
-                            Text(
-                                text = "行",
-                                color = Color(0xFF22262C),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
+
+                        // 行先 (例: 新木場 行 / for Shin-Kiba)
+                        if (isEn) {
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    text = "for ",
+                                    color = Color(0xFF1E2228),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    modifier = Modifier.padding(bottom = 1.dp),
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                                Text(
+                                    text = headsignRomaji,
+                                    color = Color(0xFF0F1217),
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    text = headsignKanji,
+                                    color = Color(0xFF0F1217),
+                                    fontSize = 18.5.sp,
+                                    fontWeight = FontWeight.Black,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "行",
+                                    color = Color(0xFF1E2228),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    modifier = Modifier.padding(bottom = 1.dp),
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                            }
                         }
                     }
                 }
 
                 // 右: 号車バッジ (10号車 / Car No. 10)
-                Box(
-                    modifier = Modifier
-                        .height(22.dp)
-                        .background(
-                            brush = Brush.verticalGradient(
-                                listOf(Color(0xFF323842), Color(0xFF16191E))
-                            ),
-                            shape = RoundedCornerShape(3.5.dp)
-                        )
-                        .padding(horizontal = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (langMode == TrainLcdLangMode.ENGLISH) {
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = "Car No. ",
-                                color = Color.White,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                AnimatedContent(
+                    targetState = isTopEnglish,
+                    transitionSpec = {
+                        (scaleIn(
+                            initialScale = 0.25f,
+                            transformOrigin = TransformOrigin(0.5f, 0f),
+                            animationSpec = tween(280)
+                        ) + fadeIn(tween(220))) togetherWith
+                            (scaleOut(
+                                targetScale = 0.25f,
+                                transformOrigin = TransformOrigin(0.5f, 1f),
+                                animationSpec = tween(220)
+                            ) + fadeOut(tween(180))) using
+                            SizeTransform(clip = false)
+                    },
+                    label = "topCarBadgeFlip"
+                ) { isEn ->
+                    Box(
+                        modifier = Modifier
+                            .height(26.dp)
+                            .background(
+                                brush = Brush.verticalGradient(
+                                    listOf(Color(0xFF373D47), Color(0xFF14171C))
+                                ),
+                                shape = RoundedCornerShape(4.dp)
                             )
-                            Text(
-                                text = "$displayCarNo",
-                                color = Color.White,
-                                fontSize = 13.5.sp,
-                                fontWeight = FontWeight.Black,
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
-                        }
-                    } else {
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = "$displayCarNo",
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Black,
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
-                            Spacer(Modifier.width(1.5.dp))
-                            Text(
-                                text = "号車",
-                                color = Color.White,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(bottom = 1.dp),
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
+                            .border(0.8.dp, Color(0xFF64748B), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isEn) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Column(
+                                    horizontalAlignment = Alignment.Start,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = "Car",
+                                        color = Color.White,
+                                        fontSize = 8.sp,
+                                        lineHeight = 8.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                    )
+                                    Text(
+                                        text = "No.",
+                                        color = Color.White,
+                                        fontSize = 8.sp,
+                                        lineHeight = 8.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                    )
+                                }
+                                Text(
+                                    text = "$displayCarNo",
+                                    color = Color.White,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text(
+                                    text = "$displayCarNo",
+                                    color = Color.White,
+                                    fontSize = 18.5.sp,
+                                    fontWeight = FontWeight.Black,
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                                Spacer(Modifier.width(1.5.dp))
+                                Text(
+                                    text = "号車",
+                                    color = Color.White,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    modifier = Modifier.padding(bottom = 1.5.dp),
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                            }
                         }
                     }
                 }
             }
-
-            // 上段と中段の細い境界線
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(Color(0xFFC5CCD6))
-            )
 
             // =========================================================================
             // 2. 中段メインヘッダー: 状態ラベル ＋ 駅ナンバリング ＋ 特大駅名 ＋ 現在時刻
@@ -468,7 +523,7 @@ fun TrainLcdMonitorCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
+                    .height(62.dp)
                     .background(Color.White)
                     .padding(horizontal = 8.dp)
             ) {
@@ -476,73 +531,105 @@ fun TrainLcdMonitorCard(
                     modifier = Modifier.fillMaxSize(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 左: 状態ラベル (この電車は / 次は / まもなく / ただいま)
+                    // 左: 状態ラベル (この電車は / 次は / まもなく / ただいま) — 3D縦フリップ対応
                     Box(
-                        modifier = Modifier.width(74.dp),
-                        contentAlignment = Alignment.CenterStart
+                        modifier = Modifier
+                            .width(86.dp)
+                            .fillMaxHeight()
+                            .padding(bottom = 4.dp),
+                        contentAlignment = Alignment.BottomStart
                     ) {
-                        val statusText = when (phase) {
-                            TrainLcdPhase.BEFORE_DEPARTURE -> when (langMode) {
-                                TrainLcdLangMode.KANJI -> "この電車は"
-                                TrainLcdLangMode.ENGLISH -> "This train\nis bound for"
-                                TrainLcdLangMode.HIRAGANA -> "このでんしゃは"
+                        AnimatedContent(
+                            targetState = Pair(phase, langMode),
+                            transitionSpec = {
+                                (scaleIn(
+                                    initialScale = 0.2f,
+                                    transformOrigin = TransformOrigin(0.5f, 0f),
+                                    animationSpec = tween(280, easing = FastOutSlowInEasing)
+                                ) + slideInVertically(animationSpec = tween(280)) { -it / 2 } +
+                                    fadeIn(animationSpec = tween(220))) togetherWith
+                                    (scaleOut(
+                                        targetScale = 0.2f,
+                                        transformOrigin = TransformOrigin(0.5f, 1f),
+                                        animationSpec = tween(240, easing = FastOutSlowInEasing)
+                                    ) + slideOutVertically(animationSpec = tween(240)) { it / 2 } +
+                                        fadeOut(animationSpec = tween(180))) using
+                                    SizeTransform(clip = false)
+                            },
+                            label = "statusLabelFlip"
+                        ) { (curPh, curLg) ->
+                            val statusText = when (curPh) {
+                                TrainLcdPhase.BEFORE_DEPARTURE -> when (curLg) {
+                                    TrainLcdLangMode.KANJI -> "この電車は"
+                                    TrainLcdLangMode.ENGLISH -> "This train\nis bound for"
+                                    TrainLcdLangMode.HIRAGANA -> "このでんしゃは"
+                                }
+                                TrainLcdPhase.NEXT_STATION -> when (curLg) {
+                                    TrainLcdLangMode.KANJI -> "次は"
+                                    TrainLcdLangMode.ENGLISH -> "Next"
+                                    TrainLcdLangMode.HIRAGANA -> "つぎは"
+                                }
+                                TrainLcdPhase.ARRIVING_AT -> when (curLg) {
+                                    TrainLcdLangMode.KANJI -> "まもなく"
+                                    TrainLcdLangMode.ENGLISH -> "Arriving at"
+                                    TrainLcdLangMode.HIRAGANA -> "まもなく"
+                                }
+                                TrainLcdPhase.STOPPING_AT -> when (curLg) {
+                                    TrainLcdLangMode.KANJI -> "ただいま"
+                                    TrainLcdLangMode.ENGLISH -> "Now\nStopping at"
+                                    TrainLcdLangMode.HIRAGANA -> "ただいま"
+                                }
                             }
-                            TrainLcdPhase.NEXT_STATION -> when (langMode) {
-                                TrainLcdLangMode.KANJI -> "次は"
-                                TrainLcdLangMode.ENGLISH -> "Next"
-                                TrainLcdLangMode.HIRAGANA -> "つぎは"
+                            val statusFontSize = when {
+                                statusText.contains("\n") -> 12.5.sp
+                                statusText.length >= 7 -> 11.5.sp
+                                statusText.length == 5 -> 15.sp
+                                statusText.length == 4 -> 17.5.sp
+                                else -> 20.sp
                             }
-                            TrainLcdPhase.ARRIVING_AT -> when (langMode) {
-                                TrainLcdLangMode.KANJI -> "まもなく"
-                                TrainLcdLangMode.ENGLISH -> "Arriving at"
-                                TrainLcdLangMode.HIRAGANA -> "まもなく"
-                            }
-                            TrainLcdPhase.STOPPING_AT -> when (langMode) {
-                                TrainLcdLangMode.KANJI -> "ただいま"
-                                TrainLcdLangMode.ENGLISH -> "Now\nStopping at"
-                                TrainLcdLangMode.HIRAGANA -> "ただいま"
-                            }
+                            Text(
+                                text = statusText,
+                                color = Color(0xFF111317),
+                                fontSize = statusFontSize,
+                                lineHeight = 14.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                            )
                         }
-                        val statusFontSize = when {
-                            statusText.contains("\n") -> 10.5.sp
-                            statusText.length >= 6 -> 10.5.sp
-                            statusText.length >= 4 -> 13.5.sp
-                            else -> 15.5.sp
-                        }
-                        Text(
-                            text = statusText,
-                            color = Color(0xFF181B20),
-                            fontSize = statusFontSize,
-                            lineHeight = 12.5.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                        )
                     }
 
-                    // 駅ナンバリング正方形バッジ (例: [JA / 25])
+                    // 駅ナンバリング正方形バッジ (例: [JA / 25] または [R / 01])
                     TrainStationNumberBadge(
-                        linePrefix = lineTheme.linePrefix,
+                        linePrefix = headerBadgePrefix,
                         stationDigits = headerStationDigits,
-                        lineColor = lineColor,
-                        isCircle = lineTheme.isCircleBadge
+                        lineColor = headerBadgeColor,
+                        isCircle = lineTheme.isCircleBadge && headerBadgePrefix == lineTheme.linePrefix
                     )
 
-                    // 中央: 特大駅名 / 行先名（3言語縦フリップ＆クロスフェードアニメーション）
+                    // 中央: 特大駅名 / 行先名（動画準拠の3D縦ドラム回転＆クロスフェードアニメーション）
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
-                            .padding(horizontal = 6.dp),
+                            .padding(horizontal = 4.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         AnimatedContent(
                             targetState = Triple(phase, langMode, targetStop.kanji),
                             transitionSpec = {
-                                (slideInVertically(animationSpec = tween(260)) { h -> h / 2 } +
-                                    fadeIn(animationSpec = tween(260))) togetherWith
-                                    (slideOutVertically(animationSpec = tween(220)) { h -> -h / 2 } +
-                                        fadeOut(animationSpec = tween(200))) using
-                                    SizeTransform(clip = true)
+                                (scaleIn(
+                                    initialScale = 0.18f,
+                                    transformOrigin = TransformOrigin(0.5f, 0f),
+                                    animationSpec = tween(300, easing = FastOutSlowInEasing)
+                                ) + slideInVertically(animationSpec = tween(300, easing = FastOutSlowInEasing)) { h -> -h / 2 } +
+                                    fadeIn(animationSpec = tween(240))) togetherWith
+                                    (scaleOut(
+                                        targetScale = 0.18f,
+                                        transformOrigin = TransformOrigin(0.5f, 1f),
+                                        animationSpec = tween(250, easing = FastOutSlowInEasing)
+                                    ) + slideOutVertically(animationSpec = tween(250, easing = FastOutSlowInEasing)) { h -> h / 2 } +
+                                        fadeOut(animationSpec = tween(190))) using
+                                    SizeTransform(clip = false)
                             },
                             label = "mainStationFlip"
                         ) { (curPhase, curLang, _) ->
@@ -551,41 +638,42 @@ fun TrainLcdMonitorCard(
                                     TrainLcdLangMode.KANJI -> {
                                         Row(verticalAlignment = Alignment.Bottom) {
                                             val mainSp = when {
-                                                headsignKanji.length >= 6 -> 21.sp
-                                                headsignKanji.length == 5 -> 24.sp
-                                                else -> 28.sp
+                                                headsignKanji.length >= 6 -> 22.sp
+                                                headsignKanji.length == 5 -> 26.sp
+                                                headsignKanji.length == 4 -> 31.sp
+                                                else -> 36.sp
                                             }
                                             Text(
                                                 text = headsignKanji,
-                                                color = Color(0xFF111317),
+                                                color = Color(0xFF0B0E12),
                                                 fontSize = mainSp,
                                                 fontWeight = FontWeight.Black,
-                                                letterSpacing = if (headsignKanji.length <= 3) 3.sp else 1.sp,
+                                                letterSpacing = if (headsignKanji.length <= 3) 2.sp else 0.5.sp,
                                                 maxLines = 1,
                                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                             )
                                             Spacer(Modifier.width(6.dp))
                                             Text(
                                                 text = "行",
-                                                color = Color(0xFF111317),
-                                                fontSize = 18.sp,
+                                                color = Color(0xFF0B0E12),
+                                                fontSize = 22.sp,
                                                 fontWeight = FontWeight.ExtraBold,
-                                                modifier = Modifier.padding(bottom = 2.dp),
+                                                modifier = Modifier.padding(bottom = 3.dp),
                                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                             )
                                         }
                                     }
                                     TrainLcdLangMode.ENGLISH -> {
                                         val engSp = when {
-                                            headsignRomaji.length >= 14 -> 20.sp
-                                            headsignRomaji.length >= 10 -> 23.sp
-                                            else -> 27.sp
+                                            headsignRomaji.length >= 15 -> 22.sp
+                                            headsignRomaji.length >= 11 -> 27.sp
+                                            else -> 33.sp
                                         }
                                         Text(
                                             text = headsignRomaji,
-                                            color = Color(0xFF111317),
+                                            color = Color(0xFF0B0E12),
                                             fontSize = engSp,
-                                            fontWeight = FontWeight.ExtraBold,
+                                            fontWeight = FontWeight.Black,
                                             maxLines = 1,
                                             style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                         )
@@ -593,24 +681,24 @@ fun TrainLcdMonitorCard(
                                     TrainLcdLangMode.HIRAGANA -> {
                                         Row(verticalAlignment = Alignment.Bottom) {
                                             val hiraSp = when {
-                                                headsignHiragana.length >= 7 -> 20.sp
-                                                headsignHiragana.length >= 5 -> 23.sp
-                                                else -> 26.sp
+                                                headsignHiragana.length >= 8 -> 21.sp
+                                                headsignHiragana.length >= 6 -> 26.sp
+                                                else -> 32.sp
                                             }
                                             Text(
                                                 text = headsignHiragana,
-                                                color = Color(0xFF111317),
+                                                color = Color(0xFF0B0E12),
                                                 fontSize = hiraSp,
                                                 fontWeight = FontWeight.Black,
                                                 letterSpacing = 1.sp,
                                                 maxLines = 1,
                                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                             )
-                                            Spacer(Modifier.width(6.dp))
+                                            Spacer(Modifier.width(5.dp))
                                             Text(
                                                 text = "ゆき",
-                                                color = Color(0xFF111317),
-                                                fontSize = 15.sp,
+                                                color = Color(0xFF0B0E12),
+                                                fontSize = 19.sp,
                                                 fontWeight = FontWeight.ExtraBold,
                                                 modifier = Modifier.padding(bottom = 2.dp),
                                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
@@ -619,23 +707,24 @@ fun TrainLcdMonitorCard(
                                     }
                                 }
                             } else {
-                                // 次は / まもなく / ただいま 駅名表示
+                                // 次は / まもなく / ただいま 駅名表示（特大サイズ）
                                 when (curLang) {
                                     TrainLcdLangMode.KANJI -> {
                                         val stKanji = targetStop.kanji
                                         val mainSp = when {
-                                            stKanji.length >= 6 -> 22.sp
-                                            stKanji.length == 5 -> 25.sp
-                                            else -> 30.sp
+                                            stKanji.length >= 6 -> 23.sp
+                                            stKanji.length == 5 -> 27.sp
+                                            stKanji.length == 4 -> 32.sp
+                                            else -> 37.sp
                                         }
                                         val spacing = when {
                                             stKanji.length == 2 -> 8.sp
-                                            stKanji.length == 3 -> 4.sp
-                                            else -> 1.sp
+                                            stKanji.length == 3 -> 3.sp
+                                            else -> 0.5.sp
                                         }
                                         Text(
                                             text = stKanji,
-                                            color = Color(0xFF111317),
+                                            color = Color(0xFF0B0E12),
                                             fontSize = mainSp,
                                             fontWeight = FontWeight.Black,
                                             letterSpacing = spacing,
@@ -646,15 +735,15 @@ fun TrainLcdMonitorCard(
                                     TrainLcdLangMode.ENGLISH -> {
                                         val stRomaji = targetStop.romaji
                                         val engSp = when {
-                                            stRomaji.length >= 14 -> 20.sp
-                                            stRomaji.length >= 10 -> 24.sp
-                                            else -> 27.sp
+                                            stRomaji.length >= 15 -> 22.sp
+                                            stRomaji.length >= 11 -> 27.sp
+                                            else -> 33.sp
                                         }
                                         Text(
                                             text = stRomaji,
-                                            color = Color(0xFF111317),
+                                            color = Color(0xFF0B0E12),
                                             fontSize = engSp,
-                                            fontWeight = FontWeight.ExtraBold,
+                                            fontWeight = FontWeight.Black,
                                             maxLines = 1,
                                             style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                         )
@@ -662,16 +751,16 @@ fun TrainLcdMonitorCard(
                                     TrainLcdLangMode.HIRAGANA -> {
                                         val stHira = targetStop.hiragana
                                         val hiraSp = when {
-                                            stHira.length >= 8 -> 20.sp
-                                            stHira.length >= 6 -> 23.sp
-                                            else -> 27.sp
+                                            stHira.length >= 8 -> 23.sp
+                                            stHira.length >= 6 -> 28.sp
+                                            else -> 33.sp
                                         }
                                         Text(
                                             text = stHira,
-                                            color = Color(0xFF111317),
+                                            color = Color(0xFF0B0E12),
                                             fontSize = hiraSp,
                                             fontWeight = FontWeight.Black,
-                                            letterSpacing = if (stHira.length <= 4) 3.sp else 1.sp,
+                                            letterSpacing = if (stHira.length <= 4) 2.5.sp else 0.5.sp,
                                             maxLines = 1,
                                             style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                         )
@@ -681,10 +770,10 @@ fun TrainLcdMonitorCard(
                         }
                     }
 
-                    // 右下: 現在時刻 (HH:mm コロン点滅)
+                    // 右下: 現在時刻 (HH:mm コロン点滅・大型フォント)
                     Box(
                         modifier = Modifier
-                            .width(54.dp)
+                            .width(62.dp)
                             .fillMaxHeight()
                             .padding(bottom = 4.dp),
                         contentAlignment = Alignment.BottomEnd
@@ -692,25 +781,25 @@ fun TrainLcdMonitorCard(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = String.format("%02d", now.hour),
-                                color = Color(0xFF181B20),
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF111317),
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.SansSerif,
                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                             )
                             Text(
                                 text = ":",
-                                color = if (colonVisible) Color(0xFF181B20) else Color.Transparent,
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Bold,
+                                color = if (colonVisible) Color(0xFF111317) else Color.Transparent,
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Black,
                                 modifier = Modifier.padding(horizontal = 1.dp),
                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                             )
                             Text(
                                 text = String.format("%02d", now.minute),
-                                color = Color(0xFF181B20),
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF111317),
+                                fontSize = 19.sp,
+                                fontWeight = FontWeight.Black,
                                 fontFamily = FontFamily.SansSerif,
                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                             )
@@ -719,25 +808,31 @@ fun TrainLcdMonitorCard(
                 }
             }
 
-            // 中段下端の路線カラー太ライン（3.2dp）＋ 微細シャドウ
+            // 中段下端の2トーン路線カラーライン（動画準拠のダークライン＋路線カラー太帯＋シャドウ）
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(3.2.dp)
+                    .height(1.2.dp)
+                    .background(Color(0xFF2D3748))
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(3.6.dp)
                     .background(lineColor)
             )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(1.dp)
-                    .background(Color(0xFFB8C2CC))
+                    .background(Color(0xFFCBD5E1))
             )
 
             // =========================================================================
             // 3. 下段メインコンテンツエリア（走行状態・サイクルに応じて3種類のビューを切替）
             //    - STOPPING_AT: 立体ホーム＆車両編成スライドイン図 (動画4 `2118 (1).mp4`)
-            //    - BEFORE_DEPARTURE (2段モード): 全停車駅2段バー一覧 (動画1 `2116.mp4` 後半)
-            //    - 標準: 直近7〜8駅進行バー + 所要分数 + 赤白シェブロン現在地 (動画1前半・動画2・動画3)
+            //    - BEFORE_DEPARTURE (2段モード): 全駅2段バー一覧 (動画1 `2116.mp4` 後半)
+            //    - 標準: 直近8駅進行バー + 所要分数 + 通過駅薄字表示 + 赤白シェブロン現在地
             // =========================================================================
             val bottomViewMode = when {
                 phase == TrainLcdPhase.STOPPING_AT -> 2
@@ -783,7 +878,7 @@ fun TrainLcdMonitorCard(
 }
 
 /**
- * 駅ナンバリングバッジ（路線カラー太枠の角丸正方形または丸バッジ）
+ * 駅ナンバリングバッジ（路線カラー太枠の角丸正方形または丸バッジ・大型化）
  */
 @Composable
 private fun TrainStationNumberBadge(
@@ -795,9 +890,9 @@ private fun TrainStationNumberBadge(
     val shape = if (isCircle) RoundedCornerShape(50) else RoundedCornerShape(5.dp)
     Box(
         modifier = Modifier
-            .size(37.dp)
+            .size(44.dp)
             .background(Color.White, shape)
-            .border(3.3.dp, lineColor, shape),
+            .border(3.8.dp, lineColor, shape),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -806,17 +901,17 @@ private fun TrainStationNumberBadge(
         ) {
             Text(
                 text = linePrefix,
-                color = Color(0xFF111317),
-                fontSize = 10.sp,
-                lineHeight = 10.sp,
-                fontWeight = FontWeight.ExtraBold,
+                color = Color(0xFF0F1217),
+                fontSize = 12.sp,
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.Black,
                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
             )
             Text(
                 text = stationDigits,
-                color = Color(0xFF111317),
-                fontSize = 13.5.sp,
-                lineHeight = 13.5.sp,
+                color = Color(0xFF0F1217),
+                fontSize = 17.5.sp,
+                lineHeight = 17.5.sp,
                 fontWeight = FontWeight.Black,
                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
             )
@@ -825,7 +920,7 @@ private fun TrainStationNumberBadge(
 }
 
 /**
- * ビュー1: 直近7〜8駅の路線進行バー（右から左へ進行、縦書き漢字 ⇔ 斜め英語駅名、所要分数、赤白シェブロン現在位置）
+ * ビュー1: 直近8駅の路線進行バー（右から左へ進行、大型縦書き漢字 ⇔ 斜め英語駅名、通過駅の薄字表示、所要分数、赤白シェブロン現在位置）
  * 動画 `2116.mp4`(前半), `2117.mp4`, `2118.mp4` に完全準拠
  */
 @Composable
@@ -835,35 +930,55 @@ private fun TrainLcdSingleRowProgressView(
     lineColor: Color,
     langMode: TrainLcdLangMode
 ) {
-    val startIdx = lcdState.prevStopIndex.coerceIn(0, (lcdState.allStops.size - 1).coerceAtLeast(0))
+    // 次の停車駅までの間に多数の通過駅がある場合も、進行度に応じてウィンドウをスライドして次停車駅を見失わないようにする
+    val rawStartIdx = lcdState.prevStopIndex.coerceIn(0, (lcdState.allStops.size - 1).coerceAtLeast(0))
+    val spanToTarget = (lcdState.targetStopIndex - rawStartIdx).coerceAtLeast(1)
+    val startIdx = if (spanToTarget > 7) {
+        val extraShift = ((spanToTarget - 6) * lcdState.segmentProgress).roundToInt().coerceIn(0, spanToTarget - 4)
+        (rawStartIdx + extraShift).coerceIn(0, (lcdState.allStops.size - 1).coerceAtLeast(0))
+    } else {
+        rawStartIdx
+    }
     val windowStops = lcdState.allStops.drop(startIdx).take(8)
+    val targetSlotFromRight = (lcdState.targetStopIndex - startIdx).coerceIn(1, 7)
     val isEnglish = langMode == TrainLcdLangMode.ENGLISH
 
-    // 走行中の赤白シェブロン点滅・微動アニメーション
+    // 走行中の赤白シェブロン微動アニメーション
     val infiniteTransition = rememberInfiniteTransition(label = "chevronPulse")
     val chevronPulse by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(700, easing = LinearEasing),
+            animation = tween(650, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "chevronPulseAnim"
     )
 
+    // 現在の列車シェブロン位置 (0.0f = 右端slot 0, 1.0f = slot 1, ..., targetSlotFromRight)
+    val currentTrainSlotPos: Float = when (lcdState.phase) {
+        TrainLcdPhase.BEFORE_DEPARTURE -> 0f
+        TrainLcdPhase.STOPPING_AT -> 0f
+        TrainLcdPhase.ARRIVING_AT -> (targetSlotFromRight - 0.25f).coerceAtLeast(0.72f)
+        TrainLcdPhase.NEXT_STATION -> {
+            val baseFrac = lcdState.segmentProgress.coerceIn(0.22f, 0.72f)
+            (targetSlotFromRight * baseFrac).coerceIn(0.35f, targetSlotFromRight - 0.28f)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(178.dp)
+            .height(188.dp)
             .background(Color.White)
-            .padding(top = 4.dp, bottom = 4.dp)
+            .padding(top = 4.dp, bottom = 3.dp)
     ) {
-        // 1. 駅名＆駅ナンバリング列（右端が index 0 = 前の駅/出発駅、左に向かって次の駅が並ぶ）
+        // 1. 駅名＆駅ナンバリング列（右端が slot 0 = 出発駅/直前駅、左に向かって次の駅が並ぶ）
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(94.dp)
-                .padding(start = 34.dp, end = 10.dp)
+                .height(106.dp)
+                .padding(start = 32.dp, end = 8.dp)
                 .clipToBounds()
         ) {
             Row(
@@ -871,7 +986,6 @@ private fun TrainLcdSingleRowProgressView(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Bottom
             ) {
-                // 画面左から右へ配置するため、windowStops(0..7) を逆順(7 downTo 0)で並べる
                 val displaySlots = (7 downTo 0).map { slotIdx -> windowStops.getOrNull(slotIdx) }
                 for ((colPos, stop) in displaySlots.withIndex()) {
                     val slotIdxFromRight = 7 - colPos
@@ -882,11 +996,19 @@ private fun TrainLcdSingleRowProgressView(
                         contentAlignment = Alignment.BottomCenter
                     ) {
                         if (stop != null) {
-                            val isDepartedOrigin = (slotIdxFromRight == 0) &&
-                                (lcdState.phase == TrainLcdPhase.NEXT_STATION || lcdState.phase == TrainLcdPhase.ARRIVING_AT)
+                            val isAlreadyPassed = (lcdState.phase == TrainLcdPhase.NEXT_STATION || lcdState.phase == TrainLcdPhase.ARRIVING_AT) &&
+                                (slotIdxFromRight == 0 || slotIdxFromRight.toFloat() < currentTrainSlotPos)
+
+                            // 通過駅（isPassStation）または既に出発・通過した駅は薄いグレーで表示
+                            val isDimmed = stop.isPassStation || isAlreadyPassed
                             val textColor = when {
-                                isDepartedOrigin -> Color(0xFF98A2B3)
-                                stop.isAlightStation -> Color(0xFF0F172A)
+                                stop.isPassStation -> Color(0xFFB4BECB)
+                                isAlreadyPassed -> Color(0xFFA0AAB8)
+                                else -> Color(0xFF0F141A)
+                            }
+                            val codeColor = when {
+                                stop.isPassStation -> Color(0xFFB8C2CE)
+                                isAlreadyPassed -> Color(0xFFA0AAB8)
                                 else -> Color(0xFF111827)
                             }
 
@@ -895,7 +1017,7 @@ private fun TrainLcdSingleRowProgressView(
                                 verticalArrangement = Arrangement.Bottom,
                                 modifier = Modifier.fillMaxHeight()
                             ) {
-                                // 駅名エリア（日本語: 縦書き、英語: 斜め-58度回転）
+                                // 駅名エリア（日本語: 大型縦書き漢字、英語: 斜め-58度回転）
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
@@ -903,22 +1025,29 @@ private fun TrainLcdSingleRowProgressView(
                                     contentAlignment = Alignment.BottomCenter
                                 ) {
                                     if (isEnglish) {
-                                        // 英語モード: 斜め回転テキスト (動画の斜め英語表記を忠実に再現)
+                                        val formattedRomaji = remember(stop.romaji) {
+                                            if (stop.romaji.length >= 11 && stop.romaji.contains("-")) {
+                                                stop.romaji.replaceFirst("-", "-\n")
+                                            } else {
+                                                stop.romaji
+                                            }
+                                        }
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxSize()
-                                                .padding(bottom = 4.dp),
+                                                .padding(bottom = 3.dp),
                                             contentAlignment = Alignment.BottomCenter
                                         ) {
                                             Text(
-                                                text = stop.romaji,
+                                                text = formattedRomaji,
                                                 color = textColor,
-                                                fontSize = 10.5.sp,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                maxLines = 1,
+                                                fontSize = 12.sp,
+                                                lineHeight = 12.5.sp,
+                                                fontWeight = if (isDimmed) FontWeight.Bold else FontWeight.Black,
+                                                maxLines = 2,
                                                 softWrap = false,
                                                 modifier = Modifier
-                                                    .offset(x = 8.dp, y = (-14).dp)
+                                                    .offset(x = 8.dp, y = (-15).dp)
                                                     .graphicsLayer {
                                                         rotationZ = -58f
                                                     },
@@ -926,11 +1055,11 @@ private fun TrainLcdSingleRowProgressView(
                                             )
                                         }
                                     } else {
-                                        // 日本語モード: 縦書き漢字駅名
                                         VerticalJapaneseStationName(
                                             name = stop.kanji,
                                             color = textColor,
-                                            isHighlighted = stop.isAlightStation,
+                                            isHighlighted = stop.isAlightStation && !stop.isPassStation,
+                                            isDimmed = isDimmed,
                                             lineColor = lineColor,
                                             modifier = Modifier.padding(bottom = 2.dp)
                                         )
@@ -940,9 +1069,9 @@ private fun TrainLcdSingleRowProgressView(
                                 // 駅ナンバリング (例: JA-25)
                                 Text(
                                     text = stop.stationNumberCode,
-                                    color = if (isDepartedOrigin) Color(0xFFA0AAB8) else Color(0xFF1E293B),
-                                    fontSize = 8.5.sp,
-                                    fontWeight = FontWeight.ExtraBold,
+                                    color = codeColor,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (isDimmed) FontWeight.Bold else FontWeight.Black,
                                     maxLines = 1,
                                     style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                 )
@@ -955,19 +1084,22 @@ private fun TrainLcdSingleRowProgressView(
 
         Spacer(Modifier.height(2.dp))
 
-        // 2. メタリック路線カラー進行バー（左先端 `< 分` / `< min` 矢印シェブロン ＋ 所要分数ボックス ＋ 赤白シェブロン現在地）
+        // 2. メタリック路線カラー進行バー（走行済み右側はシルバーグレー、前方は路線カラー、通過駅は分数ボックス無し）
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(25.dp)
+                .height(28.dp)
                 .padding(horizontal = 6.dp)
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val w = size.width
                 val h = size.height
-                val arrowTipW = 26.dp.toPx()
+                val arrowTipW = 28.dp.toPx()
+                val contentStart = 28.dp.toPx()
+                val contentEnd = w - 4.dp.toPx()
+                val slotW = (contentEnd - contentStart) / 8f
+                val slot0CenterX = contentEnd - slotW * 0.5f
 
-                // 左向き矢印先端を持つバーのPath
                 val barPath = Path().apply {
                     moveTo(0f, h / 2f)
                     lineTo(arrowTipW, 0f)
@@ -977,18 +1109,36 @@ private fun TrainLcdSingleRowProgressView(
                     close()
                 }
 
-                // 3D円筒メタリックグラデーション（上下が濃く、中央がハイライト）
-                val metallicBrush = Brush.verticalGradient(
-                    0.0f to darkenColor(lineColor, 0.28f),
-                    0.25f to lineColor,
-                    0.48f to lightenColor(lineColor, 0.35f),
-                    0.72f to lineColor,
-                    1.0f to darkenColor(lineColor, 0.32f)
+                // 3D円筒メタリックグラデーション（路線カラー）
+                val metallicLineBrush = Brush.verticalGradient(
+                    0.0f to darkenColor(lineColor, 0.30f),
+                    0.22f to lineColor,
+                    0.48f to lightenColor(lineColor, 0.38f),
+                    0.74f to lineColor,
+                    1.0f to darkenColor(lineColor, 0.34f)
                 )
-                drawPath(barPath, brush = metallicBrush)
+                drawPath(barPath, brush = metallicLineBrush)
+
+                // 走行中（NEXT_STATION / ARRIVING_AT）は現在位置シェブロンより右側をメタリックシルバーグレーにする（動画2・3完全再現）
+                if (lcdState.phase == TrainLcdPhase.NEXT_STATION || lcdState.phase == TrainLcdPhase.ARRIVING_AT) {
+                    val splitX = (slot0CenterX - slotW * currentTrainSlotPos).coerceIn(arrowTipW, w)
+                    val grayBrush = Brush.verticalGradient(
+                        0.0f to Color(0xFF7B838E),
+                        0.25f to Color(0xFFAEB6C0),
+                        0.50f to Color(0xFFE5E9F0),
+                        0.75f to Color(0xFF9EA6B2),
+                        1.0f to Color(0xFF6C737D)
+                    )
+                    drawRect(
+                        brush = grayBrush,
+                        topLeft = Offset(splitX, 0f),
+                        size = Size(w - splitX, h)
+                    )
+                }
+
                 drawPath(
                     barPath,
-                    color = darkenColor(lineColor, 0.4f),
+                    color = darkenColor(lineColor, 0.42f),
                     style = Stroke(width = 1.dp.toPx())
                 )
             }
@@ -996,21 +1146,21 @@ private fun TrainLcdSingleRowProgressView(
             // 左先端の「分 / min」ラベル
             Box(
                 modifier = Modifier
-                    .width(34.dp)
+                    .width(36.dp)
                     .fillMaxHeight()
-                    .padding(start = 8.dp),
+                    .padding(start = 7.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = if (isEnglish) "min" else "分",
                     color = Color.White,
-                    fontSize = if (isEnglish) 9.5.sp else 10.5.sp,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = if (isEnglish) 10.5.sp else 11.5.sp,
+                    fontWeight = FontWeight.Black,
                     style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                 )
             }
 
-            // 各駅の位置に合わせた所要分数ボックスと、駅間の赤白シェブロン矢印
+            // 各停車駅の所要分数セルと、赤白シェブロン現在位置インジケーター
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1032,35 +1182,54 @@ private fun TrainLcdSingleRowProgressView(
                         ) {
                             if (stop != null) {
                                 if (slotIdxFromRight == 0) {
-                                    // 右端（出発駅・直前駅）: 白い小丸または空欄
+                                    // 右端（出発駅・直前駅）: BEFORE_DEPARTURE時は動画1(00:00)と同じ白枠＋左向き白三角 `[<]` を描画
                                     if (lcdState.phase == TrainLcdPhase.BEFORE_DEPARTURE) {
                                         Box(
                                             modifier = Modifier
-                                                .size(10.dp)
-                                                .background(Color.White, RoundedCornerShape(50))
-                                        )
+                                                .width(30.dp)
+                                                .height(22.dp)
+                                                .background(darkenColor(lineColor, 0.18f), RoundedCornerShape(2.dp))
+                                                .border(1.2.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(2.dp)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Canvas(modifier = Modifier.size(12.dp)) {
+                                                val p = Path().apply {
+                                                    moveTo(size.width * 0.18f, size.height * 0.5f)
+                                                    lineTo(size.width * 0.82f, size.height * 0.12f)
+                                                    lineTo(size.width * 0.82f, size.height * 0.88f)
+                                                    close()
+                                                }
+                                                drawPath(p, color = Color.White)
+                                            }
+                                        }
                                     }
-                                } else {
-                                    // 次の駅以降: 白い角丸ボックス内に黒太字で所要分数 (例: 3, 5, 7...)
+                                } else if (!stop.isPassStation && slotIdxFromRight.toFloat() >= currentTrainSlotPos) {
+                                    // 停車駅のみ所要分数セルを大きく黒太字で表示（通過駅は何も描かずバーを貫通させる）
                                     Box(
                                         modifier = Modifier
-                                            .width(24.dp)
-                                            .height(18.dp)
+                                            .width(32.dp)
+                                            .height(22.dp)
                                             .background(
-                                                color = if (stop.isAlightStation) Color(0xFFFFFBEB) else Color.White,
-                                                shape = RoundedCornerShape(3.dp)
+                                                brush = Brush.verticalGradient(
+                                                    listOf(
+                                                        Color.White.copy(alpha = 0.55f),
+                                                        Color.White.copy(alpha = 0.88f),
+                                                        Color.White.copy(alpha = 0.55f)
+                                                    )
+                                                ),
+                                                shape = RoundedCornerShape(2.dp)
                                             )
                                             .border(
-                                                width = if (stop.isAlightStation) 1.4.dp else 0.8.dp,
-                                                color = if (stop.isAlightStation) Color(0xFFD97706) else Color(0xFFCBD5E1),
-                                                shape = RoundedCornerShape(3.dp)
+                                                width = if (stop.isAlightStation) 1.5.dp else 0.8.dp,
+                                                color = if (stop.isAlightStation) Color(0xFFD97706) else Color.White.copy(alpha = 0.9f),
+                                                shape = RoundedCornerShape(2.dp)
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Text(
                                             text = "${stop.minutesFromNow}",
-                                            color = Color(0xFF111317),
-                                            fontSize = 11.5.sp,
+                                            color = Color(0xFF0B0E12),
+                                            fontSize = 15.sp,
                                             fontWeight = FontWeight.Black,
                                             style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                         )
@@ -1071,34 +1240,14 @@ private fun TrainLcdSingleRowProgressView(
                     }
                 }
 
-                // 右端(slot 0)と次の駅(slot 1)の間を走る現在位置シェブロンインジケーター
-                // - BEFORE_DEPARTURE: 白い三角 `<`
-                // - NEXT_STATION: 赤白の2連シェブロン `<<` が GPS進行度に応じて右から左へ移動
-                // - ARRIVING_AT: 赤白の2連シェブロン `<<` が次の駅(slot 1)の直前に到達
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val slotW = size.width / 8f
-                    val slot0CenterX = size.width - slotW * 0.5f
-                    val slot1CenterX = size.width - slotW * 1.5f
-                    val cy = size.height / 2f
-
-                    if (lcdState.phase == TrainLcdPhase.BEFORE_DEPARTURE) {
-                        val midX = (slot0CenterX + slot1CenterX) / 2f
-                        val triH = size.height * 0.58f
-                        val triW = 9.dp.toPx()
-                        val path = Path().apply {
-                            moveTo(midX - triW / 2f, cy)
-                            lineTo(midX + triW / 2f, cy - triH / 2f)
-                            lineTo(midX + triW / 2f, cy + triH / 2f)
-                            close()
-                        }
-                        drawPath(path, color = Color.White)
-                    } else {
-                        val frac = when (lcdState.phase) {
-                            TrainLcdPhase.ARRIVING_AT -> 0.72f
-                            else -> lcdState.segmentProgress.coerceIn(0.22f, 0.65f)
-                        }
+                // 走行中（NEXT_STATION / ARRIVING_AT）の赤白2連シェブロン `<<` 描画
+                if (lcdState.phase == TrainLcdPhase.NEXT_STATION || lcdState.phase == TrainLcdPhase.ARRIVING_AT) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val slotW = size.width / 8f
+                        val slot0CenterX = size.width - slotW * 0.5f
+                        val cy = size.height / 2f
                         val pulseShift = (chevronPulse - 0.5f) * 2.5.dp.toPx()
-                        val indicatorX = slot0CenterX - (slot0CenterX - slot1CenterX) * frac + pulseShift
+                        val indicatorX = slot0CenterX - slotW * currentTrainSlotPos + pulseShift
                         drawRedWhiteDoubleChevron(
                             centerX = indicatorX,
                             centerY = cy,
@@ -1109,18 +1258,18 @@ private fun TrainLcdSingleRowProgressView(
             }
         }
 
-        // 3. 下部: 乗換案内・降車駅案内 ＋ 右下注記テキスト
+        // 3. 下部: 乗換案内（停車駅のみ） ＋ 右下注記テキスト
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(horizontal = 10.dp, vertical = 3.dp),
+                .padding(horizontal = 10.dp, vertical = 2.dp),
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // 左側: 次駅または表示区間内の乗換案内＆降車駅ガイド
-            val nextStop = windowStops.getOrNull(1) ?: windowStops.firstOrNull()
-            val transferTarget = windowStops.drop(1).firstOrNull { it.transferLines.isNotEmpty() } ?: nextStop
+            val transferTarget = windowStops
+                .drop(1)
+                .firstOrNull { !it.isPassStation && it.transferLines.isNotEmpty() }
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.Bottom
@@ -1128,7 +1277,7 @@ private fun TrainLcdSingleRowProgressView(
                 if (transferTarget != null && transferTarget.transferLines.isNotEmpty()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         for (tr in transferTarget.transferLines.take(2)) {
                             Row(
@@ -1137,7 +1286,7 @@ private fun TrainLcdSingleRowProgressView(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(14.dp)
+                                        .size(15.dp)
                                         .background(Color.White, RoundedCornerShape(2.dp))
                                         .border(2.dp, tr.color, RoundedCornerShape(2.dp)),
                                     contentAlignment = Alignment.Center
@@ -1145,7 +1294,7 @@ private fun TrainLcdSingleRowProgressView(
                                     Text(
                                         text = tr.prefix,
                                         color = Color(0xFF111317),
-                                        fontSize = 6.5.sp,
+                                        fontSize = 7.sp,
                                         fontWeight = FontWeight.Black,
                                         style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                     )
@@ -1153,41 +1302,13 @@ private fun TrainLcdSingleRowProgressView(
                                 Text(
                                     text = if (isEnglish) tr.nameEn else tr.nameJp,
                                     color = Color(0xFF1E293B),
-                                    fontSize = 9.5.sp,
-                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.ExtraBold,
                                     maxLines = 1,
                                     style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                                 )
                             }
                         }
-                    }
-                    Spacer(Modifier.height(2.dp))
-                }
-
-                // 降車駅・到着予定時刻バッジ
-                val alightName = if (isEnglish) {
-                    lcdState.allStops.getOrNull(lcdState.alightStopIndex)?.romaji ?: trainLeg.toName
-                } else {
-                    trainLeg.toName
-                }
-                val arrHmText = trainLeg.arrTime?.let { String.format("%02d:%02d", it.hour, it.minute) } ?: ""
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .background(lineColor.copy(alpha = 0.15f), RoundedCornerShape(3.dp))
-                            .border(0.8.dp, lineColor, RoundedCornerShape(3.dp))
-                            .padding(horizontal = 5.dp, vertical = 1.dp)
-                    ) {
-                        Text(
-                            text = if (isEnglish) "Alight: $alightName $arrHmText" else "降車駅: $alightName ${if (arrHmText.isNotEmpty()) "($arrHmText 着)" else ""}",
-                            color = Color(0xFF0F172A),
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.ExtraBold,
-                            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                        )
                     }
                 }
             }
@@ -1197,13 +1318,13 @@ private fun TrainLcdSingleRowProgressView(
                 text = if (isEnglish) {
                     "Time shown does not include transfer or waiting time."
                 } else {
-                    "のりかえ、待ち合わせ時間は含まれません。\n電車により多少時間は異なります。"
+                    "のりかえ、待ち合わせ時間は含まれません。電車により多少時間は異なります。"
                 },
                 color = Color(0xFF334155),
-                fontSize = 7.5.sp,
-                lineHeight = 9.5.sp,
+                fontSize = 8.sp,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.End,
+                maxLines = 1,
                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
             )
         }
@@ -1211,7 +1332,7 @@ private fun TrainLcdSingleRowProgressView(
 }
 
 /**
- * ビュー2: 全停車駅2段バー一覧ビュー（動画1 `2116.mp4` 後半 00:20〜00:40 の2段路線バーを忠実に再現）
+ * ビュー2: 全駅2段バー一覧ビュー（動画1 `2116.mp4` 後半 00:20〜00:40 の左→右2段路線バー＆通過駅薄字表示を完全再現）
  */
 @Composable
 private fun TrainLcdTwoRowAllStationsView(
@@ -1221,72 +1342,62 @@ private fun TrainLcdTwoRowAllStationsView(
 ) {
     val isEnglish = langMode == TrainLcdLangMode.ENGLISH
     val stops = lcdState.allStops
-    val upperRowStops = stops.take(8)
-    val lowerRowStops = stops.drop(8).take(8)
+    val perRow = ((stops.size + 1) / 2).coerceIn(8, 14)
+    val upperRowStops = stops.take(perRow)
+    val lowerRowStops = stops.drop(perRow).take(perRow)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(178.dp)
+            .height(188.dp)
             .background(Color.White)
             .padding(horizontal = 6.dp, vertical = 3.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // 上段バー (1〜8駅目)
-        CompactStationProgressRow(
+        // 上段バー (左から右へ進行)
+        CompactStationProgressRowLeftToRight(
             rowStops = upperRowStops,
+            totalSlots = perRow,
             lineColor = lineColor,
             isEnglish = isEnglish,
             isFirstRow = true,
             modifier = Modifier.weight(1f)
         )
 
-        // 下段バー (9〜16駅目)
-        CompactStationProgressRow(
+        // 下段バー (左から右へ進行)
+        CompactStationProgressRowLeftToRight(
             rowStops = lowerRowStops,
+            totalSlots = perRow,
             lineColor = lineColor,
             isEnglish = isEnglish,
             isFirstRow = false,
             modifier = Modifier.weight(1f)
         )
-
-        // 最下段右端の注記
-        Text(
-            text = if (isEnglish) {
-                "Time shown does not include transfer or waiting time."
-            } else {
-                "のりかえ、待ち合わせ時間は含まれません。電車により多少時間は異なります。"
-            },
-            color = Color(0xFF334155),
-            fontSize = 7.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.End,
-            modifier = Modifier.fillMaxWidth(),
-            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-        )
     }
 }
 
 @Composable
-private fun CompactStationProgressRow(
+private fun CompactStationProgressRowLeftToRight(
     rowStops: List<TrainLcdStopItem>,
+    totalSlots: Int,
     lineColor: Color,
     isEnglish: Boolean,
     isFirstRow: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val slotCount = totalSlots.coerceAtLeast(8)
     Column(modifier = modifier.fillMaxWidth()) {
-        // 駅名列
+        // 駅名列（左から右へ）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .padding(start = 26.dp, end = 6.dp),
+                .padding(start = 10.dp, end = 28.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Bottom
         ) {
-            val slots = (7 downTo 0).map { idx -> rowStops.getOrNull(idx) }
-            for (stop in slots) {
+            for (idx in 0 until slotCount) {
+                val stop = rowStops.getOrNull(idx)
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -1294,24 +1405,26 @@ private fun CompactStationProgressRow(
                     contentAlignment = Alignment.BottomCenter
                 ) {
                     if (stop != null) {
+                        val stColor = if (stop.isPassStation) Color(0xFFB4BECB) else Color(0xFF0F141A)
                         if (isEnglish) {
                             Text(
                                 text = stop.romaji,
-                                color = Color(0xFF111827),
-                                fontSize = 8.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
+                                color = stColor,
+                                fontSize = 9.5.sp,
+                                fontWeight = if (stop.isPassStation) FontWeight.Bold else FontWeight.Black,
                                 maxLines = 1,
                                 softWrap = false,
                                 modifier = Modifier
-                                    .offset(x = 6.dp, y = (-8).dp)
+                                    .offset(x = 5.dp, y = (-8).dp)
                                     .graphicsLayer { rotationZ = -55f },
                                 style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                             )
                         } else {
                             VerticalJapaneseStationName(
                                 name = stop.kanji,
-                                color = Color(0xFF111827),
-                                isHighlighted = stop.isAlightStation,
+                                color = stColor,
+                                isHighlighted = stop.isAlightStation && !stop.isPassStation,
+                                isDimmed = stop.isPassStation,
                                 lineColor = lineColor,
                                 compact = true
                             )
@@ -1321,86 +1434,109 @@ private fun CompactStationProgressRow(
             }
         }
 
-        // コンパクトメタリックバー
+        // メタリックバー（左から右へ進行、右端に「分 ▶ / min ▶」）
+        val activeStationsCount = rowStops.size.coerceAtLeast(1)
+        val widthFraction = (activeStationsCount.toFloat() / slotCount.toFloat()).coerceIn(0.25f, 1f)
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(17.dp)
+                .fillMaxWidth(if (isFirstRow) 1f else widthFraction)
+                .height(19.dp)
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val w = size.width
                 val h = size.height
-                val arrowW = 18.dp.toPx()
+                val arrowW = 16.dp.toPx()
                 val path = Path().apply {
-                    moveTo(0f, h / 2f)
-                    lineTo(arrowW, 0f)
-                    lineTo(w, 0f)
-                    lineTo(w, h)
-                    lineTo(arrowW, h)
+                    moveTo(0f, 0f)
+                    lineTo(w - arrowW, 0f)
+                    lineTo(w, h / 2f)
+                    lineTo(w - arrowW, h)
+                    lineTo(0f, h)
                     close()
                 }
                 drawPath(
                     path = path,
                     brush = Brush.verticalGradient(
                         listOf(
-                            darkenColor(lineColor, 0.25f),
-                            lightenColor(lineColor, 0.3f),
+                            darkenColor(lineColor, 0.28f),
+                            lightenColor(lineColor, 0.34f),
                             lineColor,
-                            darkenColor(lineColor, 0.3f)
+                            darkenColor(lineColor, 0.32f)
                         )
                     )
-                )
-            }
-
-            Box(
-                modifier = Modifier
-                    .width(24.dp)
-                    .fillMaxHeight()
-                    .padding(start = 5.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = if (isEnglish) "min" else "分",
-                    color = Color.White,
-                    fontSize = 7.5.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                 )
             }
 
             Row(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(start = 24.dp, end = 4.dp),
+                    .padding(start = 10.dp, end = 28.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val slots = (7 downTo 0).map { idx -> rowStops.getOrNull(idx) }
-                for ((colPos, stop) in slots.withIndex()) {
-                    val idxFromRight = 7 - colPos
+                val slotsToRender = if (isFirstRow) slotCount else activeStationsCount
+                for (idx in 0 until slotsToRender) {
+                    val stop = rowStops.getOrNull(idx)
                     Box(
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (stop != null && !(isFirstRow && idxFromRight == 0)) {
-                            Box(
-                                modifier = Modifier
-                                    .width(20.dp)
-                                    .height(13.dp)
-                                    .background(Color.White, RoundedCornerShape(2.dp)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "${stop.minutesFromNow}",
-                                    color = Color(0xFF111317),
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Black,
-                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                                )
+                        if (stop != null) {
+                            if (isFirstRow && idx == 0) {
+                                // 始発駅の右向き白三角 `[>]`
+                                Box(
+                                    modifier = Modifier
+                                        .width(20.dp)
+                                        .height(15.dp)
+                                        .border(1.dp, Color.White, RoundedCornerShape(2.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "▶",
+                                        color = Color.White,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Black,
+                                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                    )
+                                }
+                            } else if (!stop.isPassStation) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(22.dp)
+                                        .height(15.dp)
+                                        .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(2.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "${stop.minutesFromNow}",
+                                        color = Color(0xFF0B0E12),
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.Black,
+                                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            // 右端の「分 / min」ラベル
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .width(28.dp)
+                    .fillMaxHeight()
+                    .padding(end = 5.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (isEnglish) "min" else "分",
+                    color = Color.White,
+                    fontSize = 8.5.sp,
+                    fontWeight = FontWeight.Black,
+                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                )
             }
         }
     }
@@ -1408,6 +1544,8 @@ private fun CompactStationProgressRow(
 
 /**
  * ビュー3: 「ただいま ○○」停車中・立体ホーム＆車両編成スライドイン図（動画4 `2118 (1).mp4` 完全再現）
+ * - 00:00〜00:01: 号車番号なしの銀色車両（下部に路線カラー帯）が右から左へホームへ滑り込む
+ * - 00:02以降: 停車完了と同時に左端に赤矢印 `⬅` と各号車番号 `1`〜`10` が現れ、乗車号車が大きく緑点滅
  */
 @Composable
 private fun TrainLcdPlatformCarView(
@@ -1418,29 +1556,30 @@ private fun TrainLcdPlatformCarView(
     activeCarNo: Int,
     langMode: TrainLcdLangMode
 ) {
-    val isEnglish = langMode == TrainLcdLangMode.ENGLISH
     val totalCars = carCount.coerceIn(4, 15)
 
     // 表示開始時に右から左へ電車が滑り込むスライドインアニメーション
     var entered by remember { mutableStateOf(false) }
     LaunchedEffect(currentStop.kanji) {
         entered = false
-        delay(40L)
+        delay(50L)
         entered = true
     }
     val slideOffsetFraction by animateFloatAsState(
-        targetValue = if (entered) 0f else 0.65f,
-        animationSpec = tween(durationMillis = 850, easing = FastOutSlowInEasing),
+        targetValue = if (entered) 0f else 0.78f,
+        animationSpec = tween(durationMillis = 1100, easing = FastOutSlowInEasing),
         label = "trainSlideIn"
     )
+    // 列車が所定位置にほぼ停止したら号車番号と赤矢印を表示（動画4の 00:02 と完全一致）
+    val isTrainStopped = slideOffsetFraction <= 0.06f
 
-    // 乗車号車のハイライト点滅
+    // 乗車号車のハイライト点滅（緑 ⇔ 銀白）
     val infiniteTransition = rememberInfiniteTransition(label = "carHighlightBlink")
     val highlightPhase by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = LinearEasing),
+            animation = tween(900, easing = LinearEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "carHighlightAnim"
@@ -1449,41 +1588,17 @@ private fun TrainLcdPlatformCarView(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(178.dp)
+            .height(188.dp)
             .background(Color.White)
             .clipToBounds()
     ) {
-        // 1. 3Dパースペクティブのホーム屋根・柱・ホーム床・黄色点字ブロック・線路をCanvas描画
+        // 1. 動画4と完全一致する3D台形ホーム＋黄色点字ブロック破線＋線路破線をCanvas描画
         Canvas(modifier = Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
 
-            // 上部: 立体的な台形ホーム屋根 (動画4の上部グレー構造物)
-            val roofTopY = h * 0.08f
-            val roofBottomY = h * 0.25f
-            val roofPath = Path().apply {
-                moveTo(w * 0.14f, roofTopY)
-                lineTo(w * 0.86f, roofTopY)
-                lineTo(w * 0.90f, roofBottomY)
-                lineTo(w * 0.10f, roofBottomY)
-                close()
-            }
-            drawPath(
-                path = roofPath,
-                brush = Brush.verticalGradient(
-                    listOf(Color(0xFFD0D6DF), Color(0xFFAEB7C4))
-                )
-            )
-            // 屋根の下面シャドウ帯
-            drawRect(
-                color = Color(0xFF7B8492),
-                topLeft = Offset(w * 0.10f, roofBottomY),
-                size = Size(w * 0.80f, 5.dp.toPx())
-            )
-
-            // 中段: 3D台形ホーム床面
-            val platTopY = h * 0.36f
-            val platBottomY = h * 0.67f
+            val platTopY = h * 0.25f
+            val platBottomY = h * 0.72f
             val platPath = Path().apply {
                 moveTo(w * 0.08f, platTopY)
                 lineTo(w * 0.92f, platTopY)
@@ -1491,250 +1606,174 @@ private fun TrainLcdPlatformCarView(
                 lineTo(w * 0.04f, platBottomY)
                 close()
             }
+            // 左が明るく右に向かって少し濃くなる立体グレーグラデーション（動画4準拠）
             drawPath(
                 path = platPath,
-                brush = Brush.verticalGradient(
-                    listOf(Color(0xFFCFD6DF), Color(0xFFE6EAF0))
+                brush = Brush.horizontalGradient(
+                    0.0f to Color(0xFFEDEFF2),
+                    0.55f to Color(0xFFD5D9E0),
+                    1.0f to Color(0xFF9EA4AE)
                 )
             )
-
-            // 屋根を支える柱（左右2本＋中央階段アイコン枠）
-            val pillarW = 6.dp.toPx()
-            drawRect(
-                color = Color(0xFF8E97A4),
-                topLeft = Offset(w * 0.22f, roofBottomY),
-                size = Size(pillarW, platTopY - roofBottomY + 12.dp.toPx())
-            )
-            drawRect(
-                color = Color(0xFF8E97A4),
-                topLeft = Offset(w * 0.78f, roofBottomY),
-                size = Size(pillarW, platTopY - roofBottomY + 12.dp.toPx())
-            )
-
-            // ホーム側面（厚み）
-            val edgeH = 7.dp.toPx()
-            drawRect(
-                color = Color(0xFF8B94A3),
-                topLeft = Offset(w * 0.04f, platBottomY),
-                size = Size(w * 0.92f, edgeH)
+            // ホーム上端・左右端の白ハイライト縁取り
+            drawPath(
+                path = platPath,
+                color = Color.White,
+                style = Stroke(width = 2.dp.toPx())
             )
 
             // ホーム手前側の黄色い点字ブロック破線 (動画4と完全一致)
-            val tactileY = platBottomY - 5.dp.toPx()
+            val tactileY = platBottomY - 8.dp.toPx()
             drawLine(
                 color = Color(0xFFFACC15),
-                start = Offset(w * 0.06f, tactileY),
-                end = Offset(w * 0.94f, tactileY),
-                strokeWidth = 3.dp.toPx(),
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12.dp.toPx(), 6.dp.toPx()), 0f)
+                start = Offset(w * 0.055f, tactileY),
+                end = Offset(w * 0.945f, tactileY),
+                strokeWidth = 3.2.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 5.dp.toPx()), 0f)
             )
 
-            // 下段: 線路道床（ダークグレー）＋ レール＆枕木
-            val trackTopY = platBottomY + edgeH
-            val trackBottomY = h * 0.96f
-            drawRect(
-                brush = Brush.verticalGradient(
-                    listOf(Color(0xFF2B3038), Color(0xFF424954), Color(0xFF22262C))
-                ),
-                topLeft = Offset(0f, trackTopY),
-                size = Size(w, trackBottomY - trackTopY)
-            )
-
-            // 線路の2本のレールライン
-            val rail1Y = trackTopY + (trackBottomY - trackTopY) * 0.32f
-            val rail2Y = trackTopY + (trackBottomY - trackTopY) * 0.74f
+            // ホーム下の線路（2本の破線レール）
+            val rail1Y = platBottomY + 4.dp.toPx()
+            val rail2Y = platBottomY + 9.dp.toPx()
             drawLine(
-                color = Color(0xFF94A3B8),
+                color = Color(0xFF64748B),
                 start = Offset(0f, rail1Y),
                 end = Offset(w, rail1Y),
-                strokeWidth = 1.5.dp.toPx()
+                strokeWidth = 1.8.dp.toPx()
             )
             drawLine(
-                color = Color(0xFF94A3B8),
+                color = Color(0xFF475569),
+                start = Offset(0f, rail1Y),
+                end = Offset(w, rail1Y),
+                strokeWidth = 1.8.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()), 0f)
+            )
+            drawLine(
+                color = Color(0xFF64748B),
                 start = Offset(0f, rail2Y),
                 end = Offset(w, rail2Y),
-                strokeWidth = 1.5.dp.toPx()
+                strokeWidth = 1.8.dp.toPx()
+            )
+            drawLine(
+                color = Color(0xFF475569),
+                start = Offset(0f, rail2Y),
+                end = Offset(w, rail2Y),
+                strokeWidth = 1.8.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(8.dp.toPx(), 6.dp.toPx()), 4.dp.toPx())
             )
         }
 
-        // ホーム上の階段・エスカレーター・降車案内ピクトグラム＆ラベル
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 62.dp, start = 48.dp, end = 48.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 階段・エスカレーターピクトグラム
-            Surface(
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(4.dp),
-                border = BorderStroke(1.dp, Color.White)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("🪜", fontSize = 10.sp)
-                    Text(
-                        text = if (isEnglish) "Stairs / Exit" else "階段・出口",
-                        color = Color.White,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                    )
-                }
-            }
-
-            // 降車駅またはのりば案内バッジ
-            if (currentStop.isAlightStation) {
-                Surface(
-                    color = Color(0xFFDC2626),
-                    shape = RoundedCornerShape(4.dp),
-                    border = BorderStroke(1.dp, Color.White)
-                ) {
-                    Text(
-                        text = if (isEnglish) "Alight Here (${currentStop.romaji})" else "降車駅です（${currentStop.kanji}）",
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                    )
-                }
-            } else if (trainLeg.platform.isNotBlank()) {
-                Surface(
-                    color = lineColor,
-                    shape = RoundedCornerShape(4.dp),
-                    border = BorderStroke(1.dp, Color.White)
-                ) {
-                    Text(
-                        text = trainLeg.platform,
-                        color = Color.White,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                    )
-                }
-            }
-
-            // エレベーターピクトグラム
-            Surface(
-                color = Color(0xFF1E293B),
-                shape = RoundedCornerShape(4.dp),
-                border = BorderStroke(1.dp, Color.White)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("🛗", fontSize = 10.sp)
-                    Text(
-                        text = if (isEnglish) "Elevator" else "エレベーター",
-                        color = Color.White,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                    )
-                }
-            }
-        }
-
-        // 2. 下段線路上の車両編成ボックス (1号車〜N号車 + 左端の赤色進行方向矢印 ⬅)
+        // 2. 線路上の車両編成ボックス (1号車〜N号車 + 左端の赤色進行方向矢印 ⬅)
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(bottom = 11.dp, start = 14.dp, end = 14.dp)
-                .offset(x = (slideOffsetFraction * 260f).dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(bottom = 44.dp, start = 12.dp, end = 12.dp)
+                .offset(x = (slideOffsetFraction * 320f).dp),
+            verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.Center
         ) {
-            // 左端の赤い進行方向矢印 ⬅ (動画4の1号車左の赤矢印)
-            Canvas(
+            // 左端の赤い進行方向矢印 ⬅ (停車完了後に表示)
+            Box(
                 modifier = Modifier
-                    .width(22.dp)
-                    .height(22.dp)
-                    .padding(end = 4.dp)
+                    .width(26.dp)
+                    .height(28.dp)
+                    .padding(end = 5.dp),
+                contentAlignment = Alignment.Center
             ) {
-                val w = size.width
-                val h = size.height
-                val arrowPath = Path().apply {
-                    moveTo(0f, h * 0.5f)
-                    lineTo(w * 0.55f, h * 0.12f)
-                    lineTo(w * 0.55f, h * 0.34f)
-                    lineTo(w, h * 0.34f)
-                    lineTo(w, h * 0.66f)
-                    lineTo(w * 0.55f, h * 0.66f)
-                    lineTo(w * 0.55f, h * 0.88f)
-                    close()
+                if (isTrainStopped) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val w = size.width
+                        val h = size.height
+                        val arrowPath = Path().apply {
+                            moveTo(0f, h * 0.5f)
+                            lineTo(w * 0.52f, h * 0.14f)
+                            lineTo(w * 0.52f, h * 0.35f)
+                            lineTo(w, h * 0.35f)
+                            lineTo(w, h * 0.65f)
+                            lineTo(w * 0.52f, h * 0.65f)
+                            lineTo(w * 0.52f, h * 0.86f)
+                            close()
+                        }
+                        drawPath(arrowPath, color = Color.White, style = Stroke(width = 2.5.dp.toPx()))
+                        drawPath(arrowPath, color = Color(0xFFEF4444))
+                    }
                 }
-                drawPath(arrowPath, color = Color.White, style = Stroke(width = 2.5.dp.toPx()))
-                drawPath(arrowPath, color = Color(0xFFE11D48))
             }
 
             // 1号車 〜 totalCars号車
             Row(
-                horizontalArrangement = Arrangement.spacedBy(2.5.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
                 for (carNum in 1..totalCars) {
-                    val isCurrentCar = (carNum == activeCarNo)
-                    val isHighlighted = isCurrentCar && (highlightPhase > 0.35f)
-                    val boxBg = if (isHighlighted) {
-                        Brush.verticalGradient(listOf(lightenColor(lineColor, 0.15f), lineColor))
-                    } else {
-                        Brush.verticalGradient(listOf(Color(0xFFF8FAFC), Color(0xFFD8E0EA)))
+                    val isCurrentCar = (carNum == activeCarNo) && isTrainStopped
+                    val isHighlighted = isCurrentCar && (highlightPhase > 0.42f)
+                    val carWidth = when {
+                        isCurrentCar -> if (totalCars > 10) 28.dp else 34.dp
+                        totalCars > 10 -> 21.dp
+                        else -> 26.dp
                     }
-                    val numColor = if (isHighlighted) Color.White else Color(0xFF111317)
+                    val carHeight = if (isCurrentCar) 38.dp else 29.dp
+
+                    val boxBg = if (isHighlighted) {
+                        Brush.verticalGradient(
+                            listOf(
+                                lightenColor(lineColor, 0.18f),
+                                lineColor,
+                                darkenColor(lineColor, 0.12f)
+                            )
+                        )
+                    } else {
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xFFFFFFFF),
+                                Color(0xFFD8DEE6),
+                                Color(0xFFB8C0CC)
+                            )
+                        )
+                    }
+                    val numColor = if (isHighlighted) Color.White else Color(0xFF0B0E12)
 
                     Column(
                         modifier = Modifier
-                            .width(if (totalCars > 10) 21.dp else 26.dp)
-                            .height(28.dp)
-                            .clip(
-                                RoundedCornerShape(
-                                    topStart = if (carNum == 1) 6.dp else 2.dp,
-                                    topEnd = if (carNum == totalCars) 6.dp else 2.dp,
-                                    bottomStart = 2.dp,
-                                    bottomEnd = 2.dp
-                                )
-                            )
-                            .background(boxBg)
+                            .width(carWidth)
+                            .height(carHeight)
+                            .background(boxBg, RoundedCornerShape(1.5.dp))
                             .border(
                                 width = if (isCurrentCar) 1.5.dp else 1.dp,
-                                color = if (isCurrentCar) lineColor else Color(0xFF475569),
-                                shape = RoundedCornerShape(
-                                    topStart = if (carNum == 1) 6.dp else 2.dp,
-                                    topEnd = if (carNum == totalCars) 6.dp else 2.dp,
-                                    bottomStart = 2.dp,
-                                    bottomEnd = 2.dp
-                                )
+                                color = if (isHighlighted) Color.White else Color(0xFF525B66),
+                                shape = RoundedCornerShape(1.5.dp)
                             ),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // 車両上部の路線カラー帯
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isTrainStopped) {
+                                Text(
+                                    text = "$carNum",
+                                    color = numColor,
+                                    fontSize = when {
+                                        isCurrentCar -> 21.sp
+                                        totalCars > 10 -> 13.5.sp
+                                        else -> 16.5.sp
+                                    },
+                                    fontWeight = FontWeight.Black,
+                                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                                )
+                            }
+                        }
+                        // 車両下端の路線カラー帯（動画4の車両下部グリーン帯と完全一致）
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(4.dp)
+                                .height(3.5.dp)
                                 .background(lineColor)
                         )
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "$carNum",
-                                color = numColor,
-                                fontSize = if (totalCars > 10) 11.sp else 13.sp,
-                                fontWeight = FontWeight.Black,
-                                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                            )
-                        }
                     }
                 }
             }
@@ -1743,13 +1782,14 @@ private fun TrainLcdPlatformCarView(
 }
 
 /**
- * 日本語縦書き駅名コンポーネント（長音「ー」の縦棒変換対応）
+ * 日本語縦書き駅名コンポーネント（大型フォント・2文字駅の上下均等配置・通過駅の薄字表示対応）
  */
 @Composable
 private fun VerticalJapaneseStationName(
     name: String,
     color: Color,
     isHighlighted: Boolean,
+    isDimmed: Boolean = false,
     lineColor: Color,
     modifier: Modifier = Modifier,
     compact: Boolean = false
@@ -1757,19 +1797,22 @@ private fun VerticalJapaneseStationName(
     val clean = name.removeSuffix("駅").trim()
     val chars = clean.toCharArray()
     val fontSize = when {
-        compact && chars.size >= 5 -> 8.5.sp
-        compact -> 10.sp
-        chars.size >= 6 -> 10.5.sp
-        chars.size == 5 -> 11.5.sp
-        else -> 13.5.sp
+        compact && chars.size >= 6 -> 9.sp
+        compact && chars.size == 5 -> 10.sp
+        compact -> 11.5.sp
+        chars.size >= 6 -> 12.sp
+        chars.size == 5 -> 14.sp
+        else -> 17.sp
     }
     val lineHeight = when {
-        compact && chars.size >= 5 -> 9.sp
-        compact -> 10.5.sp
-        chars.size >= 6 -> 11.sp
-        chars.size == 5 -> 12.5.sp
-        else -> 14.5.sp
+        compact && chars.size >= 6 -> 9.5.sp
+        compact && chars.size == 5 -> 10.5.sp
+        compact -> 12.sp
+        chars.size >= 6 -> 12.5.sp
+        chars.size == 5 -> 14.5.sp
+        else -> 17.5.sp
     }
+    val weight = if (isDimmed) FontWeight.Bold else FontWeight.Black
 
     Column(
         modifier = modifier
@@ -1785,23 +1828,34 @@ private fun VerticalJapaneseStationName(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Bottom
     ) {
-        for (ch in chars) {
-            if (ch == 'ー' || ch == '－' || ch == '-') {
+        if (!compact && chars.size == 2) {
+            // 動画の「戸　田」「大　宮」と同様に、2文字駅は上下に1文字分の間隔を空けて3〜4文字駅と高さを揃える
+            Text(
+                text = chars[0].toString(),
+                color = color,
+                fontSize = fontSize,
+                lineHeight = lineHeight,
+                fontWeight = weight,
+                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = chars[1].toString(),
+                color = color,
+                fontSize = fontSize,
+                lineHeight = lineHeight,
+                fontWeight = weight,
+                style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+            )
+        } else {
+            for (ch in chars) {
+                val displayChar = if (ch == 'ー' || ch == '－' || ch == '-') "｜" else ch.toString()
                 Text(
-                    text = "｜",
+                    text = displayChar,
                     color = color,
                     fontSize = fontSize,
                     lineHeight = lineHeight,
-                    fontWeight = FontWeight.ExtraBold,
-                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
-                )
-            } else {
-                Text(
-                    text = ch.toString(),
-                    color = color,
-                    fontSize = fontSize,
-                    lineHeight = lineHeight,
-                    fontWeight = FontWeight.ExtraBold,
+                    fontWeight = weight,
                     style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
                 )
             }
@@ -1817,38 +1871,38 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRedWhiteDoubleC
     centerY: Float,
     barHeight: Float
 ) {
-    val h = barHeight * 0.76f
+    val h = barHeight * 0.86f
     val halfH = h / 2f
-    val chevW = 8.dp.toPx()
-    val thickness = 4.5.dp.toPx()
+    val chevW = 9.dp.toPx()
+    val thickness = 5.5.dp.toPx()
 
-    // 外側白枠付きの赤い左向きシェブロン1つ目（左側）
-    val x1 = centerX - 3.dp.toPx()
-    val chev1 = Path().apply {
-        moveTo(x1 - chevW / 2f, centerY)
-        lineTo(x1 + chevW / 2f, centerY - halfH)
-        lineTo(x1 + chevW / 2f + thickness, centerY - halfH)
-        lineTo(x1 - chevW / 2f + thickness, centerY)
-        lineTo(x1 + chevW / 2f + thickness, centerY + halfH)
-        lineTo(x1 + chevW / 2f, centerY + halfH)
+    // 左側: 白シェブロン
+    val xWhite = centerX - 4.5.dp.toPx()
+    val chevWhite = Path().apply {
+        moveTo(xWhite - chevW / 2f, centerY)
+        lineTo(xWhite + chevW / 2f, centerY - halfH)
+        lineTo(xWhite + chevW / 2f + thickness, centerY - halfH)
+        lineTo(xWhite - chevW / 2f + thickness, centerY)
+        lineTo(xWhite + chevW / 2f + thickness, centerY + halfH)
+        lineTo(xWhite + chevW / 2f, centerY + halfH)
         close()
     }
 
-    // 2つ目（右側、白シェブロン＋赤シェブロン）
-    val x2 = centerX + 4.dp.toPx()
-    val chev2 = Path().apply {
-        moveTo(x2 - chevW / 2f, centerY)
-        lineTo(x2 + chevW / 2f, centerY - halfH)
-        lineTo(x2 + chevW / 2f + thickness, centerY - halfH)
-        lineTo(x2 - chevW / 2f + thickness, centerY)
-        lineTo(x2 + chevW / 2f + thickness, centerY + halfH)
-        lineTo(x2 + chevW / 2f, centerY + halfH)
+    // 右側: 白縁付き赤シェブロン（動画2・3と同じく赤シェブロンが右、白シェブロンが左先端）
+    val xRed = centerX + 2.dp.toPx()
+    val chevRed = Path().apply {
+        moveTo(xRed - chevW / 2f, centerY)
+        lineTo(xRed + chevW / 2f, centerY - halfH)
+        lineTo(xRed + chevW / 2f + thickness, centerY - halfH)
+        lineTo(xRed - chevW / 2f + thickness, centerY)
+        lineTo(xRed + chevW / 2f + thickness, centerY + halfH)
+        lineTo(xRed + chevW / 2f, centerY + halfH)
         close()
     }
 
-    drawPath(chev2, color = Color.White)
-    drawPath(chev1, color = Color.White, style = Stroke(width = 1.8.dp.toPx()))
-    drawPath(chev1, color = Color(0xFFE11D48))
+    drawPath(chevWhite, color = Color.White)
+    drawPath(chevRed, color = Color.White, style = Stroke(width = 2.dp.toPx()))
+    drawPath(chevRed, color = Color(0xFFDC2626))
 }
 
 // ============================================================================
@@ -2096,38 +2150,112 @@ fun resolveTrainLcdState(
             ?: (firstStDigits - 1)
     } else firstStDigits - 1
     val stepDir = if (secondStDigits < firstStDigits) -1 else 1
+    val rinkaiSet = setOf("新木場", "東雲", "国際展示場", "東京テレポート", "天王洲アイル", "品川シーサイド", "大井町")
 
-    val stopItems = fullStops.mapIndexed { idx, rawName ->
+    // 停車駅リストを展開し、快速・特快・特急などで通過する中間駅（isPassStation = true）を路線順に自動挿入
+    // ※ ヘッダー案内（次は / まもなく / ただいま）の対象となる prevStopIndex / targetStopIndex は必ず停車駅のみを指す
+    val stopItems = ArrayList<TrainLcdStopItem>()
+    val expandedIndexForStop = IntArray(fullStops.size)
+
+    for (idx in fullStops.indices) {
+        val rawName = fullStops[idx]
         val kanji = rawName.removeSuffix("駅").trim()
         val rawKana = fullKanas.getOrElse(idx) { "" }
         val hiragana = resolveStationHiragana(kanji, rawKana)
         val romaji = resolveStationRomaji(kanji, hiragana)
         val fallbackNum = (firstStDigits + idx * stepDir).coerceIn(1, 99)
-        val digits = resolveStationNumberDigits(linePrefix, kanji, fallbackNum = fallbackNum)
+        val effectivePrefix = if (linePrefix == "JA" && kanji in rinkaiSet) "R" else linePrefix
+        val digits = resolveStationNumberDigits(effectivePrefix, kanji, fallbackNum = fallbackNum)
         val rawMin = fullBaseMins.getOrElse(idx) { idx * 2 } - currentElapsedMin
         val minFromNow = if (idx <= prevIdx) 0 else rawMin.coerceAtLeast(idx - prevIdx)
 
-        TrainLcdStopItem(
-            index = idx,
-            kanji = kanji,
-            hiragana = hiragana,
-            romaji = romaji,
-            stationNumberCode = "$linePrefix-$digits",
-            stationNumberDigits = digits,
-            minutesFromNow = minFromNow,
-            isAlightStation = (idx == alightIdx),
-            transferLines = resolveStationTransferBadges(kanji, linePrefix)
+        expandedIndexForStop[idx] = stopItems.size
+        stopItems.add(
+            TrainLcdStopItem(
+                index = stopItems.size,
+                kanji = kanji,
+                hiragana = hiragana,
+                romaji = romaji,
+                stationNumberCode = "$effectivePrefix-$digits",
+                stationNumberDigits = digits,
+                minutesFromNow = minFromNow,
+                isAlightStation = (idx == alightIdx),
+                isPassStation = false,
+                transferLines = resolveStationTransferBadges(kanji, linePrefix)
+            )
         )
+
+        // 次の停車駅との間に通過駅がある場合は薄字表示用（isPassStation = true）として挿入
+        if (idx < fullStops.lastIndex) {
+            val nextKanji = fullStops[idx + 1].removeSuffix("駅").trim()
+            val passStations = findIntermediatePassStations(linePrefix, kanji, nextKanji)
+            for ((passKanji, passDigits) in passStations) {
+                val passHira = resolveStationHiragana(passKanji, "")
+                val passRomaji = resolveStationRomaji(passKanji, passHira)
+                val passPrefix = if (linePrefix == "JA" && passKanji in rinkaiSet) "R" else linePrefix
+                stopItems.add(
+                    TrainLcdStopItem(
+                        index = stopItems.size,
+                        kanji = passKanji,
+                        hiragana = passHira,
+                        romaji = passRomaji,
+                        stationNumberCode = "$passPrefix-$passDigits",
+                        stationNumberDigits = passDigits,
+                        minutesFromNow = 0,
+                        isAlightStation = false,
+                        isPassStation = true,
+                        transferLines = emptyList()
+                    )
+                )
+            }
+        }
     }
+
+    val expandedPrevIdx = expandedIndexForStop.getOrElse(prevIdx) { 0 }
+    val expandedTargetIdx = expandedIndexForStop.getOrElse(targetIdx) { stopItems.lastIndex.coerceAtLeast(0) }
+    val expandedAlightIdx = expandedIndexForStop.getOrElse(alightIdx) { stopItems.lastIndex.coerceAtLeast(0) }
 
     return TrainLcdResolvedState(
         phase = resolvedPhase,
-        prevStopIndex = prevIdx,
-        targetStopIndex = targetIdx,
+        prevStopIndex = expandedPrevIdx,
+        targetStopIndex = expandedTargetIdx,
         segmentProgress = segProgress,
         allStops = stopItems,
-        alightStopIndex = alightIdx
+        alightStopIndex = expandedAlightIdx
     )
+}
+
+/**
+ * 2つの連続する停車駅の間にある通過駅（駅名と2桁駅番号のペア）を路線順で返す
+ */
+private fun findIntermediatePassStations(
+    linePrefix: String,
+    fromKanji: String,
+    toKanji: String
+): List<Pair<String, String>> {
+    val lineMap = stationNumberExactMap[linePrefix] ?: return emptyList()
+    val fromNum = lineMap[fromKanji] ?: return emptyList()
+    val toNum = lineMap[toKanji] ?: return emptyList()
+    val diff = toNum - fromNum
+    // 同一系統内の2〜12駅飛ばし（快速・通勤快速・特快・特急・急行など）のみ中間通過駅を展開
+    if (kotlin.math.abs(diff) !in 2..12) return emptyList()
+
+    val numToStation = HashMap<Int, String>()
+    for ((st, num) in lineMap) {
+        numToStation.putIfAbsent(num, st)
+    }
+
+    val result = ArrayList<Pair<String, String>>()
+    val step = if (diff > 0) 1 else -1
+    var cur = fromNum + step
+    while (cur != toNum) {
+        val stName = numToStation[cur]
+        if (stName != null && stName != fromKanji && stName != toKanji) {
+            result.add(stName to String.format("%02d", cur))
+        }
+        cur += step
+    }
+    return result
 }
 
 // ============================================================================
@@ -2401,11 +2529,16 @@ private fun convertPureHiraganaToRomaji(hira: String): String {
 // 首都圏主要駅の正確な駅番号マップ（路線記号ごと）
 private val stationNumberExactMap: Map<String, Map<String, Int>> = mapOf(
     "JA" to mapOf(
+        "新木場" to 1, "東雲" to 2, "国際展示場" to 3, "東京テレポート" to 4,
+        "天王洲アイル" to 5, "品川シーサイド" to 6, "大井町" to 7,
         "大崎" to 8, "恵比寿" to 9, "渋谷" to 10, "新宿" to 11, "池袋" to 12,
         "板橋" to 13, "十条" to 14, "赤羽" to 15, "北赤羽" to 16, "浮間舟渡" to 17,
         "戸田公園" to 18, "戸田" to 19, "北戸田" to 20, "武蔵浦和" to 21, "中浦和" to 22,
-        "南与野" to 23, "与野本町" to 24, "北与野" to 25, "大宮" to 26, "新木場" to 1,
-        "東雲" to 2, "国際展示場" to 3, "東京テレポート" to 4, "天王洲アイル" to 5, "品川シーサイド" to 6, "大井町" to 7
+        "南与野" to 23, "与野本町" to 24, "北与野" to 25, "大宮" to 26
+    ),
+    "R" to mapOf(
+        "新木場" to 1, "東雲" to 2, "国際展示場" to 3, "東京テレポート" to 4,
+        "天王洲アイル" to 5, "品川シーサイド" to 6, "大井町" to 7, "大崎" to 8
     ),
     "JC" to mapOf(
         "東京" to 1, "神田" to 2, "御茶ノ水" to 3, "四ツ谷" to 4, "新宿" to 5,
@@ -2452,12 +2585,15 @@ private val stationNumberExactMap: Map<String, Map<String, Int>> = mapOf(
         "南浦和" to 25, "東浦和" to 24, "東川口" to 23, "南越谷" to 22, "西船橋" to 10
     ),
     "KO" to mapOf(
-        "新宿" to 1, "笹塚" to 4, "明大前" to 6, "下高井戸" to 7, "桜上水" to 8,
-        "千歳烏山" to 12, "仙川" to 13, "つつじヶ丘" to 14, "調布" to 18, "東府中" to 23,
-        "府中" to 24, "分倍河原" to 25, "中河原" to 26, "聖蹟桜ヶ丘" to 27, "百草園" to 28,
-        "高幡不動" to 29, "南平" to 30, "平山城址公園" to 31, "長沼" to 32, "北野" to 33,
-        "京王八王子" to 34, "京王片倉" to 48, "山田" to 49, "めじろ台" to 50, "狭間" to 51,
-        "高尾" to 52, "高尾山口" to 53, "京王多摩センター" to 41, "南大沢" to 43, "橋本" to 45
+        "新宿" to 1, "初台" to 2, "幡ヶ谷" to 3, "笹塚" to 4, "代田橋" to 5,
+        "明大前" to 6, "下高井戸" to 7, "桜上水" to 8, "上北沢" to 9, "八幡山" to 10,
+        "芦花公園" to 11, "千歳烏山" to 12, "仙川" to 13, "つつじヶ丘" to 14, "柴崎" to 15,
+        "国領" to 16, "布田" to 17, "調布" to 18, "西調布" to 19, "飛田給" to 20,
+        "武蔵野台" to 21, "多磨霊園" to 22, "東府中" to 23, "府中" to 24, "分倍河原" to 25,
+        "中河原" to 26, "聖蹟桜ヶ丘" to 27, "百草園" to 28, "高幡不動" to 29, "南平" to 30,
+        "平山城址公園" to 31, "長沼" to 32, "北野" to 33, "京王八王子" to 34,
+        "京王片倉" to 48, "山田" to 49, "めじろ台" to 50, "狭間" to 51, "高尾" to 52, "高尾山口" to 53,
+        "京王多摩センター" to 41, "南大沢" to 43, "橋本" to 45
     ),
     "OH" to mapOf(
         "新宿" to 1, "代々木上原" to 5, "下北沢" to 7, "経堂" to 11, "成城学園前" to 14,
@@ -2591,9 +2727,13 @@ private val stationHiraganaMap = mapOf(
     "京王八王子" to "けいおうはちおうじ", "北野" to "きたの", "長沼" to "ながぬま",
     "平山城址公園" to "ひらやまじょうしこうえん", "南平" to "みなみだいら", "高幡不動" to "たかはたふどう",
     "百草園" to "もぐさえん", "聖蹟桜ヶ丘" to "せいせきさくらがおか", "中河原" to "なかがわら",
-    "分倍河原" to "ぶばいがわら", "府中" to "ふちゅう", "東府中" to "ひがしふちゅう", "調布" to "ちょうふ",
+    "分倍河原" to "ぶばいがわら", "府中" to "ふちゅう", "東府中" to "ひがしふちゅう",
+    "多磨霊園" to "たまれいえん", "武蔵野台" to "むさしのだい", "飛田給" to "とびたきゅう", "西調布" to "にしちょうふ",
+    "調布" to "ちょうふ", "布田" to "ふだ", "国領" to "こくりょう", "柴崎" to "しばさき",
     "つつじヶ丘" to "つつじがおか", "仙川" to "せんがわ", "千歳烏山" to "ちとせからすやま",
-    "桜上水" to "さくらじょうすい", "下高井戸" to "しもたかいど", "明大前" to "めいだいまえ", "笹塚" to "ささづか",
+    "芦花公園" to "ろかこうえん", "八幡山" to "はちまんやま", "上北沢" to "かみきたざわ",
+    "桜上水" to "さくらじょうすい", "下高井戸" to "しもたかいど", "明大前" to "めいだいまえ",
+    "代田橋" to "だいたばし", "笹塚" to "ささづか", "幡ヶ谷" to "はたがや", "初台" to "はつだい",
     "京王片倉" to "けいおうかたくら", "山田" to "やまだ", "めじろ台" to "めじろだい", "狭間" to "はざま",
     "橋本" to "はしもと", "南大沢" to "みなみおおさわ", "京王多摩センター" to "けいおうたまセンター",
     "相原" to "あいはら", "八王子みなみ野" to "はちおうじみなみの", "片倉" to "かたくら",
@@ -2629,9 +2769,13 @@ private val stationExactRomajiMap = mapOf(
     "京王八王子" to "Keiō-Hachiōji", "北野" to "Kitano", "長沼" to "Naganuma",
     "平山城址公園" to "Hirayamajōshi-kōen", "南平" to "Minamidaira", "高幡不動" to "Takahatafudō",
     "百草園" to "Mogusaen", "聖蹟桜ヶ丘" to "Seiseki-Sakuragaoka", "中河原" to "Nakagawara",
-    "分倍河原" to "Bubaigawara", "府中" to "Fuchū", "東府中" to "Higashi-Fuchū", "調布" to "Chōfu",
+    "分倍河原" to "Bubaigawara", "府中" to "Fuchū", "東府中" to "Higashi-Fuchū",
+    "多磨霊園" to "Tama-Reien", "武蔵野台" to "Musashinodai", "飛田給" to "Tobitakyū", "西調布" to "Nishi-Chōfu",
+    "調布" to "Chōfu", "布田" to "Fuda", "国領" to "Kokuryō", "柴崎" to "Shibasaki",
     "つつじヶ丘" to "Tsutsujigaoka", "仙川" to "Sengawa", "千歳烏山" to "Chitose-Karasuyama",
-    "桜上水" to "Sakurajōsui", "下高井戸" to "Shimo-Takaido", "明大前" to "Meidaimae", "笹塚" to "Sasazuka",
+    "芦花公園" to "Roka-kōen", "八幡山" to "Hachimanyama", "上北沢" to "Kami-Kitazawa",
+    "桜上水" to "Sakurajōsui", "下高井戸" to "Shimo-Takaido", "明大前" to "Meidaimae",
+    "代田橋" to "Daitabashi", "笹塚" to "Sasazuka", "幡ヶ谷" to "Hatagaya", "初台" to "Hatsudai",
     "京王片倉" to "Keiō-Katakura", "山田" to "Yamada", "めじろ台" to "Mejirodai", "狭間" to "Hazama",
     "橋本" to "Hashimoto", "南大沢" to "Minami-Ōsawa", "京王多摩センター" to "Keiō-Tama-Center",
     "相原" to "Aihara", "八王子みなみ野" to "Hachiōji-Minamino", "片倉" to "Katakura",
@@ -3057,25 +3201,17 @@ fun LcdTestPreviewDialog(
 fun buildSampleTestItineraries(): List<LcdTestPreset> {
     val now = LocalDateTime.now()
 
-    // 1. JR埼京線 各駅停車 新木場行 (大宮 -> 新木場) [参照動画4本と完全同一の路線・駅構成]
+    // 1. JR埼京線 各駅停車 新木場行 (大宮 -> 新木場) [参照動画4本と完全同一の路線・全26駅構成]
     val saikyoStops = listOf(
         "大宮", "北与野", "与野本町", "南与野", "中浦和", "武蔵浦和", "北戸田", "戸田",
         "戸田公園", "浮間舟渡", "北赤羽", "赤羽", "十条", "板橋", "池袋", "新宿",
-        "渋谷", "恵比寿", "大崎", "新木場"
+        "渋谷", "恵比寿", "大崎", "大井町", "品川シーサイド", "天王洲アイル",
+        "東京テレポート", "国際展示場", "東雲", "新木場"
     )
-    val saikyoKanas = listOf(
-        "おおみや", "きたよの", "よのほんまち", "みなみよの", "なかうらわ", "むさしうらわ", "きたとだ", "とだ",
-        "とだこうえん", "うきまふなど", "きたあかばね", "あかばね", "じゅうじょう", "いたばし", "いけぶくろ", "しんじゅく",
-        "しぶや", "えびす", "おおさき", "しんきば"
-    )
-    val saikyoMins = listOf(0, 3, 5, 7, 9, 11, 13, 15, 18, 21, 23, 26, 29, 32, 35, 41, 46, 48, 52, 64)
-    val saikyoCoords = listOf(
-        Pair(35.9063, 139.6240), Pair(35.8953, 139.6285), Pair(35.8810, 139.6260), Pair(35.8675, 139.6311),
-        Pair(35.8539, 139.6374), Pair(35.8459, 139.6468), Pair(35.8271, 139.6606), Pair(35.8176, 139.6697),
-        Pair(35.8080, 139.6780), Pair(35.7912, 139.6913), Pair(35.7869, 139.7058), Pair(35.7777, 139.7209),
-        Pair(35.7606, 139.7223), Pair(35.7453, 139.7194), Pair(35.7295, 139.7109), Pair(35.6896, 139.7006),
-        Pair(35.6580, 139.7016), Pair(35.6467, 139.7101), Pair(35.6197, 139.7286), Pair(35.6459, 139.8265)
-    )
+    val saikyoMins = listOf(0, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 26, 28, 31, 37, 42, 44, 48, 51, 53, 55, 58, 60, 62, 64)
+    val saikyoCoords = saikyoStops.indices.map { i ->
+        Pair(35.9063 - i * 0.011, 139.6240 + i * 0.008)
+    }
     val saikyoLeg = RouteLeg(
         isWalk = false,
         fromName = "大宮",
@@ -3092,15 +3228,43 @@ fun buildSampleTestItineraries(): List<LcdTestPreset> {
         path = saikyoCoords,
         intermediateStops = saikyoStops,
         stopCoords = saikyoCoords,
-        stopKanas = saikyoKanas,
         stopArrMinutes = saikyoMins,
         headsignKana = "しんきば",
         tripRemainingStops = saikyoStops,
-        tripRemainingKanas = saikyoKanas,
         tripRemainingMinutes = saikyoMins
     )
 
-    // 2. JR中央線 中央特快 東京行 (高尾 -> 東京)
+    // 2. JR埼京線 通勤快速 新木場行 (大宮 -> 武蔵浦和 -> 赤羽... 通過駅薄字表示テスト)
+    val saikyoRapidStops = listOf(
+        "大宮", "武蔵浦和", "赤羽", "十条", "板橋", "池袋", "新宿", "渋谷", "恵比寿", "大崎", "新木場"
+    )
+    val saikyoRapidMins = listOf(0, 7, 15, 18, 20, 23, 28, 33, 35, 39, 51)
+    val saikyoRapidCoords = saikyoRapidStops.indices.map { i ->
+        Pair(35.9063 - i * 0.025, 139.6240 + i * 0.018)
+    }
+    val saikyoRapidLeg = RouteLeg(
+        isWalk = false,
+        fromName = "大宮",
+        toName = "新木場",
+        depTime = now.minusMinutes(1),
+        arrTime = now.plusMinutes(50),
+        operatorLabel = "JR東日本",
+        lineName = "埼京線",
+        lineColor = 0xFF00AC9AL,
+        headsign = "新木場",
+        platform = "19番線",
+        trainType = "通勤快速",
+        fare = 760,
+        path = saikyoRapidCoords,
+        intermediateStops = saikyoRapidStops,
+        stopCoords = saikyoRapidCoords,
+        stopArrMinutes = saikyoRapidMins,
+        headsignKana = "しんきば",
+        tripRemainingStops = saikyoRapidStops,
+        tripRemainingMinutes = saikyoRapidMins
+    )
+
+    // 3. JR中央線 中央特快 東京行 (高尾 -> 東京, 国立・西国分寺・武蔵小金井・吉祥寺等の通過駅薄字表示)
     val chuoStops = listOf(
         "高尾", "西八王子", "八王子", "豊田", "日野", "立川", "国分寺", "三鷹", "中野", "新宿", "四ツ谷", "御茶ノ水", "神田", "東京"
     )
@@ -3133,7 +3297,7 @@ fun buildSampleTestItineraries(): List<LcdTestPreset> {
         tripRemainingMinutes = chuoMins
     )
 
-    // 3. JR山手線 各駅停車 東京行 (新宿 -> 東京)
+    // 4. JR山手線 各駅停車 東京行 (新宿 -> 東京)
     val yamanoteStops = listOf(
         "新宿", "代々木", "原宿", "渋谷", "恵比寿", "目黒", "五反田", "大崎", "品川", "高輪ゲートウェイ", "田町", "浜松町", "新橋", "有楽町", "東京"
     )
@@ -3161,7 +3325,7 @@ fun buildSampleTestItineraries(): List<LcdTestPreset> {
         tripRemainingMinutes = yamanoteMins
     )
 
-    // 4. 京王線 特急 新宿行 (京王八王子 -> 新宿)
+    // 5. 京王線 特急 新宿行 (京王八王子 -> 新宿, 長沼・平山城址公園・南平・百草園・中河原等の通過駅薄字表示)
     val keioStops = listOf(
         "京王八王子", "北野", "高幡不動", "聖蹟桜ヶ丘", "分倍河原", "府中", "調布", "千歳烏山", "明大前", "笹塚", "新宿"
     )
@@ -3189,7 +3353,7 @@ fun buildSampleTestItineraries(): List<LcdTestPreset> {
         tripRemainingMinutes = keioMins
     )
 
-    // 5. 西東京バス 恩方ターミナル行 (八王子駅北口 -> 恩方ターミナル)
+    // 6. 西東京バス 恩方ターミナル行 (八王子駅北口 -> 恩方ターミナル)
     val busStops = listOf(
         "八王子駅北口", "追分", "楢原町", "川原宿", "川原宿大橋", "恩方上宿", "恩方営業所", "恩方ターミナル"
     )
@@ -3228,10 +3392,11 @@ fun buildSampleTestItineraries(): List<LcdTestPreset> {
     )
 
     return listOf(
-        LcdTestPreset("saikyo", "🚃 JR埼京線 (動画再現)", false, wrapItin(saikyoLeg, "test_saikyo")),
-        LcdTestPreset("chuo", "🚃 JR中央特快 (高尾→東京)", false, wrapItin(chuoLeg, "test_chuo")),
+        LcdTestPreset("saikyo", "🚃 JR埼京線 各停 (動画再現)", false, wrapItin(saikyoLeg, "test_saikyo")),
+        LcdTestPreset("saikyo_rapid", "🚃 JR埼京線 通勤快速 (通過駅あり)", false, wrapItin(saikyoRapidLeg, "test_saikyo_rapid")),
+        LcdTestPreset("chuo", "🚃 JR中央特快 (通過駅あり)", false, wrapItin(chuoLeg, "test_chuo")),
+        LcdTestPreset("keio", "🚃 京王線特急 (通過駅あり)", false, wrapItin(keioLeg, "test_keio")),
         LcdTestPreset("yamanote", "🚃 JR山手線 (新宿→東京)", false, wrapItin(yamanoteLeg, "test_yamanote")),
-        LcdTestPreset("keio", "🚃 京王線特急 (八王子→新宿)", false, wrapItin(keioLeg, "test_keio")),
         LcdTestPreset("bus", "🚌 西東京バス (恩方行)", true, wrapItin(busLeg, "test_bus"))
     )
 }
